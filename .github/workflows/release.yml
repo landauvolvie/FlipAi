@@ -94,11 +94,11 @@ jobs:
           $launcher = Start-Process -FilePath '.\package\AISMSBridge.exe' -PassThru
           if (-not $launcher.WaitForExit(15000)) { throw 'launcher did not exit after opening settings' }
           Wait-Health
-          $watchdog = Wait-ProcessArg '--watchdog'
-          $host = Wait-ProcessArg '--host'
-          $tray = Wait-ProcessArg '--tray'
+          $watchdogProc = Wait-ProcessArg '--watchdog'
+          $hostProc = Wait-ProcessArg '--host'
+          $trayProc = Wait-ProcessArg '--tray'
           Start-Sleep -Seconds 2
-          if ($tray.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'tray process exited unexpectedly' }
+          if ($trayProc.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'tray process exited unexpectedly' }
           Wait-Health  # proves closing/ending launcher/settings does not stop monitoring
 
           # Starting again must not create a second watchdog.
@@ -107,17 +107,17 @@ jobs:
           if (@(Get-BridgeProcess '--watchdog').Count -ne 1) { throw 'more than one watchdog is running' }
 
           # Kill the host: watchdog must restart it automatically.
-          $oldHostPid = $host.ProcessId
+          $oldHostPid = $hostProc.ProcessId
           Stop-Process -Id $oldHostPid -Force
-          $host2 = Wait-ProcessArg '--host' 20 $oldHostPid
+          $hostProc2 = Wait-ProcessArg '--host' 20 $oldHostPid
           Wait-Health 20
 
           # Kill the tray: watchdog must restart it automatically.
-          $oldTrayPid = $tray.ProcessId
+          $oldTrayPid = $trayProc.ProcessId
           Stop-Process -Id $oldTrayPid -Force
-          $tray2 = Wait-ProcessArg '--tray' 20 $oldTrayPid
+          $trayProc2 = Wait-ProcessArg '--tray' 20 $oldTrayPid
           Start-Sleep -Seconds 2
-          if ($tray2.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'restarted tray did not stay alive' }
+          if ($trayProc2.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'restarted tray did not stay alive' }
 
           # Explicit Quit must stop the host, tray, and watchdog and keep them stopped.
           Start-Process -FilePath '.\package\AISMSBridge.exe' -ArgumentList '--quit' -Wait
