@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.5.1"
+const version = "0.5.2"
 
 type Config struct {
 	CodexPath          string            `json:"codexPath"`
@@ -143,7 +143,7 @@ func defaultConfig(dataDir string) Config {
 		CodexPath: "codex", ClaudePath: "claude", Cwd: home,
 		Listen: "127.0.0.1:8765", LocalToken: tok, TurnTimeoutMinutes: 90,
 		DefaultAgent: "C",
-		Gmail:        GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 5, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
+		Gmail:        GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
 		GoogleVoice:  GoogleVoiceConfig{RequiredSubjectPhrase: "new text message from", ReplyMaxChars: 300, SendReplyViaAgentBrowser: true, GmailReplyFallback: true},
 		Codex:        CodexConfig{ApprovalPolicy: "on-request"},
 		Claude:       ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
@@ -165,8 +165,8 @@ func loadConfig(path, dataDir string) (Config, error) {
 	if !strings.HasPrefix(cfg.Listen, "127.0.0.1:") && !strings.HasPrefix(cfg.Listen, "localhost:") {
 		cfg.Listen = "127.0.0.1:8765"
 	}
-	if cfg.Gmail.PollSeconds < 3 {
-		cfg.Gmail.PollSeconds = 5
+	if cfg.Gmail.PollSeconds < 1 {
+		cfg.Gmail.PollSeconds = 1
 	}
 	if cfg.Gmail.SubjectPhrase == "" {
 		cfg.Gmail.SubjectPhrase = "new text message from"
