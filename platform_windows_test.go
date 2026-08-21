@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAutostartUsesCurrentUserRunKey(t *testing.T) {
@@ -44,6 +45,33 @@ func TestCopySelfInstallUsesLocalAppDataWithoutAdminLocation(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); err != nil {
 		t.Fatalf("installed EXE missing: %v", err)
+	}
+}
+
+func TestResolveCodexExecutablePrefersDesktopUserRuntime(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOCALAPPDATA", root)
+	older := filepath.Join(root, "OpenAI", "Codex", "bin", "oldhash", "codex.exe")
+	newer := filepath.Join(root, "OpenAI", "Codex", "bin", "newhash", "codex.exe")
+	for _, p := range []string{older, newer} {
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("fake"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(older, oldTime, oldTime)
+	if got := resolveCodexExecutable("codex"); !strings.EqualFold(filepath.Clean(got), filepath.Clean(newer)) {
+		t.Fatalf("resolved Codex = %q, want newest Desktop runtime %q", got, newer)
+	}
+}
+
+func TestResolveCodexExecutableRespectsExplicitPath(t *testing.T) {
+	custom := filepath.Join(t.TempDir(), "my-codex.exe")
+	if got := resolveCodexExecutable(custom); got != custom {
+		t.Fatalf("explicit Codex path changed: got %q want %q", got, custom)
 	}
 }
 
