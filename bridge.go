@@ -28,24 +28,6 @@ func NewBridge(cfg Config, statePath string, state State, g MailClient, c *Codex
 	return &Bridge{cfg: cfg, statePath: statePath, state: state, gmail: g, codex: c, claude: a}
 }
 
-func normalizePhone(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
-		}
-	}
-	x := b.String()
-	if len(x) == 11 && strings.HasPrefix(x, "1") {
-		x = x[1:]
-	}
-	return x
-}
-func containsPhone(s, phone string) bool {
-	t := normalizePhone(phone)
-	return t != "" && strings.Contains(normalizePhone(s), t)
-}
-
 var footerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^google voice$`), regexp.MustCompile(`(?i)^view.*message`), regexp.MustCompile(`(?i)^new text message from`), regexp.MustCompile(`(?i)^reply`), regexp.MustCompile(`(?i)^voice\.google\.com`), regexp.MustCompile(`(?i)^you received.*message`), regexp.MustCompile(`(?i)^to respond`), regexp.MustCompile(`(?i)^sent via google voice`),
 }
@@ -67,25 +49,23 @@ func googleDKIMPassed(v string) bool {
 	return strings.Contains(s, "dkim=pass") && (strings.Contains(s, "header.d=google.com") || strings.Contains(s, "header.i=@google.com") || strings.Contains(s, "header.d=voice.google.com"))
 }
 
-func parseGoogleVoiceBody(m GmailMessage, allowed, requiredPhrase string) (string, bool) {
+func parseGoogleVoiceBody(m GmailMessage, allowed, requiredPhrase string) (string, string, bool) {
 	fromLower := strings.ToLower(m.From)
 	if !strings.Contains(fromLower, "voice-noreply@google.com") && !strings.Contains(fromLower, "@txt.voice.google.com") {
-		return "", false
+		return "", "", false
 	}
 	if !googleDKIMPassed(m.AuthenticationResults) {
-		return "", false
+		return "", "", false
 	}
-	if requiredPhrase != "" && !strings.Contains(strings.ToLower(m.Subject), strings.ToLower(requiredPhrase)) {
-		return "", false
-	}
-	if !containsPhone(m.Subject+"\n"+m.Body+"\n"+m.From, allowed) {
-		return "", false
+	sender, ok := googleVoiceSender(m, requiredPhrase)
+	if !ok || !allowedPhone(allowed, sender) {
+		return "", "", false
 	}
 	body := strings.ReplaceAll(m.Body, "\r\n", "\n")
 	kept := []string{}
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
-		if looksFooter(line) || containsPhone(line, allowed) {
+		if looksFooter(line) || normalizeUSPhone(line) == sender {
 			continue
 		}
 		l := strings.ToLower(line)
@@ -99,7 +79,7 @@ func parseGoogleVoiceBody(m GmailMessage, allowed, requiredPhrase string) (strin
 		cmd = strings.TrimSpace(m.Snippet)
 	}
 	if cmd == "" {
-		return "", false
+		return "", "", false
 	}
 	lower := strings.ToLower(cmd)
 	if i := strings.Index(lower, "new text message from"); i >= 0 {
@@ -107,12 +87,13 @@ func parseGoogleVoiceBody(m GmailMessage, allowed, requiredPhrase string) (strin
 			cmd = strings.TrimSpace(cmd[i+j+1:])
 		}
 	}
-	return cmd, true
+	return cmd, sender, true
 }
 
 type remoteCommand struct {
 	Agent  string
 	Text   string
+	Sender string
 	New    bool
 	Status bool
 }
@@ -223,10 +204,6 @@ func (b *Bridge) Run(ctx context.Context) {
 	b.mu.Lock()
 	b.runCtx = ctx
 	b.mu.Unlock()
-	poll := b.cfg.Gmail.PollSeconds
-	if poll < 3 {
-		poll = 5
-	}
 	if b.state.GmailBaselineUnix == 0 {
 		b.mu.Lock()
 		b.state.GmailBaselineUnix = time.Now().Unix()
@@ -236,6 +213,51 @@ func (b *Bridge) Run(ctx context.Context) {
 		log.Printf("Gmail baseline established; old messages will not execute")
 	}
 	b.poll(ctx)
+
+	// App Password mode implements IMAP IDLE, so Gmail can wake the bridge as
+	// soon as a mailbox change arrives. Keep a 30-second fallback poll in case
+	// an IDLE connection is dropped without a useful notification.
+	if waiter, ok := b.gmail.(MailChangeWaiter); ok {
+		wake := make(chan struct{}, 1)
+		go func() {
+			for ctx.Err() == nil {
+				waitCtx, cancel := context.WithTimeout(ctx, 25*time.Minute)
+				err := waiter.WaitForChange(waitCtx)
+				cancel()
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+					log.Printf("Gmail IMAP IDLE: %v", err)
+					time.Sleep(time.Second)
+				}
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			}
+		}()
+		fallback := time.NewTicker(30 * time.Second)
+		defer fallback.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-wake:
+				b.poll(ctx)
+			case <-fallback.C:
+				b.poll(ctx)
+			}
+		}
+	}
+
+	// Gmail API/OAuth has no local mailbox IDLE channel. Poll quickly; true
+	// Gmail API push would require the user's own Pub/Sub project, which this
+	// bridge intentionally does not require.
+	poll := b.cfg.Gmail.PollSeconds
+	if poll < 1 {
+		poll = 1
+	}
 	t := time.NewTicker(time.Duration(poll) * time.Second)
 	defer t.Stop()
 	for {
@@ -247,6 +269,7 @@ func (b *Bridge) Run(ctx context.Context) {
 		}
 	}
 }
+
 func (b *Bridge) processed(id string) bool {
 	for _, x := range b.state.ProcessedMessageIDs {
 		if x == id {
@@ -296,7 +319,7 @@ func (b *Bridge) poll(ctx context.Context) {
 			_ = saveState(b.statePath, s)
 			continue
 		}
-		raw, ok := parseGoogleVoiceBody(m, b.cfg.GoogleVoice.AllowedFrom, b.cfg.GoogleVoice.RequiredSubjectPhrase)
+		raw, sender, ok := parseGoogleVoiceBody(m, b.cfg.GoogleVoice.AllowedFrom, b.cfg.GoogleVoice.RequiredSubjectPhrase)
 		b.mu.Lock()
 		b.markProcessed(id)
 		s := b.state
@@ -307,25 +330,22 @@ func (b *Bridge) poll(ctx context.Context) {
 		}
 		rc, err := parseRemoteCommand(raw, b.cfg)
 		if err != nil {
-			log.Printf("Rejected remote SMS %s: %v", id, err)
+			log.Printf("Rejected remote SMS %s from %s: %v", id, sender, err)
 			continue
 		}
+		rc.Sender = sender
 		b.execute(ctx, m, rc)
 	}
 }
 
-func (b *Bridge) composePrompt(command, agent string) string {
+func (b *Bridge) composePrompt(command, agent, sender string) string {
 	max := b.cfg.GoogleVoice.ReplyMaxChars
 	if max <= 0 {
 		max = 300
 	}
 	suffix := ""
 	if b.cfg.GoogleVoice.SendReplyViaAgentBrowser {
-		replyTo := b.cfg.GoogleVoice.ReplyTo
-		if replyTo == "" {
-			replyTo = b.cfg.GoogleVoice.AllowedFrom
-		}
-		suffix = fmt.Sprintf(`\n\nREMOTE SMS INSTRUCTIONS:\nThis request arrived from the authorized owner by SMS. Complete the work using your available tools. When finished, if you have a browser/computer tool that can access Google Voice, open https://voice.google.com, open the conversation with %s, and send a concise completion message of at most %d characters. If and only if you successfully sent that Google Voice message, end your final response with the exact marker SMS_BRIDGE_SENT. Never enter passwords, recovery codes, or 2FA secrets.`, replyTo, max)
+		suffix = fmt.Sprintf(`\n\nREMOTE SMS RETURN-CHANNEL INSTRUCTIONS (MANDATORY):\nThis request came from an authenticated SMS sender: %s. Complete the requested work using your available tools. When the work is finished, send the completion update back to THIS EXACT PHONE NUMBER through Google Voice. Prefer an already-authenticated Google Voice tab/session. If the built-in browser is not signed in, use an available authenticated Chrome/browser integration instead. Open https://voice.google.com, select or search for the conversation with %s, verify the destination before sending, and send a concise result of at most %d characters. Do not send the result to any other number. Do not enter, reveal, or request passwords, recovery codes, or 2FA secrets. If browser-based Google Voice is unavailable or not already authenticated, do not attempt to sign in with credentials; simply return the concise result to the bridge so its Gmail reply fallback can deliver it. If and only if you actually confirmed that Google Voice sent the message to %s, end your final response with the exact marker SMS_BRIDGE_SENT.`, sender, sender, max, sender)
 	}
 	_ = agent
 	return command + suffix
@@ -369,9 +389,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 			final = "New Claude conversation started."
 		}
 	} else if rc.Agent == "A" {
-		final, err = b.runClaude(ctx, rc.Text)
+		final, err = b.runClaude(ctx, rc.Text, rc.Sender)
 	} else {
-		final, err = b.runCodex(ctx, rc.Text)
+		final, err = b.runCodex(ctx, rc.Text, rc.Sender)
 	}
 	if err != nil {
 		final = "FAILED: " + truncate(err.Error(), b.cfg.GoogleVoice.ReplyMaxChars)
@@ -408,14 +428,14 @@ func (b *Bridge) newCodexThread(ctx context.Context) error {
 	b.mu.Unlock()
 	return saveState(b.statePath, s)
 }
-func (b *Bridge) runClaude(ctx context.Context, command string) (string, error) {
+func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
 	if b.claude == nil {
 		return "", errors.New("Claude Code unavailable")
 	}
 	b.mu.Lock()
 	sid := b.state.ClaudeSessionID
 	b.mu.Unlock()
-	res, nsid, err := b.claude.Run(ctx, sid, b.composePrompt(command, "A"))
+	res, nsid, err := b.claude.Run(ctx, sid, b.composePrompt(command, "A", sender))
 	if err != nil {
 		return "", err
 	}
@@ -428,7 +448,7 @@ func (b *Bridge) runClaude(ctx context.Context, command string) (string, error) 
 	}
 	return res, nil
 }
-func (b *Bridge) runCodex(ctx context.Context, command string) (string, error) {
+func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
 	if err := b.ensureCodex(ctx); err != nil {
 		return "", err
 	}
@@ -449,7 +469,7 @@ func (b *Bridge) runCodex(ctx context.Context, command string) (string, error) {
 		tid = b.state.CodexThreadID
 		b.mu.Unlock()
 	}
-	params := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt(command, "C")}}}
+	params := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt(command, "C", sender)}}}
 	if b.cfg.Codex.ApprovalPolicy != "" {
 		params["approvalPolicy"] = b.cfg.Codex.ApprovalPolicy
 	}
