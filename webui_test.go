@@ -1,9 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -35,17 +36,30 @@ func TestModernSetupPageRendersCoreFlow(t *testing.T) {
 	}
 }
 
+func multipartRequest(t *testing.T, values map[string]string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for k, v := range values {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/setup/save", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	return req
+}
+
 func TestSetupValidationUsesFriendlyResultPage(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := defaultConfig(tmp)
 	a := &App{dataDir: tmp, configPath: tmp + "/bridge.json", statePath: tmp + "/state.json", tokenPath: tmp + "/token.dat", cfg: cfg}
-	form := url.Values{}
-	form.Set("gmailMethod", "")
-	form.Set("allowedFrom", "8455551212")
-	form.Set("defaultAgent", "C")
-	form.Set("replyMaxChars", "300")
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/setup/save", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req := multipartRequest(t, map[string]string{
+		"gmailMethod": "", "allowedFrom": "8455551212", "defaultAgent": "C", "replyMaxChars": "300",
+	})
 	rr := httptest.NewRecorder()
 	a.saveSetup(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -64,12 +78,9 @@ func TestReplyLengthValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &App{dataDir: tmp, configPath: tmp + "/bridge.json", statePath: tmp + "/state.json", tokenPath: tmp + "/token.dat", cfg: cfg}
-	form := url.Values{}
-	form.Set("allowedFrom", "8455551212")
-	form.Set("defaultAgent", "C")
-	form.Set("replyMaxChars", "50000")
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/setup/save", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req := multipartRequest(t, map[string]string{
+		"allowedFrom": "8455551212", "defaultAgent": "C", "replyMaxChars": "50000",
+	})
 	rr := httptest.NewRecorder()
 	a.saveSetup(rr, req)
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Reply length is invalid") {
