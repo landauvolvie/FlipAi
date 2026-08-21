@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 func openBrowser(u string) error {
@@ -19,3 +20,13 @@ func spawnDetached(exe string, args ...string) error { return exec.Command(exe, 
 func installAutostart(exe string) error              { return nil }
 func uninstallAutostart() error                      { return nil }
 func copySelfInstall() (string, error)               { return os.Executable() }
+func resolveCodexExecutable(configured string) string {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		configured = "codex"
+	}
+	if p, err := exec.LookPath(configured); err == nil {
+		return p
+	}
+	return configured
+}
