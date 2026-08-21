@@ -1,0 +1,9 @@
+*.exe
+*.msi
+*.zip
+bridge.json
+state.json
+google-credentials.json
+google-token.dat
+bridge.log
+/dist/

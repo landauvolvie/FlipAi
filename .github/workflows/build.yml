@@ -1,0 +1,34 @@
+name: build
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Race test
+        run: go test -race ./...
+      - name: Build Windows x64
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist/AISMSBridge.exe .
+      - name: SHA-256
+        shell: pwsh
+        run: |
+          $h=(Get-FileHash dist/AISMSBridge.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  AISMSBridge.exe" | Out-File -Encoding ascii dist/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AISMSBridge-windows-x64
+          path: dist/
