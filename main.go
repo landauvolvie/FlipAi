@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -122,9 +123,22 @@ func runWatchdog(dataDir, cfgPath string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go watchQuitFlag(ctx, dataDir, cancel)
-	go superviseHost(ctx, exe, cfg.Listen)
-	go superviseChild(ctx, exe, "--tray")
+
+	// The watchdog owns the lifetime of both children. Do not return until both
+	// have actually stopped; otherwise Windows can be left with an orphan tray
+	// process after an explicit Quit.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		superviseHost(ctx, exe, cfg.Listen)
+	}()
+	go func() {
+		defer wg.Done()
+		superviseChild(ctx, exe, "--tray")
+	}()
 	<-ctx.Done()
+	wg.Wait()
 }
 
 func watchQuitFlag(ctx context.Context, dataDir string, cancel context.CancelFunc) {
@@ -187,6 +201,13 @@ func superviseHost(ctx context.Context, exe, listen string) {
 
 		select {
 		case <-ctx.Done():
+			if child != nil && child.Process != nil {
+				_ = child.Process.Kill()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+				}
+			}
 			return
 		case <-ticker.C:
 		}
