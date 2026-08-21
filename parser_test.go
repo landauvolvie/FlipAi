@@ -14,9 +14,9 @@ func testConfigWithCode(t *testing.T) Config {
 func TestParseGVAndRouting(t *testing.T) {
 	cfg := testConfigWithCode(t)
 	m := GmailMessage{From: "Google Voice <voice-noreply@google.com>", AuthenticationResults: "mx.google.com; dkim=pass header.d=google.com", Subject: "New text message from (845) 555-1212", Body: "Google Voice\n(845) 555-1212\n482913 C: Check my GitHub and fix the failing build.\nView message"}
-	raw, ok := parseGoogleVoiceBody(m, cfg.GoogleVoice.AllowedFrom, "new text message from")
-	if !ok {
-		t.Fatal("not parsed")
+	raw, sender, ok := parseGoogleVoiceBody(m, cfg.GoogleVoice.AllowedFrom, "new text message from")
+	if !ok || sender != "8455551212" {
+		t.Fatalf("not parsed correctly: sender=%q ok=%v", sender, ok)
 	}
 	rc, err := parseRemoteCommand(raw, cfg)
 	if err != nil || rc.Agent != "C" || rc.Text != "Check my GitHub and fix the failing build." {
@@ -39,7 +39,7 @@ func TestRejectWrongCode(t *testing.T) {
 func TestRejectSpoofOrNoDKIM(t *testing.T) {
 	cfg := testConfigWithCode(t)
 	m := GmailMessage{From: "Google Voice <voice-noreply@google.com>", Subject: "New text message from 8455551212", Body: "482913 C: do it"}
-	if _, ok := parseGoogleVoiceBody(m, cfg.GoogleVoice.AllowedFrom, "new text message from"); ok {
+	if _, _, ok := parseGoogleVoiceBody(m, cfg.GoogleVoice.AllowedFrom, "new text message from"); ok {
 		t.Fatal("message without Google DKIM accepted")
 	}
 }

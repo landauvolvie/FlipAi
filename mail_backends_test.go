@@ -158,9 +158,9 @@ func TestAppPasswordBackendIMAPAndSMTP(t *testing.T) {
 	if m.Subject != "New text message from (845) 555-1234" || !strings.Contains(m.Body, "482913 C:") {
 		t.Fatalf("unexpected parsed message: %#v", m)
 	}
-	cmd, ok := parseGoogleVoiceBody(m, "8455551234", "new text message from")
-	if !ok || cmd != "482913 C: check GitHub" {
-		t.Fatalf("voice parsing failed: %q %v", cmd, ok)
+	cmd, sender, ok := parseGoogleVoiceBody(m, "8455551234", "new text message from")
+	if !ok || sender != "8455551234" || cmd != "482913 C: check GitHub" {
+		t.Fatalf("voice parsing failed: %q sender=%q %v", cmd, sender, ok)
 	}
 	if err := c.SendText(ctx, m.ReplyTo, "Done from Codex"); err != nil {
 		t.Fatal(err)
@@ -233,9 +233,9 @@ func TestOAuthBackendAgainstFakeGmailAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, ok := parseGoogleVoiceBody(m, "8455551234", "new text message from")
-	if !ok || cmd != "482913 A: check Gmail" {
-		t.Fatalf("OAuth message parsing failed: %q %v", cmd, ok)
+	cmd, sender, ok := parseGoogleVoiceBody(m, "8455551234", "new text message from")
+	if !ok || sender != "8455551234" || cmd != "482913 A: check Gmail" {
+		t.Fatalf("OAuth message parsing failed: %q sender=%q %v", cmd, sender, ok)
 	}
 	if err := c.SendText(ctx, m.ReplyTo, "Done from Claude"); err != nil {
 		t.Fatal(err)

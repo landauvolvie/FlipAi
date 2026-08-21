@@ -68,7 +68,6 @@ jobs:
             throw "bridge processes remained after Quit: $left"
           }
 
-          # Normal user launch: launcher exits, watchdog/host/tray remain alive.
           $launcher = Start-Process -FilePath '.\dist\AISMSBridge.exe' -PassThru
           if (-not $launcher.WaitForExit(15000)) { throw 'launcher did not exit after opening settings' }
           Wait-Health
@@ -77,31 +76,52 @@ jobs:
           $trayProc = Wait-ProcessArg '--tray'
           Start-Sleep -Seconds 2
           if ($trayProc.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'tray process exited unexpectedly' }
-          Wait-Health  # proves closing/ending launcher/settings does not stop monitoring
+          Wait-Health
 
-          # Starting again must not create a second watchdog.
           $second = Start-Process -FilePath '.\dist\AISMSBridge.exe' -ArgumentList '--watchdog' -PassThru
           if (-not $second.WaitForExit(5000)) { throw 'duplicate watchdog did not exit' }
           if (@(Get-BridgeProcess '--watchdog').Count -ne 1) { throw 'more than one watchdog is running' }
 
-          # Kill the host: watchdog must restart it automatically.
           $oldHostPid = $hostProc.ProcessId
           Stop-Process -Id $oldHostPid -Force
           $hostProc2 = Wait-ProcessArg '--host' 20 $oldHostPid
           Wait-Health 20
 
-          # Kill the tray: watchdog must restart it automatically.
           $oldTrayPid = $trayProc.ProcessId
           Stop-Process -Id $oldTrayPid -Force
           $trayProc2 = Wait-ProcessArg '--tray' 20 $oldTrayPid
           Start-Sleep -Seconds 2
           if ($trayProc2.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'restarted tray did not stay alive' }
 
-          # Explicit Quit must stop the host, tray, and watchdog and keep them stopped.
           Start-Process -FilePath '.\dist\AISMSBridge.exe' -ArgumentList '--quit' -Wait
           Wait-NoBridge 15
           Start-Sleep -Seconds 2
           Wait-NoBridge 2
+      - name: Microsoft Defender scan (when available)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) -or -not (Get-Command Start-MpScan -ErrorAction SilentlyContinue)) {
+            Write-Host 'Microsoft Defender PowerShell cmdlets are not installed on this hosted runner; source safety tests still ran.'
+            exit 0
+          }
+          $exe = (Resolve-Path '.\dist\AISMSBridge.exe').Path
+          $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
+          if ($null -eq $status -or -not $status.AntivirusEnabled) {
+            Write-Host 'Microsoft Defender is not enabled on this hosted runner; source safety tests still ran.'
+            exit 0
+          }
+          Start-MpScan -ScanType CustomScan -ScanPath $exe
+          $hits = @()
+          if (Get-Command Get-MpThreatDetection -ErrorAction SilentlyContinue) {
+            $hits = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object {
+              $_.Resources -and (($_.Resources -join "`n") -match [regex]::Escape($exe))
+            })
+          }
+          if ($hits.Count -gt 0) {
+            throw "Microsoft Defender reported $($hits.Count) detection(s) for AISMSBridge.exe"
+          }
+          Write-Host 'Microsoft Defender reported no detection for AISMSBridge.exe.'
       - name: SHA-256
         shell: pwsh
         run: |
