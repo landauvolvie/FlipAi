@@ -28,16 +28,16 @@ type App struct {
 }
 
 const setupHTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI SMS Bridge</title><style>
-body{font:15px system-ui;max-width:860px;margin:32px auto;padding:0 18px;color:#171717}h1{font-size:28px;margin-bottom:5px}.sub{color:#666}.section{border:1px solid #ddd;border-radius:10px;padding:16px;margin-top:18px}label{display:block;font-weight:650;margin-top:14px}input,select{width:100%;box-sizing:border-box;padding:10px;margin-top:5px}input[type=radio]{width:auto;margin:0 8px 0 0}.choice{display:block;border:1px solid #d8d8d8;border-radius:9px;padding:12px;margin-top:10px;font-weight:600;cursor:pointer}.choice input{vertical-align:middle}.methodbox{margin:10px 0 0 27px;padding:0 0 4px 0}button,a.btn{display:inline-block;margin:14px 7px 0 0;padding:10px 14px;background:#111;color:white;border:0;border-radius:7px;text-decoration:none;cursor:pointer}.danger{background:#9b1c1c}.ok{background:#eef8ee;padding:11px;border-radius:8px}.warn{background:#fff4df;padding:11px;border-radius:8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:650px){.grid{grid-template-columns:1fr}}pre{white-space:pre-wrap;background:#f5f5f5;padding:12px;border-radius:8px}code{background:#f1f1f1;padding:2px 5px}.help{color:#666;font-weight:400;font-size:13px}
+body{font:15px system-ui;max-width:860px;margin:32px auto;padding:0 18px;color:#171717}h1{font-size:28px;margin-bottom:5px}.sub{color:#666}.section{border:1px solid #ddd;border-radius:10px;padding:16px;margin-top:18px}label{display:block;font-weight:650;margin-top:14px}input,select,textarea{width:100%;box-sizing:border-box;padding:10px;margin-top:5px}textarea{min-height:92px;resize:vertical}input[type=radio]{width:auto;margin:0 8px 0 0}.choice{display:block;border:1px solid #d8d8d8;border-radius:9px;padding:12px;margin-top:10px;font-weight:600;cursor:pointer}.choice input{vertical-align:middle}.methodbox{margin:10px 0 0 27px;padding:0 0 4px 0}button,a.btn{display:inline-block;margin:14px 7px 0 0;padding:10px 14px;background:#111;color:white;border:0;border-radius:7px;text-decoration:none;cursor:pointer}.danger{background:#9b1c1c}.ok{background:#eef8ee;padding:11px;border-radius:8px}.warn{background:#fff4df;padding:11px;border-radius:8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:650px){.grid{grid-template-columns:1fr}}pre{white-space:pre-wrap;background:#f5f5f5;padding:12px;border-radius:8px}code{background:#f1f1f1;padding:2px 5px}.help{color:#666;font-weight:400;font-size:13px}
 </style></head><body><h1>AI SMS Bridge</h1><div class="sub">Google Voice → Gmail → C: Codex / A: Claude</div>
 {{if .GmailReady}}<p class="ok">✓ Gmail method configured: <b>{{.GmailMethodLabel}}</b></p>{{else if .GmailMethod}}<p class="warn">Gmail method selected but not fully connected: <b>{{.GmailMethodLabel}}</b></p>{{else}}<p class="warn">Choose a Gmail connection method below. There is no default.</p>{{end}}
 <form action="/setup/save" method="post" enctype="multipart/form-data">
 <div class="section"><h3>1. Gmail connection</h3><p>Choose exactly one. Nothing is routed through the project author.</p>
 <label class="choice"><input type="radio" name="gmailMethod" value="app_password" {{if eq .GmailMethod "app_password"}}checked{{end}} onchange="toggleGmail()">Option 1 — Gmail App Password (easiest, no Google Cloud project)</label>
-<div id="appPasswordBox" class="methodbox"><label>Gmail address</label><input name="gmailEmail" value="{{.GmailEmail}}" placeholder="you@gmail.com"><label>Google App Password {{if .HasAppPassword}}(leave blank to keep current){{end}}</label><input type="password" name="appPassword" placeholder="16-character App Password"><p class="help">Turn on Google 2-Step Verification, create an App Password, then paste it here. The bridge uses Gmail IMAP to read and Gmail SMTP to reply. The password is protected locally with Windows DPAPI.</p></div>
+<div id="appPasswordBox" class="methodbox"><label>Gmail address</label><input name="gmailEmail" value="{{.GmailEmail}}" placeholder="you@gmail.com"><label>Google App Password {{if .HasAppPassword}}(leave blank to keep current){{end}}</label><input type="password" name="appPassword" placeholder="16-character App Password"><p class="help">Turn on Google 2-Step Verification, create an App Password, then paste it here. The bridge uses Gmail IMAP/IMAP IDLE to read and Gmail SMTP only for the reply fallback. The password is protected locally with Windows DPAPI.</p></div>
 <label class="choice"><input type="radio" name="gmailMethod" value="oauth" {{if eq .GmailMethod "oauth"}}checked{{end}} onchange="toggleGmail()">Option 2 — Your own Google API project / Gmail OAuth</label>
 <div id="oauthBox" class="methodbox"><label>Google OAuth Desktop credentials JSON</label><input type="file" name="credentials" accept="application/json"><p class="help">Create your own Google Cloud project, enable Gmail API, create an OAuth <b>Desktop app</b>, and upload its JSON here. The bridge asks for Gmail read + send access.</p></div></div>
-<div class="section"><h3>2. SMS and agents</h3><div class="grid"><div><label>Authorized phone number</label><input name="allowedFrom" value="{{.AllowedFrom}}" placeholder="8455551234" required></div><div><label>Reply phone number</label><input name="replyTo" value="{{.ReplyTo}}" placeholder="Usually the same"></div></div><div class="grid"><div><label>Default agent</label><select name="defaultAgent"><option value="C" {{if eq .DefaultAgent "C"}}selected{{end}}>Codex (C:)</option><option value="A" {{if eq .DefaultAgent "A"}}selected{{end}}>Claude (A:)</option></select></div><div><label>SMS security code {{if .HasSecurity}}(leave blank to keep current){{end}}</label><input type="password" name="securityCode" placeholder="6+ characters, no spaces" {{if not .HasSecurity}}required{{end}}></div></div><div class="grid"><div><label>Codex executable</label><input name="codexPath" value="{{.CodexPath}}" placeholder="codex"></div><div><label>Claude executable</label><input name="claudePath" value="{{.ClaudePath}}" placeholder="claude"></div></div><label>Working folder</label><input name="cwd" value="{{.Cwd}}"></div>
+<div class="section"><h3>2. SMS and agents</h3><label>Allowed SMS phone numbers</label><textarea name="allowedFrom" placeholder="8455551234&#10;2125551212" required>{{.AllowedFrom}}</textarea><p class="help">Add one or more numbers, one per line. Commas and semicolons also work. Only an exact sender number identified from the authenticated Google Voice email is accepted. Replies always target the exact number that sent that command.</p><div class="grid"><div><label>Default agent</label><select name="defaultAgent"><option value="C" {{if eq .DefaultAgent "C"}}selected{{end}}>Codex (C:)</option><option value="A" {{if eq .DefaultAgent "A"}}selected{{end}}>Claude (A:)</option></select></div><div><label>SMS security code {{if .HasSecurity}}(leave blank to keep current){{end}}</label><input type="password" name="securityCode" placeholder="6+ characters, no spaces" {{if not .HasSecurity}}required{{end}}></div></div><div class="grid"><div><label>Codex executable</label><input name="codexPath" value="{{.CodexPath}}" placeholder="codex"></div><div><label>Claude executable</label><input name="claudePath" value="{{.ClaudePath}}" placeholder="claude"></div></div><label>Working folder</label><input name="cwd" value="{{.Cwd}}"></div>
 <button type="submit">Save setup</button></form>
 {{if eq .GmailMethod "oauth"}}{{if .HasCredentials}}<a class="btn" href="/oauth/google/start">Connect / Reconnect Gmail</a>{{end}}{{end}}{{if .GmailMethod}}<a class="btn" href="/gmail/test">Test Gmail connection</a>{{end}}<a class="btn" href="/codex/test">Test Codex</a><a class="btn" href="/claude/test">Test Claude</a><form action="/install" method="post" style="display:inline"><button>Start with Windows</button></form><form action="/quit" method="post" style="display:inline"><button class="danger">Quit Bridge</button></form>
 <h3>How to text</h3><p><code>YOURCODE C: check GitHub...</code> → Codex<br><code>YOURCODE A: check Gmail...</code> → Claude</p><h3>Status</h3><pre>{{.Status}}</pre><p class="sub">Closing this browser tab does not stop the bridge.</p>
@@ -46,7 +46,7 @@ body{font:15px system-ui;max-width:860px;margin:32px auto;padding:0 18px;color:#
 type pageData struct {
 	GmailReady, HasCredentials, HasAppPassword, HasSecurity bool
 	GmailMethod, GmailMethodLabel, GmailEmail               string
-	AllowedFrom, ReplyTo, CodexPath, ClaudePath, Cwd        string
+	AllowedFrom, CodexPath, ClaudePath, Cwd                 string
 	DefaultAgent, Status                                    string
 }
 
@@ -106,7 +106,7 @@ func (a *App) page(w http.ResponseWriter, r *http.Request) {
 	d := pageData{
 		GmailReady: gmailReady, HasCredentials: fileExists(cfg.Gmail.CredentialsFile), HasAppPassword: hasAppPasswordSecret(appPasswordPath(a.dataDir)), HasSecurity: cfg.Security.CodeHash != "",
 		GmailMethod: cfg.Gmail.Method, GmailMethodLabel: gmailMethodLabel(cfg.Gmail.Method), GmailEmail: cfg.Gmail.Email,
-		AllowedFrom: cfg.GoogleVoice.AllowedFrom, ReplyTo: cfg.GoogleVoice.ReplyTo, CodexPath: cfg.CodexPath, ClaudePath: cfg.ClaudePath, Cwd: cfg.Cwd, DefaultAgent: cfg.DefaultAgent, Status: string(js),
+		AllowedFrom: cfg.GoogleVoice.AllowedFrom, CodexPath: cfg.CodexPath, ClaudePath: cfg.ClaudePath, Cwd: cfg.Cwd, DefaultAgent: cfg.DefaultAgent, Status: string(js),
 	}
 	_ = template.Must(template.New("x").Parse(setupHTML)).Execute(w, d)
 }
@@ -137,11 +137,15 @@ func (a *App) saveSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg.Gmail.Method = method
-	cfg.GoogleVoice.AllowedFrom = strings.TrimSpace(r.FormValue("allowedFrom"))
-	cfg.GoogleVoice.ReplyTo = strings.TrimSpace(r.FormValue("replyTo"))
-	if cfg.GoogleVoice.ReplyTo == "" {
-		cfg.GoogleVoice.ReplyTo = cfg.GoogleVoice.AllowedFrom
+	allowedNumbers, err := normalizeAllowedPhoneList(r.FormValue("allowedFrom"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
 	}
+	cfg.GoogleVoice.AllowedFrom = strings.Join(allowedNumbers, "\n")
+	// The reply target is deliberately derived from each authenticated incoming
+	// Google Voice notification, not from a global configurable phone number.
+	cfg.GoogleVoice.ReplyTo = ""
 	cfg.CodexPath = strings.TrimSpace(r.FormValue("codexPath"))
 	cfg.ClaudePath = strings.TrimSpace(r.FormValue("claudePath"))
 	cfg.Cwd = strings.TrimSpace(r.FormValue("cwd"))
@@ -210,8 +214,6 @@ func (a *App) saveSetup(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			// Never reuse a token that may have been issued for a different
-			// Desktop OAuth client or Google account.
 			_ = os.Remove(a.tokenPath)
 		}
 		if !uploaded && !fileExists(cfg.Gmail.CredentialsFile) {
@@ -289,8 +291,6 @@ func (a *App) gmailTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Choose a Gmail connection method first", 400)
 		return
 	}
-	// Build from the saved configuration every time. This avoids testing a
-	// stale backend during the brief restart window after switching methods.
 	mc, _, err := buildConfiguredMailClient(cfg.Gmail, a.dataDir, a.tokenPath)
 	if err != nil {
 		http.Error(w, "Gmail setup incomplete: "+err.Error(), 400)
@@ -363,7 +363,7 @@ func (a *App) install(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "<h2>Startup enabled.</h2><p>No administrator rights were requested. The watchdog starts when this Windows user signs in.</p><p>Installed at <code>%s</code>.</p>", template.HTMLEscapeString(dst))
 }
 func (a *App) quit(w http.ResponseWriter, r *http.Request) {
-	_ = os.WriteFile(a.dataDir+string(os.PathSeparator)+"quit.flag", []byte("quit"), 0600)
+	requestQuit(a.dataDir, "settings quit")
 	fmt.Fprint(w, "<h2>Bridge stopped.</h2><p>Closing the GUI normally does not stop it; this Quit button does.</p>")
 	if a.stop != nil {
 		go func() { time.Sleep(300 * time.Millisecond); a.stop() }()
@@ -400,11 +400,14 @@ func (a *App) startBridge(ctx context.Context) {
 		log.Printf("Gmail not configured for %s; background host is alive and waiting for setup", gmailMethodLabel(cfg.Gmail.Method))
 		return
 	}
-	if cfg.GoogleVoice.AllowedFrom == "" || cfg.Security.CodeHash == "" {
-		log.Printf("phone/security code not configured; waiting for setup")
+	if cfg.Security.CodeHash == "" {
+		log.Printf("SMS security code not configured; waiting for setup")
 		return
 	}
-	// Verify Gmail authentication before an always-on poll loop is started.
+	if _, err := normalizeAllowedPhoneList(cfg.GoogleVoice.AllowedFrom); err != nil {
+		log.Printf("SMS phone allowlist invalid: %v; waiting for setup", err)
+		return
+	}
 	tctx, cancelMail := context.WithTimeout(ctx, 35*time.Second)
 	if err := mc.Test(tctx); err != nil {
 		cancelMail()
@@ -448,5 +451,9 @@ func (a *App) startBridge(ctx context.Context) {
 	a.bridge = b
 	a.mu.Unlock()
 	go b.Run(ctx)
-	log.Printf("Gmail monitoring active via %s every %ds", gmailMethodLabel(cfg.Gmail.Method), cfg.Gmail.PollSeconds)
+	if cfg.Gmail.Method == GmailMethodAppPassword {
+		log.Printf("Gmail monitoring active via App Password with IMAP IDLE")
+	} else {
+		log.Printf("Gmail monitoring active via Google API/OAuth at %ds interval", cfg.Gmail.PollSeconds)
+	}
 }
