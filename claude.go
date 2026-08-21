@@ -35,7 +35,7 @@ type claudeResult struct {
 }
 
 func NewClaudeClient(path, cwd string, cfg ClaudeConfig) *ClaudeClient {
-	return &ClaudeClient{path: path, cwd: cwd, cfg: cfg}
+	return &ClaudeClient{path: resolveClaudeExecutable(path), cwd: cwd, cfg: cfg}
 }
 
 func scrubAnthropicEnv(env []string) []string {
@@ -43,12 +43,8 @@ func scrubAnthropicEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, e := range env {
 		k := e
-		if i := strings.IndexByte(e, '='); i >= 0 {
-			k = e[:i]
-		}
-		if !deny[strings.ToUpper(k)] {
-			out = append(out, e)
-		}
+		if i := strings.IndexByte(e, '='); i >= 0 { k = e[:i] }
+		if !deny[strings.ToUpper(k)] { out = append(out, e) }
 	}
 	return out
 }
@@ -67,32 +63,28 @@ func (c *ClaudeClient) supportsChrome(ctx context.Context) bool {
 	out, _ := cmd.CombinedOutput()
 	v := strings.Contains(string(out), "--chrome")
 	c.mu.Lock()
-	c.chromeChecked = true
-	c.chromeSupported = v
+	c.chromeChecked, c.chromeSupported = true, v
 	c.mu.Unlock()
 	return v
 }
 
 func (c *ClaudeClient) checkAuth(ctx context.Context) error {
-	if strings.TrimSpace(c.path) == "" {
-		return errors.New("Claude path is empty")
-	}
+	if strings.TrimSpace(c.path) == "" { return errors.New("Claude path is empty") }
 	cmd := exec.CommandContext(ctx, c.path, "auth", "status")
 	cmd.Env = scrubAnthropicEnv(os.Environ())
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("Claude Code is not signed in: %v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("Claude Code is not signed in or could not start using %q: %v: %s", c.path, err, strings.TrimSpace(string(out)))
 	}
 	var st ClaudeAuthStatus
 	if json.Unmarshal(out, &st) != nil {
 		return errors.New("Claude auth status did not return JSON; update Claude Code")
 	}
-	if !st.LoggedIn {
-		return errors.New("Claude Code is not signed in")
-	}
+	if !st.LoggedIn { return errors.New("Claude Code is not signed in") }
 	m := strings.ToLower(st.AuthMethod)
-	if strings.Contains(m, "api") || strings.Contains(m, "console") {
+	provider := strings.ToLower(st.ApiProvider)
+	if strings.Contains(m, "api") || strings.Contains(m, "console") || strings.Contains(provider, "api") || strings.Contains(provider, "console") {
 		return fmt.Errorf("Claude is authenticated for API/Console billing (%s); sign in with your Claude subscription instead", st.AuthMethod)
 	}
 	return nil
@@ -101,38 +93,22 @@ func (c *ClaudeClient) checkAuth(ctx context.Context) error {
 func (c *ClaudeClient) Test(ctx context.Context) error { return c.checkAuth(ctx) }
 
 func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (result, newSession string, err error) {
-	if err := c.checkAuth(ctx); err != nil {
-		return "", sessionID, err
-	}
+	if err := c.checkAuth(ctx); err != nil { return "", sessionID, err }
 	args := []string{"-p", prompt, "--output-format", "json"}
-	if sessionID != "" {
-		args = append(args, "--resume", sessionID)
-	}
+	if sessionID != "" { args = append(args, "--resume", sessionID) }
 	pm := strings.TrimSpace(c.cfg.PermissionMode)
-	if pm == "" || pm == "auto" || pm == "bypassPermissions" {
-		pm = "acceptEdits"
-	}
+	if pm == "" || pm == "auto" || pm == "bypassPermissions" { pm = "acceptEdits" }
 	args = append(args, "--permission-mode", pm)
-	if c.cfg.UseChrome && c.supportsChrome(ctx) {
-		args = append(args, "--chrome")
-	}
+	if c.cfg.UseChrome && c.supportsChrome(ctx) { args = append(args, "--chrome") }
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Dir = c.cwd
 	cmd.Env = scrubAnthropicEnv(os.Environ())
 	hideWindow(cmd)
 	out, e := cmd.CombinedOutput()
-	if e != nil {
-		return "", sessionID, fmt.Errorf("Claude Code failed: %v: %s", e, truncate(string(out), 800))
-	}
+	if e != nil { return "", sessionID, fmt.Errorf("Claude Code failed: %v: %s", e, truncate(string(out), 800)) }
 	var r claudeResult
-	if json.Unmarshal(out, &r) != nil {
-		return strings.TrimSpace(string(out)), sessionID, nil
-	}
-	if r.IsError {
-		return "", r.SessionID, fmt.Errorf("Claude reported an error: %s", r.Result)
-	}
-	if r.SessionID == "" {
-		r.SessionID = sessionID
-	}
+	if json.Unmarshal(out, &r) != nil { return strings.TrimSpace(string(out)), sessionID, nil }
+	if r.IsError { return "", r.SessionID, fmt.Errorf("Claude reported an error: %s", r.Result) }
+	if r.SessionID == "" { r.SessionID = sessionID }
 	return strings.TrimSpace(r.Result), r.SessionID, nil
 }
