@@ -12,12 +12,8 @@ import (
 	"syscall"
 )
 
-func openBrowser(u string) error {
-	return exec.Command("explorer.exe", u).Start()
-}
-func hideWindow(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-}
+func openBrowser(u string) error { return exec.Command("explorer.exe", u).Start() }
+func hideWindow(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} }
 func spawnDetached(exe string, args ...string) error {
 	cmd := exec.Command(exe, args...)
 	hideWindow(cmd)
@@ -54,23 +50,13 @@ func installedExePath() (string, error) {
 }
 func copySelfInstall() (string, error) {
 	src, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
+	if err != nil { return "", err }
 	dst, err := installedExePath()
-	if err != nil {
-		return "", err
-	}
-	if strings.EqualFold(filepath.Clean(src), filepath.Clean(dst)) {
-		return dst, nil
-	}
+	if err != nil { return "", err }
+	if strings.EqualFold(filepath.Clean(src), filepath.Clean(dst)) { return dst, nil }
 	b, err := os.ReadFile(src)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(dst, b, 0755); err != nil {
-		return "", err
-	}
+	if err != nil { return "", err }
+	if err := os.WriteFile(dst, b, 0755); err != nil { return "", err }
 	return dst, nil
 }
 
@@ -92,29 +78,35 @@ func resolveCodexExecutable(configured string) string {
 	if base := os.Getenv("LOCALAPPDATA"); base != "" {
 		root := filepath.Join(base, "OpenAI", "Codex", "bin")
 		direct := filepath.Join(root, "codex.exe")
-		if regularExecutable(direct) {
-			return direct
-		}
+		if regularExecutable(direct) { return direct }
 		matches, _ := filepath.Glob(filepath.Join(root, "*", "codex.exe"))
 		sort.Slice(matches, func(i, j int) bool {
-			si, ei := os.Stat(matches[i])
-			sj, ej := os.Stat(matches[j])
-			if ei == nil && ej == nil && !si.ModTime().Equal(sj.ModTime()) {
-				return si.ModTime().After(sj.ModTime())
-			}
+			si, ei := os.Stat(matches[i]); sj, ej := os.Stat(matches[j])
+			if ei == nil && ej == nil && !si.ModTime().Equal(sj.ModTime()) { return si.ModTime().After(sj.ModTime()) }
 			return strings.ToLower(matches[i]) > strings.ToLower(matches[j])
 		})
-		for _, p := range matches {
-			if regularExecutable(p) {
-				return p
-			}
-		}
+		for _, p := range matches { if regularExecutable(p) { return p } }
 	}
-	if p, err := exec.LookPath("codex"); err == nil {
-		return p
-	}
-	if configured != "" {
+	if p, err := exec.LookPath("codex"); err == nil { return p }
+	if configured != "" { return configured }
+	return "codex"
+}
+
+// Anthropic's native Windows installer commonly uses %USERPROFILE%\.local\bin.
+// Checking it directly avoids a stale PATH inherited by a long-running desktop
+// session. Explicit custom paths remain authoritative.
+func resolveClaudeExecutable(configured string) string {
+	configured = strings.TrimSpace(configured)
+	if configured != "" && !strings.EqualFold(configured, "claude") && !strings.EqualFold(configured, "claude.exe") {
 		return configured
 	}
-	return "codex"
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, name := range []string{"claude.exe", "claude.cmd"} {
+			p := filepath.Join(home, ".local", "bin", name)
+			if regularExecutable(p) { return p }
+		}
+	}
+	if p, err := exec.LookPath("claude"); err == nil { return p }
+	if configured != "" { return configured }
+	return "claude"
 }
