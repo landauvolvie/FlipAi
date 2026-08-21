@@ -20,6 +20,7 @@ func uninstallAutostart() error                      { return nil }
 func copySelfInstall() (string, error)               { return os.Executable() }
 func resolveCodexExecutable(configured string) string { return resolvePathExecutable(configured, "codex") }
 func resolveClaudeExecutable(configured string) string { return resolvePathExecutable(configured, "claude") }
+func augmentCodexEnv(exe string, env []string) []string { return env }
 func resolvePathExecutable(configured, fallback string) string {
 	configured = strings.TrimSpace(configured)
 	if configured == "" { configured = fallback }
