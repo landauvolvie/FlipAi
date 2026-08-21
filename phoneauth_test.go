@@ -26,6 +26,18 @@ func TestGoogleVoiceSenderUsesStructuredEnvelope(t *testing.T) {
 	}
 }
 
+func TestGoogleVoiceSenderUsesReplyToWhenFromIsNoreply(t *testing.T) {
+	m := GmailMessage{
+		Subject: "New text message from Alice",
+		From:    "Google Voice <voice-noreply@google.com>",
+		ReplyTo: `18453241813.8456043655.abcdef@txt.voice.google.com`,
+	}
+	sender, ok := googleVoiceSender(m, "new text message from")
+	if !ok || sender != "8456043655" {
+		t.Fatalf("sender=%q ok=%v", sender, ok)
+	}
+}
+
 func TestUnauthorizedBodyCannotSpoofAllowedNumber(t *testing.T) {
 	m := GmailMessage{
 		Subject: "New text message from Mallory",
