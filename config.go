@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.5.0"
+const version = "0.5.1"
 
 type Config struct {
 	CodexPath          string            `json:"codexPath"`

@@ -23,6 +23,85 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist/AISMSBridge.exe .
+      - name: Windows lifecycle smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'AISMSBridge-Lifecycle'
+          $env:AISMSBRIDGE_NO_BROWSER = '1'
+          Remove-Item $env:LOCALAPPDATA -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+
+          function Get-BridgeProcess([string]$arg) {
+            @(Get-CimInstance Win32_Process | Where-Object {
+              $_.Name -eq 'AISMSBridge.exe' -and ("$($_.CommandLine)" -match [regex]::Escape($arg))
+            })
+          }
+          function Wait-Health([int]$seconds = 20) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              try {
+                $r = Invoke-WebRequest 'http://127.0.0.1:8765/health' -UseBasicParsing -TimeoutSec 1
+                if ($r.StatusCode -eq 200) { return }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            throw 'background host never became healthy'
+          }
+          function Wait-ProcessArg([string]$arg, [int]$seconds = 15, [int]$notPid = 0) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              $p = @(Get-BridgeProcess $arg | Where-Object { $_.ProcessId -ne $notPid })
+              if ($p.Count -gt 0) { return $p[0] }
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            throw "process $arg did not appear"
+          }
+          function Wait-NoBridge([int]$seconds = 15) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              $p = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'AISMSBridge.exe' })
+              if ($p.Count -eq 0) { return }
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            $left = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'AISMSBridge.exe' } | Select-Object ProcessId,CommandLine | Format-Table | Out-String)
+            throw "bridge processes remained after Quit: $left"
+          }
+
+          # Normal user launch: launcher exits, watchdog/host/tray remain alive.
+          $launcher = Start-Process -FilePath '.\dist\AISMSBridge.exe' -PassThru
+          if (-not $launcher.WaitForExit(15000)) { throw 'launcher did not exit after opening settings' }
+          Wait-Health
+          $watchdogProc = Wait-ProcessArg '--watchdog'
+          $hostProc = Wait-ProcessArg '--host'
+          $trayProc = Wait-ProcessArg '--tray'
+          Start-Sleep -Seconds 2
+          if ($trayProc.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'tray process exited unexpectedly' }
+          Wait-Health  # proves closing/ending launcher/settings does not stop monitoring
+
+          # Starting again must not create a second watchdog.
+          $second = Start-Process -FilePath '.\dist\AISMSBridge.exe' -ArgumentList '--watchdog' -PassThru
+          if (-not $second.WaitForExit(5000)) { throw 'duplicate watchdog did not exit' }
+          if (@(Get-BridgeProcess '--watchdog').Count -ne 1) { throw 'more than one watchdog is running' }
+
+          # Kill the host: watchdog must restart it automatically.
+          $oldHostPid = $hostProc.ProcessId
+          Stop-Process -Id $oldHostPid -Force
+          $hostProc2 = Wait-ProcessArg '--host' 20 $oldHostPid
+          Wait-Health 20
+
+          # Kill the tray: watchdog must restart it automatically.
+          $oldTrayPid = $trayProc.ProcessId
+          Stop-Process -Id $oldTrayPid -Force
+          $trayProc2 = Wait-ProcessArg '--tray' 20 $oldTrayPid
+          Start-Sleep -Seconds 2
+          if ($trayProc2.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'restarted tray did not stay alive' }
+
+          # Explicit Quit must stop the host, tray, and watchdog and keep them stopped.
+          Start-Process -FilePath '.\dist\AISMSBridge.exe' -ArgumentList '--quit' -Wait
+          Wait-NoBridge 15
+          Start-Sleep -Seconds 2
+          Wait-NoBridge 2
       - name: SHA-256
         shell: pwsh
         run: |

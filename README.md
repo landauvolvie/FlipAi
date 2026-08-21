@@ -18,11 +18,12 @@ The bridge is not an AI model and does not require an OpenAI or Anthropic API ke
 
 AI SMS Bridge is one clean executable with separate internal roles:
 
-- **Launcher/UI opener** — double-click `AISMSBridge.exe`; it makes sure the background bridge is alive and opens the local settings page.
-- **Watchdog** — stays hidden and restarts the background host if the host crashes.
+- **Launcher/UI opener** — double-click `AISMSBridge.exe`; it makes sure the background bridge is alive and opens the local settings page. The launcher then exits.
+- **Watchdog** — stays hidden and restarts both the background host and tray process if either crashes.
 - **Background host** — polls Gmail and talks to Codex/Claude.
+- **System tray** — shows **AI SMS Bridge** in the Windows notification area. Double-click it or choose **Open Settings** to reopen the GUI. Choose **Quit AI SMS Bridge** to stop the tray, host, and watchdog completely.
 
-Closing the browser settings page **does not stop the bridge**. Only the **Quit Bridge** button stops the current watchdog/host. Launching the EXE again starts it again.
+Closing the browser settings page with **X does not stop the bridge** because the settings page is not the background process. Only **Quit AI SMS Bridge** from the tray or the **Quit Bridge** button in Settings stops the bridge. Launching the EXE again starts it again. The tray re-registers itself if Windows Explorer restarts.
 
 No administrator rights are required. “Start with Windows” copies the EXE to `%LOCALAPPDATA%\Programs\AISMSBridge\AISMSBridge.exe` and adds a current-user `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry. It starts after that Windows user signs in and continues while the workstation is locked. Sleep/hibernate pauses it.
 
@@ -141,6 +142,12 @@ go vet ./...
 go test -race ./...
 go build -trimpath -ldflags "-H=windowsgui -s -w" -o AISMSBridge.exe .
 ```
+
+## Lifecycle tests
+
+The Windows GitHub Actions build performs a real process-level smoke test on a fresh Windows runner: normal launch, launcher exit while background monitoring remains healthy, one-watchdog enforcement, host crash/restart, tray registration/process survival, tray crash/restart, and explicit Quit stopping all bridge processes. Windows-only unit tests also verify the current-user startup registry entry and the per-user install location.
+
+The only thing CI cannot visually inspect is the pixels of the notification-area icon on a human desktop; it verifies that the Windows tray process successfully registers with the shell and remains alive.
 
 ## SmartScreen / antivirus
 

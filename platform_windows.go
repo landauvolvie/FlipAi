@@ -23,8 +23,11 @@ func spawnDetached(exe string, args ...string) error {
 	return cmd.Start()
 }
 func installAutostart(exe string) error {
+	return installAutostartNamed("AISMSBridge", exe)
+}
+func installAutostartNamed(name, exe string) error {
 	value := fmt.Sprintf("\"%s\" --watchdog", exe)
-	cmd := exec.Command("reg.exe", "ADD", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "AISMSBridge", "/t", "REG_SZ", "/d", value, "/f")
+	cmd := exec.Command("reg.exe", "ADD", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name, "/t", "REG_SZ", "/d", value, "/f")
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -33,7 +36,10 @@ func installAutostart(exe string) error {
 	return nil
 }
 func uninstallAutostart() error {
-	cmd := exec.Command("reg.exe", "DELETE", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "AISMSBridge", "/f")
+	return uninstallAutostartNamed("AISMSBridge")
+}
+func uninstallAutostartNamed(name string) error {
+	cmd := exec.Command("reg.exe", "DELETE", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name, "/f")
 	hideWindow(cmd)
 	_ = cmd.Run()
 	return nil
