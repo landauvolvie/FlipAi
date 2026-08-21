@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -22,9 +23,7 @@ func spawnDetached(exe string, args ...string) error {
 	hideWindow(cmd)
 	return cmd.Start()
 }
-func installAutostart(exe string) error {
-	return installAutostartNamed("AISMSBridge", exe)
-}
+func installAutostart(exe string) error { return installAutostartNamed("AISMSBridge", exe) }
 func installAutostartNamed(name, exe string) error {
 	value := fmt.Sprintf("\"%s\" --watchdog", exe)
 	cmd := exec.Command("reg.exe", "ADD", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name, "/t", "REG_SZ", "/d", value, "/f")
@@ -35,9 +34,7 @@ func installAutostartNamed(name, exe string) error {
 	}
 	return nil
 }
-func uninstallAutostart() error {
-	return uninstallAutostartNamed("AISMSBridge")
-}
+func uninstallAutostart() error { return uninstallAutostartNamed("AISMSBridge") }
 func uninstallAutostartNamed(name string) error {
 	cmd := exec.Command("reg.exe", "DELETE", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name, "/f")
 	hideWindow(cmd)
@@ -75,4 +72,49 @@ func copySelfInstall() (string, error) {
 		return "", err
 	}
 	return dst, nil
+}
+
+func regularExecutable(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
+}
+
+// resolveCodexExecutable makes a normal Codex Desktop installation usable even
+// when the user never installed the standalone codex CLI or added it to PATH.
+// Explicit custom paths are respected. For the default "codex" value we prefer
+// the per-user copies maintained by Codex Desktop, then fall back to PATH. We
+// deliberately do not scan the protected WindowsApps package directory.
+func resolveCodexExecutable(configured string) string {
+	configured = strings.TrimSpace(configured)
+	if configured != "" && !strings.EqualFold(configured, "codex") && !strings.EqualFold(configured, "codex.exe") {
+		return configured
+	}
+	if base := os.Getenv("LOCALAPPDATA"); base != "" {
+		root := filepath.Join(base, "OpenAI", "Codex", "bin")
+		direct := filepath.Join(root, "codex.exe")
+		if regularExecutable(direct) {
+			return direct
+		}
+		matches, _ := filepath.Glob(filepath.Join(root, "*", "codex.exe"))
+		sort.Slice(matches, func(i, j int) bool {
+			si, ei := os.Stat(matches[i])
+			sj, ej := os.Stat(matches[j])
+			if ei == nil && ej == nil && !si.ModTime().Equal(sj.ModTime()) {
+				return si.ModTime().After(sj.ModTime())
+			}
+			return strings.ToLower(matches[i]) > strings.ToLower(matches[j])
+		})
+		for _, p := range matches {
+			if regularExecutable(p) {
+				return p
+			}
+		}
+	}
+	if p, err := exec.LookPath("codex"); err == nil {
+		return p
+	}
+	if configured != "" {
+		return configured
+	}
+	return "codex"
 }
