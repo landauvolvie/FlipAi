@@ -56,7 +56,7 @@ func TestParseGoogleVoiceRejectsUnauthorizedSenderEvenIfBodyMentionsAllowed(t *t
 		AuthenticationResults: "mx.google.com; dkim=pass header.d=google.com",
 		Body:                  "482913 C: the allowed number is 8456043655",
 	}
-	if _, ok := parseGoogleVoiceBody(m, "8456043655\n2125551212", "new text message from"); ok {
+	if _, _, ok := parseGoogleVoiceBody(m, "8456043655\n2125551212", "new text message from"); ok {
 		t.Fatal("unauthorized sender passed because body mentioned allowed number")
 	}
 }
