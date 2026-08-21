@@ -1,0 +1,79 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
+            throw "Invalid VERSION: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Windows x64
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package\docs | Out-Null
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o package\AISMSBridge.exe .
+          Copy-Item README.md,LICENSE,SECURITY.md,CONTRIBUTING.md package\
+          Copy-Item docs\ARCHITECTURE.md,docs\THREAT-MODEL.md package\docs\
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $zip = "AISMSBridge-v$version-windows-x64.zip"
+          Compress-Archive -Path package\* -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -Encoding ascii SHA256SUMS.txt
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AISMSBridge-windows-x64
+          path: |
+            ${{ steps.package.outputs.zip }}
+            SHA256SUMS.txt
+
+      - name: Create GitHub Release if this version is new
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $zip = '${{ steps.package.outputs.zip }}'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists; leaving it unchanged."
+            exit 0
+          }
+          gh release create $tag $zip SHA256SUMS.txt --target $env:GITHUB_SHA --title "AI SMS Bridge $tag" --generate-notes
