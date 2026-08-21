@@ -69,32 +69,48 @@ func allowedPhone(raw, sender string) bool {
 	return false
 }
 
-// googleVoiceSender extracts the SMS sender from Google Voice's structured
-// @txt.voice.google.com envelope. A typical address looks like:
+// senderFromVoiceAddress extracts the SMS sender from Google Voice's structured
+// envelope address. A typical address looks like:
 // 1<google-voice-number>.<sms-sender>.<opaque-token>@txt.voice.google.com
-// This is safer than searching the message body for digits because the SMS
-// content itself is untrusted and may contain arbitrary phone numbers.
+func senderFromVoiceAddress(raw string) (string, bool) {
+	a, err := mail.ParseAddress(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	addr := strings.ToLower(strings.TrimSpace(a.Address))
+	at := strings.LastIndex(addr, "@")
+	if at <= 0 || addr[at+1:] != "txt.voice.google.com" {
+		return "", false
+	}
+	fields := strings.Split(addr[:at], ".")
+	if len(fields) < 3 {
+		return "", false
+	}
+	if n := normalizeUSPhone(fields[1]); n != "" {
+		return n, true
+	}
+	return "", false
+}
+
+// googleVoiceSender uses structured Google Voice headers instead of searching
+// untrusted SMS body text. Newer notifications may use voice-noreply@google.com
+// as From while keeping the per-conversation @txt.voice.google.com address in
+// Reply-To, so Reply-To is checked first. parseGoogleVoiceBody validates Google
+// DKIM before trusting the sender returned here.
 func googleVoiceSender(m GmailMessage, requiredPhrase string) (string, bool) {
 	if requiredPhrase != "" && !strings.Contains(strings.ToLower(m.Subject), strings.ToLower(requiredPhrase)) {
 		return "", false
 	}
-	if a, err := mail.ParseAddress(m.From); err == nil {
-		addr := strings.ToLower(strings.TrimSpace(a.Address))
-		at := strings.LastIndex(addr, "@")
-		if at > 0 && addr[at+1:] == "txt.voice.google.com" {
-			local := addr[:at]
-			fields := strings.Split(local, ".")
-			if len(fields) >= 3 {
-				if n := normalizeUSPhone(fields[1]); n != "" {
-					return n, true
-				}
-			}
-		}
+	if n, ok := senderFromVoiceAddress(m.ReplyTo); ok {
+		return n, true
+	}
+	if n, ok := senderFromVoiceAddress(m.From); ok {
+		return n, true
 	}
 
-	// Some Google Voice notification variants use voice-noreply@google.com.
-	// Only accept that fallback when the sender's full phone number appears in
-	// the trusted Subject header after the expected Google Voice phrase.
+	// Last-resort compatibility fallback: when Google uses voice-noreply and no
+	// structured Reply-To is present, accept only a full phone number in the
+	// trusted Subject header after the expected Google Voice phrase.
 	if strings.Contains(strings.ToLower(m.From), "voice-noreply@google.com") {
 		phrasePos := strings.Index(strings.ToLower(m.Subject), strings.ToLower(requiredPhrase))
 		tail := m.Subject
