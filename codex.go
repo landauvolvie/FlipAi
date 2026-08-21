@@ -50,9 +50,10 @@ func NewCodexClient(path, cwd string) *CodexClient {
 
 func (c *CodexClient) Start(ctx context.Context) error {
 	if strings.TrimSpace(c.path) == "" {
-		return errors.New("Codex path is empty")
+		c.path = "codex"
 	}
-	c.cmd = exec.CommandContext(ctx, c.path, "app-server", "--listen", "stdio://")
+	exe := resolveCodexExecutable(c.path)
+	c.cmd = exec.CommandContext(ctx, exe, "app-server", "--listen", "stdio://")
 	if c.cwd != "" {
 		c.cmd.Dir = c.cwd
 	}
@@ -70,16 +71,22 @@ func (c *CodexClient) Start(ctx context.Context) error {
 	}
 	c.stdin = in
 	if err := c.cmd.Start(); err != nil {
-		return fmt.Errorf("start codex app-server: %w", err)
+		return fmt.Errorf("start Codex app-server using %q: %w (install/open Codex Desktop or set the Codex executable path in FlipAi)", exe, err)
 	}
+	c.path = exe
 	go c.readStdout(out)
 	go c.readStderr(er)
 	go func() { _ = c.cmd.Wait(); close(c.done) }()
-	_, err = c.Request(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "codex_googlevoice_bridge", "title": "Codex Google Voice Bridge", "version": version}})
+	_, err = c.Request(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "flipai_sms_bridge", "title": "FlipAi AI SMS Bridge", "version": version}})
 	if err != nil {
+		c.Close()
+		return fmt.Errorf("initialize Codex app-server: %w", err)
+	}
+	if err := c.Notify("initialized", map[string]any{}); err != nil {
+		c.Close()
 		return err
 	}
-	return c.Notify("initialized", map[string]any{})
+	return nil
 }
 
 func (c *CodexClient) readStdout(r io.Reader) {
@@ -137,9 +144,8 @@ func (c *CodexClient) route(m rpcEnvelope) {
 	}
 }
 func (c *CodexClient) handleServerRequest(m rpcEnvelope) {
-	// The SMS bridge cannot pause and ask through the same Codex turn. For approval
-	// requests we rely on guardian_subagent when configured. Unexpected requests
-	// are rejected instead of guessed/auto-approved.
+	// The SMS bridge cannot safely pause and ask for approval through the same
+	// unattended turn. Unexpected approvals are declined rather than guessed.
 	var id any
 	_ = json.Unmarshal(m.ID, &id)
 	result := map[string]any{}
@@ -158,6 +164,9 @@ func (c *CodexClient) Request(ctx context.Context, method string, params any) (j
 	c.pending[id] = ch
 	c.pendingMu.Unlock()
 	if err := c.send(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
 		return nil, err
 	}
 	select {
@@ -167,8 +176,14 @@ func (c *CodexClient) Request(ctx context.Context, method string, params any) (j
 		}
 		return r.result, nil
 	case <-ctx.Done():
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
 		return nil, ctx.Err()
 	case <-c.done:
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
 		return nil, errors.New("codex app-server stopped")
 	}
 }
@@ -180,30 +195,22 @@ func (c *CodexClient) send(v any) error {
 	if e != nil {
 		return e
 	}
+	b = append(b, '\n')
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_, e = c.stdin.Write(append(b, '\n'))
+	if c.stdin == nil {
+		return errors.New("codex stdin is not available")
+	}
+	_, e = c.stdin.Write(b)
 	return e
 }
-
 func (c *CodexClient) Account(ctx context.Context) (json.RawMessage, error) {
-	return c.Request(ctx, "account/read", map[string]any{"refreshToken": true})
+	return c.Request(ctx, "account/read", map[string]any{})
 }
-func (c *CodexClient) StartChatGPTLogin(ctx context.Context) (string, error) {
-	raw, err := c.Request(ctx, "account/login/start", map[string]any{"type": "chatgpt", "useHostedLoginSuccessPage": true, "appBrand": "codex"})
-	if err != nil {
-		return "", err
-	}
-	var r struct {
-		AuthURL string `json:"authUrl"`
-	}
-	if json.Unmarshal(raw, &r) != nil || r.AuthURL == "" {
-		return "", errors.New("Codex did not return a login URL")
-	}
-	return r.AuthURL, nil
-}
-
 func (c *CodexClient) Alive() bool {
+	if c == nil || c.cmd == nil || c.cmd.Process == nil {
+		return false
+	}
 	select {
 	case <-c.done:
 		return false
@@ -211,18 +218,24 @@ func (c *CodexClient) Alive() bool {
 		return true
 	}
 }
-
 func (c *CodexClient) Close() {
+	if c == nil {
+		return
+	}
+	c.writeMu.Lock()
 	if c.stdin != nil {
 		_ = c.stdin.Close()
+		c.stdin = nil
+	}
+	c.writeMu.Unlock()
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
 	}
 }
 
 func codexAccountIsChatGPT(raw json.RawMessage) bool {
 	var v struct {
-		Account *struct {
-			Type string `json:"type"`
-		} `json:"account"`
+		Account *struct{ Type string `json:"type"` } `json:"account"`
 		Requires bool `json:"requiresOpenaiAuth"`
 	}
 	if json.Unmarshal(raw, &v) != nil || v.Requires || v.Account == nil {
