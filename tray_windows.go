@@ -124,8 +124,8 @@ func showTrayMenu(hwnd uintptr) bool {
 		return false
 	}
 	defer procDestroyMenu.Call(menu)
-	openText, _ := syscall.UTF16PtrFromString("Open Settings")
-	quitText, _ := syscall.UTF16PtrFromString("Quit AI SMS Bridge")
+	openText, _ := syscall.UTF16PtrFromString("Open FlipAi Settings")
+	quitText, _ := syscall.UTF16PtrFromString("Quit FlipAi")
 	procAppendMenuW.Call(menu, mfString, trayOpenID, uintptr(unsafe.Pointer(openText)))
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	procAppendMenuW.Call(menu, mfString, trayQuitID, uintptr(unsafe.Pointer(quitText)))
@@ -171,8 +171,8 @@ func runSystemTray(ctx context.Context, tooltip string, onOpen, onQuit func()) e
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	className, _ := syscall.UTF16PtrFromString(fmt.Sprintf("AISMSBridgeTray_%d", os.Getpid()))
-	windowName, _ := syscall.UTF16PtrFromString("AI SMS Bridge")
+	className, _ := syscall.UTF16PtrFromString(fmt.Sprintf("FlipAiTray_%d", os.Getpid()))
+	windowName, _ := syscall.UTF16PtrFromString("FlipAi")
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
 	icon, _, _ := procLoadIconW.Call(0, idiApplication)
 	cursor, _, _ := procLoadCursorW.Call(0, idcArrow)
