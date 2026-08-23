@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	webview2 "github.com/jchv/go-webview2"
 )
 
 var (
@@ -18,12 +20,16 @@ var (
 	procPlatformShellOpen = platformShell32.NewProc("ShellExecuteW")
 )
 
-// openBrowser uses the Windows shell's documented URL/file opener. Using
-// explorer.exe for a URL is not reliable: on some Windows builds it opens File
-// Explorer (often Downloads) instead of the user's default browser.
+// openBrowser keeps external links (for example Google OAuth) in the user's
+// normal browser, but renders FlipAi's own loopback control UI inside a real
+// desktop window. The local HTTP server remains an internal implementation
+// detail; the user sees an ordinary FlipAi app window with no address bar.
 func openBrowser(target string) error {
 	if capture := os.Getenv("FLIPAI_BROWSER_TEST_CAPTURE"); capture != "" {
 		return os.WriteFile(capture, []byte(target), 0600)
+	}
+	if isFlipAiLocalTarget(target) {
+		return openFlipAiWindow(target)
 	}
 	verb, err := syscall.UTF16PtrFromString("open")
 	if err != nil {
@@ -44,6 +50,33 @@ func openBrowser(target string) error {
 	if r <= 32 {
 		return fmt.Errorf("open %q with Windows shell failed (ShellExecuteW=%d): %v", target, r, callErr)
 	}
+	return nil
+}
+
+func isFlipAiLocalTarget(target string) bool {
+	lower := strings.ToLower(strings.TrimSpace(target))
+	return strings.HasPrefix(lower, "http://127.0.0.1:") || strings.HasPrefix(lower, "http://localhost:")
+}
+
+func openFlipAiWindow(target string) error {
+	w := webview2.NewWithOptions(webview2.WebViewOptions{
+		Debug:     false,
+		AutoFocus: true,
+		WindowOptions: webview2.WindowOptions{
+			Title:  "FlipAi",
+			Width:  1320,
+			Height: 860,
+			Center: true,
+		},
+	})
+	if w == nil {
+		return fmt.Errorf("could not create the FlipAi desktop window; Microsoft Edge WebView2 Runtime may be unavailable")
+	}
+	defer w.Destroy()
+	w.SetSize(1040, 680, webview2.HintMin)
+	w.Init(desktopInitScript)
+	w.Navigate(target)
+	w.Run()
 	return nil
 }
 
