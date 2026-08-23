@@ -13,7 +13,7 @@ import (
 
 const activityHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Activity — FlipAi</title><style>
 :root{--bg:#f5f6fa;--surface:#fff;--ink:#17151f;--muted:#6f6b7a;--line:#e7e4ee;--violet:#6c47ff;--violetSoft:#f0ecff;--green:#18794e;--greenSoft:#eaf8f1;--amber:#9a6700;--amberSoft:#fff6df;--red:#b42318;--redSoft:#fff0ee}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.top{height:70px;border-bottom:1px solid var(--line);background:rgba(245,246,250,.94);display:flex;align-items:center}.topin{width:min(1180px,calc(100% - 32px));margin:auto;display:flex;justify-content:space-between;align-items:center}.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink)}.mark{width:38px;height:38px;border-radius:12px;background:var(--violet);color:white;display:grid;place-items:center;font-weight:900}.brand b{display:block}.brand small{display:block;color:var(--muted)}.wrap{width:min(1180px,calc(100% - 32px));margin:26px auto 60px}.head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}.head h1{margin:0;font-size:30px}.head p{margin:6px 0 0;color:var(--muted);max-width:760px}.actions{display:flex;gap:9px;flex-wrap:wrap}.btn,button{border:0;border-radius:11px;padding:10px 14px;font-weight:800;text-decoration:none;cursor:pointer;font:inherit}.primary{background:var(--violet);color:white}.outline{background:white;color:#3e3946;border:1px solid var(--line)}.danger{background:var(--redSoft);color:var(--red)}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}.stat{background:white;border:1px solid var(--line);border-radius:15px;padding:15px}.stat span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.07em}.stat b{display:block;margin-top:5px;font-size:16px}.card{background:white;border:1px solid var(--line);border-radius:18px;overflow:hidden}.privacy{padding:13px 16px;background:#fafaff;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px}.event{display:grid;grid-template-columns:150px 105px 90px 1fr 120px 65px;gap:12px;padding:13px 16px;border-bottom:1px solid #efedf3;align-items:start}.event:last-child{border-bottom:0}.time{color:var(--muted);font-variant-numeric:tabular-nums}.stage{font-weight:800;text-transform:capitalize}.pill{display:inline-flex;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:900;width:max-content}.info{background:var(--violetSoft);color:#5435d8}.success{background:var(--greenSoft);color:var(--green)}.warn{background:var(--amberSoft);color:var(--amber)}.error{background:var(--redSoft);color:var(--red)}.message{font-weight:600}.meta{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.empty{padding:55px 20px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-size:18px;margin-bottom:6px}@media(max-width:900px){.summary{grid-template-columns:1fr 1fr}.event{grid-template-columns:110px 90px 80px 1fr}.sender,.agent{display:none}}@media(max-width:600px){.head{display:block}.actions{margin-top:14px}.summary{grid-template-columns:1fr 1fr}.event{grid-template-columns:1fr;gap:5px}.time,.stage{font-size:12px}.event .pill{margin-top:2px}}
-</style></head><body><header class="top"><div class="topin"><a class="brand" href="/"><div class="mark">F</div><div><b>FlipAi</b><small>Activity & Logs</small></div></a><div style="color:var(--muted);font-size:12px">v{{.Version}}</div></div></header><main class="wrap"><div class="head"><div><h1>Activity & Logs</h1><p>See exactly how each SMS moves through Gmail, sender verification, security-code validation, Codex/Claude, and the reply channel. This page refreshes automatically every 2 seconds.</p></div><div class="actions"><a class="btn outline" href="/">Back to Settings</a><button class="btn outline" onclick="loadEvents()">Refresh</button><form method="post" action="/activity/clear" onsubmit="return confirm('Clear FlipAi activity history?')"><button class="btn danger" type="submit">Clear logs</button></form></div></div><div class="summary"><div class="stat"><span>Latest event</span><b id="latest">—</b></div><div class="stat"><span>Gmail</span><b id="gmail">Waiting</b></div><div class="stat"><span>Agent</span><b id="agent">Waiting</b></div><div class="stat"><span>Reply</span><b id="reply">Waiting</b></div></div><section class="card"><div class="privacy">Privacy: FlipAi logs statuses and errors only. SMS contents, agent prompts/results, security codes, Gmail App Passwords, OAuth tokens, and credentials are never written to this activity log.</div><div id="events"><div class="empty"><b>Loading activity…</b></div></div></section></main><script>
+</style></head><body><header class="top"><div class="topin"><a class="brand" href="/"><div class="mark">F</div><div><b>FlipAi</b><small>Activity & Logs</small></div></a><div style="color:var(--muted);font-size:12px">v{{.Version}}</div></div></header><main class="wrap"><div class="head"><div><h1>Activity & Logs</h1><p>See exactly how each SMS moves through Gmail, sender verification, optional security-code validation, Codex/Claude, and the reply channel. This page refreshes automatically every 2 seconds.</p></div><div class="actions"><a class="btn outline" href="/">Back to Settings</a><button class="btn outline" onclick="loadEvents()">Refresh</button><form method="post" action="/activity/clear" onsubmit="return confirm('Clear FlipAi activity history?')"><button class="btn danger" type="submit">Clear logs</button></form></div></div><div class="summary"><div class="stat"><span>Latest event</span><b id="latest">—</b></div><div class="stat"><span>Gmail</span><b id="gmail">Waiting</b></div><div class="stat"><span>Agent</span><b id="agent">Waiting</b></div><div class="stat"><span>Reply</span><b id="reply">Waiting</b></div></div><section class="card"><div class="privacy">Privacy: FlipAi logs statuses and errors only. SMS contents, agent prompts/results, security codes, Gmail App Passwords, OAuth tokens, and credentials are never written to this activity log.</div><div id="events"><div class="empty"><b>Loading activity…</b></div></div></section></main><script>
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function stageStatus(events,stage){const e=events.find(x=>x.stage===stage);if(!e)return 'Waiting';if(e.level==='error')return 'Error';if(e.level==='warn')return 'Attention';if(e.level==='success')return 'OK';return 'Active'}
 async function loadEvents(){try{const r=await fetch('/activity.json',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const events=await r.json();document.getElementById('latest').textContent=events.length?new Date(events[0].time).toLocaleTimeString():'—';document.getElementById('gmail').textContent=stageStatus(events,'gmail');document.getElementById('agent').textContent=stageStatus(events,'agent');document.getElementById('reply').textContent=stageStatus(events,'reply');const root=document.getElementById('events');if(!events.length){root.innerHTML='<div class="empty"><b>No activity yet</b>Send a test SMS to your Google Voice number. The first Gmail detection should appear here within seconds.</div>';return}root.innerHTML=events.map(e=>'<div class="event"><div class="time">'+esc(new Date(e.time).toLocaleString())+'</div><div class="stage">'+esc(e.stage)+'</div><div><span class="pill '+esc(e.level)+'">'+esc(e.level)+'</span></div><div class="message">'+esc(e.message)+'</div><div class="meta sender">'+(e.sender?esc(e.sender):'—')+'</div><div class="meta agent">'+(e.agent?esc(e.agent):'—')+'</div></div>').join('')}catch(e){document.getElementById('events').innerHTML='<div class="empty"><b>Could not load activity</b>'+esc(e.message)+'</div>'}}
@@ -97,6 +97,43 @@ func (a *App) enableStartupCurrent(w http.ResponseWriter, r *http.Request) {
 	renderResult(w, 200, true, "Start with Windows is enabled", "FlipAi will start for this Windows user at sign-in. No second copy of the application was created.")
 }
 
+func (a *App) saveSetupEnhanced(w http.ResponseWriter, r *http.Request) {
+\tif err := r.ParseMultipartForm(2 << 20); err != nil {
+\t\trenderResult(w, 400, false, "Could not read settings", err.Error())
+\t\treturn
+\t}
+\trequireCode := r.FormValue("requireSecurityCode") == "1"
+\ta.mu.Lock()
+\toldCfg := a.cfg
+\tcfg := a.cfg
+\ta.mu.Unlock()
+\tprovidedCode := strings.TrimSpace(r.FormValue("securityCode"))
+\tif requireCode && (!cfg.Security.RequireCode || cfg.Security.CodeHash == "") && providedCode == "" {
+\t\trenderResult(w, 400, false, "Set an SMS security code", "Enter a new security code when turning code protection on.")
+\t\treturn
+\t}
+\tif !requireCode && cfg.Security.CodeHash == "" {
+\t\tplaceholder, err := secureRandomToken(24)
+\t\tif err != nil || setSecurityCode(&cfg, placeholder) != nil {
+\t\t\trenderResult(w, 500, false, "Could not disable the SMS code", "FlipAi could not create its internal disabled-code placeholder.")
+\t\t\treturn
+\t\t}
+\t}
+\tcfg.Security.RequireCode = requireCode
+\ta.mu.Lock()
+\ta.cfg = cfg
+\ta.mu.Unlock()
+
+\trec := httptest.NewRecorder()
+\ta.saveSetup(rec, r)
+\tif rec.Code >= 400 {
+\t\ta.mu.Lock()
+\t\ta.cfg = oldCfg
+\t\ta.mu.Unlock()
+\t}
+\tcopyRecordedResponse(w, rec, rec.Body.Bytes())
+}
+
 func copyRecordedResponse(w http.ResponseWriter, rec *httptest.ResponseRecorder, body []byte) {
 	for k, vv := range rec.Header() {
 		for _, v := range vv {
@@ -122,6 +159,9 @@ func withActivityRoutes(a *App, base http.Handler) http.Handler {
 		case "/activity/clear":
 			a.requireAuth(a.activityClear)(w, r)
 			return
+		case "/setup/save":
+			a.requireAuth(a.saveSetupEnhanced)(w, r)
+			return
 		case "/codex/test":
 			a.requireAuth(a.codexTestCorrected)(w, r)
 			return
@@ -141,11 +181,26 @@ func withActivityRoutes(a *App, base http.Handler) http.Handler {
 		body := rec.Body.Bytes()
 		if rec.Code == http.StatusOK && strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 			s := string(body)
+			a.mu.Lock()
+			requireCode := a.cfg.Security.RequireCode
+			a.mu.Unlock()
 			s = strings.Replace(s, `<a href="#diagnostics">Diagnostics</a>`, `<a href="/activity">Activity &amp; Logs</a><a href="#diagnostics">Diagnostics</a>`, 1)
 			s = strings.ReplaceAll(s, `%LOCALAPPDATA%\Programs\AISMSBridge\AISMSBridge.exe`, `%LOCALAPPDATA%\Programs\FlipAi\FlipAi.exe`)
 			s = strings.Replace(s, `Install &amp; start with Windows`, `Enable Start with Windows`, 1)
 			s = strings.Replace(s, `Install & start with Windows`, `Enable Start with Windows`, 1)
 			s = strings.Replace(s, `Tray → Open Settings reopens this page.`, `Tray → Open Settings reopens this page. Use Activity & Logs to trace each SMS end-to-end.`, 1)
+			s = strings.Replace(s, `FlipAi verifies the sender and security code, then routes`, `FlipAi verifies the sender and, when enabled, the security code, then routes`, 1)
+			toggle := `<label class="checkrow"><input type="checkbox" name="requireSecurityCode" value="1"`
+			if requireCode { toggle += ` checked` }
+			toggle += `><span><b>Require SMS security code</b><span>Optional extra protection. The allowed phone-number list is always enforced even when this is off.</span></span></label>`
+			s = strings.Replace(s, `<div class="field"><label>SMS security code`, toggle+`<div class="field"><label>SMS security code`, 1)
+			s = strings.Replace(s, `Uses the local Codex App Server. FlipAi requires <b>Sign in with ChatGPT</b> and rejects API/provider auth.`, `Uses the local Codex App Server with <b>Sign in with ChatGPT</b>. SMS turns get full permissions of this Windows user (no Codex sandbox and no UAC/admin elevation), then the thread is released so Codex Desktop can open the same history.`, 1)
+			if !requireCode {
+				s = strings.Replace(s, `Private code required at the start of every text`, `Optional code — turn on “Require SMS security code” to enforce it`, 1)
+				s = strings.ReplaceAll(s, `YOURCODE C:`, `C:`)
+				s = strings.ReplaceAll(s, `YOURCODE A:`, `A:`)
+				s = strings.ReplaceAll(s, `YOURCODE STATUS`, `STATUS`)
+			}
 			body = []byte(s)
 			rec.Header().Del("Content-Length")
 		}
