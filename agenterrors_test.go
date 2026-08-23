@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,9 +80,15 @@ func TestClaudeTokenRoundTripsAndValidates(t *testing.T) {
 	if err != nil || got != token {
 		t.Fatalf("round trip failed: %q %v", got, err)
 	}
-	// Never left world-readable on disk.
-	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm() != 0600 {
-		t.Fatalf("token file mode is %v, want 0600", fi.Mode().Perm())
+	// Never left world-readable on disk. Windows does not implement POSIX
+	// permission bits — Go reports 0666 there whatever mode os.WriteFile was
+	// given — so this only asserts on platforms where the bits mean something.
+	// On Windows the real protection is DPAPI, exercised by the round trip above:
+	// the bytes on disk are encrypted to this user account.
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(path); err == nil && fi.Mode().Perm() != 0600 {
+			t.Fatalf("token file mode is %v, want 0600", fi.Mode().Perm())
+		}
 	}
 	if err := clearClaudeToken(path); err != nil {
 		t.Fatal(err)
