@@ -230,8 +230,25 @@ func (c *CodexClient) send(v any) error {
 // reporting the account. The current app-server protocol allows
 // requiresOpenaiAuth=true at the same time as account.type=chatgpt; that flag
 // describes the provider, not whether the user is signed out.
+//
+// Older FlipAi UI code interpreted requiresOpenaiAuth as a sign-out flag. For
+// a confirmed ChatGPT account we normalize that one field to false before
+// returning the payload so every existing caller uses the correct meaning.
 func (c *CodexClient) Account(ctx context.Context) (json.RawMessage, error) {
-	return c.Request(ctx, "account/read", map[string]any{"refreshToken": true})
+	raw, err := c.Request(ctx, "account/read", map[string]any{"refreshToken": true})
+	if err != nil {
+		return nil, err
+	}
+	if codexAccountIsChatGPT(raw) {
+		var v map[string]any
+		if json.Unmarshal(raw, &v) == nil {
+			v["requiresOpenaiAuth"] = false
+			if normalized, marshalErr := json.Marshal(v); marshalErr == nil {
+				return normalized, nil
+			}
+		}
+	}
+	return raw, nil
 }
 func (c *CodexClient) Alive() bool {
 	if c == nil || c.cmd == nil || c.cmd.Process == nil {
