@@ -236,6 +236,7 @@ func resolveClaudeExecutable(configured string) string {
 			if regularExecutable(p) {
 				return p
 			}
+		}
 	}
 	if p, err := exec.LookPath("claude"); err == nil {
 		return p
