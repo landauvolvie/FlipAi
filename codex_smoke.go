@@ -10,27 +10,38 @@ import (
 
 // SmokeTest runs one tiny ephemeral Codex turn. It verifies the exact app-server
 // request/notification path used by SMS commands without creating a durable
-// conversation or running tools.
+// conversation or running tools. modelProvider is pinned to openai so a custom
+// provider in the user's Codex config cannot silently turn this verification
+// into external/API-provider billing.
 func (c *CodexClient) SmokeTest(ctx context.Context) error {
 	if c == nil || !c.Alive() {
 		return errors.New("Codex app-server is not running")
 	}
-	raw, err := c.Request(ctx, "thread/start", map[string]any{"ephemeral": true})
+	raw, err := c.Request(ctx, "thread/start", map[string]any{"ephemeral": true, "modelProvider": "openai"})
 	if err != nil {
 		return fmt.Errorf("start ephemeral Codex test thread: %w", err)
 	}
 	var started struct {
 		Thread struct {
-			ID string `json:"id"`
+			ID            string `json:"id"`
+			ModelProvider string `json:"modelProvider"`
 		} `json:"thread"`
+		ModelProvider string `json:"modelProvider"`
 	}
 	if json.Unmarshal(raw, &started) != nil || started.Thread.ID == "" {
 		return errors.New("Codex test thread returned no thread id")
 	}
+	provider := started.Thread.ModelProvider
+	if provider == "" {
+		provider = started.ModelProvider
+	}
+	if provider != "" && !strings.EqualFold(provider, "openai") {
+		return fmt.Errorf("Codex test resolved to model provider %q instead of openai; FlipAi refuses external provider billing", provider)
+	}
 	raw, err = c.Request(ctx, "turn/start", map[string]any{
-		"threadId": started.Thread.ID,
+		"threadId":       started.Thread.ID,
 		"approvalPolicy": "never",
-		"input": []map[string]any{{"type": "text", "text": "Reply with exactly FLIPAI_CODEX_OK and nothing else. Do not use tools."}},
+		"input":          []map[string]any{{"type": "text", "text": "Reply with exactly FLIPAI_CODEX_OK and nothing else. Do not use tools."}},
 	})
 	if err != nil {
 		return fmt.Errorf("start Codex test turn: %w", err)
@@ -53,7 +64,7 @@ func (c *CodexClient) SmokeTest(ctx context.Context) error {
 			case "item/completed":
 				var p struct {
 					TurnID string `json:"turnId"`
-					Item struct {
+					Item   struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
 					} `json:"item"`
@@ -64,9 +75,9 @@ func (c *CodexClient) SmokeTest(ctx context.Context) error {
 			case "turn/completed":
 				var p struct {
 					Turn struct {
-						ID string `json:"id"`
+						ID     string `json:"id"`
 						Status string `json:"status"`
-						Error *struct{ Message string `json:"message"` } `json:"error"`
+						Error  *struct{ Message string `json:"message"` } `json:"error"`
 					} `json:"turn"`
 				}
 				if json.Unmarshal(n.Params, &p) == nil && p.Turn.ID == turnStart.Turn.ID {
