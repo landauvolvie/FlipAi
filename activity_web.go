@@ -98,40 +98,40 @@ func (a *App) enableStartupCurrent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) saveSetupEnhanced(w http.ResponseWriter, r *http.Request) {
-\tif err := r.ParseMultipartForm(2 << 20); err != nil {
-\t\trenderResult(w, 400, false, "Could not read settings", err.Error())
-\t\treturn
-\t}
-\trequireCode := r.FormValue("requireSecurityCode") == "1"
-\ta.mu.Lock()
-\toldCfg := a.cfg
-\tcfg := a.cfg
-\ta.mu.Unlock()
-\tprovidedCode := strings.TrimSpace(r.FormValue("securityCode"))
-\tif requireCode && (!cfg.Security.RequireCode || cfg.Security.CodeHash == "") && providedCode == "" {
-\t\trenderResult(w, 400, false, "Set an SMS security code", "Enter a new security code when turning code protection on.")
-\t\treturn
-\t}
-\tif !requireCode && cfg.Security.CodeHash == "" {
-\t\tplaceholder, err := secureRandomToken(24)
-\t\tif err != nil || setSecurityCode(&cfg, placeholder) != nil {
-\t\t\trenderResult(w, 500, false, "Could not disable the SMS code", "FlipAi could not create its internal disabled-code placeholder.")
-\t\t\treturn
-\t\t}
-\t}
-\tcfg.Security.RequireCode = requireCode
-\ta.mu.Lock()
-\ta.cfg = cfg
-\ta.mu.Unlock()
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		renderResult(w, 400, false, "Could not read settings", err.Error())
+		return
+	}
+	requireCode := r.FormValue("requireSecurityCode") == "1"
+	a.mu.Lock()
+	oldCfg := a.cfg
+	cfg := a.cfg
+	a.mu.Unlock()
+	providedCode := strings.TrimSpace(r.FormValue("securityCode"))
+	if requireCode && (!cfg.Security.RequireCode || cfg.Security.CodeHash == "") && providedCode == "" {
+		renderResult(w, 400, false, "Set an SMS security code", "Enter a new security code when turning code protection on.")
+		return
+	}
+	if !requireCode && cfg.Security.CodeHash == "" {
+		placeholder, err := secureRandomToken(24)
+		if err != nil || setSecurityCode(&cfg, placeholder) != nil {
+			renderResult(w, 500, false, "Could not disable the SMS code", "FlipAi could not create its internal disabled-code placeholder.")
+			return
+		}
+	}
+	cfg.Security.RequireCode = requireCode
+	a.mu.Lock()
+	a.cfg = cfg
+	a.mu.Unlock()
 
-\trec := httptest.NewRecorder()
-\ta.saveSetup(rec, r)
-\tif rec.Code >= 400 {
-\t\ta.mu.Lock()
-\t\ta.cfg = oldCfg
-\t\ta.mu.Unlock()
-\t}
-\tcopyRecordedResponse(w, rec, rec.Body.Bytes())
+	rec := httptest.NewRecorder()
+	a.saveSetup(rec, r)
+	if rec.Code >= 400 {
+		a.mu.Lock()
+		a.cfg = oldCfg
+		a.mu.Unlock()
+	}
+	copyRecordedResponse(w, rec, rec.Body.Bytes())
 }
 
 func copyRecordedResponse(w http.ResponseWriter, rec *httptest.ResponseRecorder, body []byte) {
