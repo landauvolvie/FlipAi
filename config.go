@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.7.1"
+const version = "0.8.0"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -70,7 +70,7 @@ type GoogleVoiceConfig struct {
 	ProgressUpdates         bool `json:"progressUpdates"`
 	ProgressIntervalSeconds int  `json:"progressIntervalSeconds"`
 
-	// Deprecated: FlipAi now always delivers replies itself over the
+	// Deprecated: FlipAi now always delivers the reply itself over the
 	// authenticated Google Voice email address. These fields are retained only
 	// so existing bridge.json files keep parsing; loadConfig forces them and
 	// nothing reads them.
