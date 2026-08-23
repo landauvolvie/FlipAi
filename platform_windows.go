@@ -74,6 +74,7 @@ func openFlipAiWindow(target string) error {
 	}
 	defer w.Destroy()
 	w.SetSize(1040, 680, webview2.HintMin)
+	w.Init(desktopInitScript)
 	w.Navigate(target)
 	w.Run()
 	return nil
