@@ -9,32 +9,46 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-      - name: Test
-        run: go test ./...
-      - name: Vet
-        run: go vet ./...
-      - name: Race test
-        run: go test -race ./...
-      - name: Build Windows x64
+
+      - name: Generate branded FlipAi icon
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist/AISMSBridge.exe .
-      - name: Windows lifecycle smoke test
+          .\scripts\Generate-FlipAiIcon.ps1 -OutputPath .\dist\FlipAi.ico
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Race test
+        run: go test -race ./...
+
+      - name: Build Windows x64
+        shell: pwsh
+        run: |
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist\FlipAi.exe .
+          if (-not (Test-Path .\dist\FlipAi.exe)) { throw 'FlipAi.exe was not built' }
+
+      - name: Windows background and tray lifecycle smoke test
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'AISMSBridge-Lifecycle'
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'FlipAi-Lifecycle-Data'
           $env:AISMSBRIDGE_NO_BROWSER = '1'
+          $env:FLIPAI_TRAY_ICON_TEST_CAPTURE = Join-Path $env:RUNNER_TEMP 'flipai-tray-icon.txt'
           Remove-Item $env:LOCALAPPDATA -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $env:FLIPAI_TRAY_ICON_TEST_CAPTURE -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
 
           function Get-BridgeProcess([string]$arg) {
             @(Get-CimInstance Win32_Process | Where-Object {
-              $_.Name -eq 'AISMSBridge.exe' -and ("$($_.CommandLine)" -match [regex]::Escape($arg))
+              $_.Name -eq 'FlipAi.exe' -and ("$($_.CommandLine)" -match [regex]::Escape($arg))
             })
           }
           function Wait-Health([int]$seconds = 20) {
@@ -60,15 +74,15 @@ jobs:
           function Wait-NoBridge([int]$seconds = 15) {
             $deadline = (Get-Date).AddSeconds($seconds)
             do {
-              $p = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'AISMSBridge.exe' })
+              $p = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'FlipAi.exe' })
               if ($p.Count -eq 0) { return }
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
-            $left = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'AISMSBridge.exe' } | Select-Object ProcessId,CommandLine | Format-Table | Out-String)
-            throw "bridge processes remained after Quit: $left"
+            $left = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'FlipAi.exe' } | Select-Object ProcessId,CommandLine | Format-Table | Out-String)
+            throw "FlipAi processes remained after Quit: $left"
           }
 
-          $launcher = Start-Process -FilePath '.\dist\AISMSBridge.exe' -PassThru
+          $launcher = Start-Process -FilePath '.\dist\FlipAi.exe' -PassThru
           if (-not $launcher.WaitForExit(15000)) { throw 'launcher did not exit after opening settings' }
           Wait-Health
           $watchdogProc = Wait-ProcessArg '--watchdog'
@@ -76,9 +90,12 @@ jobs:
           $trayProc = Wait-ProcessArg '--tray'
           Start-Sleep -Seconds 2
           if ($trayProc.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'tray process exited unexpectedly' }
+          if (-not (Test-Path $env:FLIPAI_TRAY_ICON_TEST_CAPTURE)) { throw 'tray did not report an icon source' }
+          $iconSource = Get-Content $env:FLIPAI_TRAY_ICON_TEST_CAPTURE -Raw
+          if ($iconSource -notmatch '^file:.*FlipAi\.ico$') { throw "tray did not load the branded icon: $iconSource" }
           Wait-Health
 
-          $second = Start-Process -FilePath '.\dist\AISMSBridge.exe' -ArgumentList '--watchdog' -PassThru
+          $second = Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--watchdog' -PassThru
           if (-not $second.WaitForExit(5000)) { throw 'duplicate watchdog did not exit' }
           if (@(Get-BridgeProcess '--watchdog').Count -ne 1) { throw 'more than one watchdog is running' }
 
@@ -93,22 +110,23 @@ jobs:
           Start-Sleep -Seconds 2
           if ($trayProc2.ProcessId -notin @((Get-BridgeProcess '--tray').ProcessId)) { throw 'restarted tray did not stay alive' }
 
-          Start-Process -FilePath '.\dist\AISMSBridge.exe' -ArgumentList '--quit' -Wait
+          Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
           Wait-NoBridge 15
           Start-Sleep -Seconds 2
           Wait-NoBridge 2
-      - name: Microsoft Defender scan (when available)
+
+      - name: Microsoft Defender scan app (when available)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) -or -not (Get-Command Start-MpScan -ErrorAction SilentlyContinue)) {
-            Write-Host 'Microsoft Defender PowerShell cmdlets are not installed on this hosted runner; source safety tests still ran.'
+            Write-Host 'Microsoft Defender PowerShell cmdlets are not installed on this hosted runner.'
             exit 0
           }
-          $exe = (Resolve-Path '.\dist\AISMSBridge.exe').Path
+          $exe = (Resolve-Path '.\dist\FlipAi.exe').Path
           $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
           if ($null -eq $status -or -not $status.AntivirusEnabled) {
-            Write-Host 'Microsoft Defender is not enabled on this hosted runner; source safety tests still ran.'
+            Write-Host 'Microsoft Defender is not enabled on this hosted runner.'
             exit 0
           }
           Start-MpScan -ScanType CustomScan -ScanPath $exe
@@ -118,16 +136,153 @@ jobs:
               $_.Resources -and (($_.Resources -join "`n") -match [regex]::Escape($exe))
             })
           }
-          if ($hits.Count -gt 0) {
-            throw "Microsoft Defender reported $($hits.Count) detection(s) for AISMSBridge.exe"
+          if ($hits.Count -gt 0) { throw "Microsoft Defender reported $($hits.Count) detection(s) for FlipAi.exe" }
+          Write-Host 'Microsoft Defender reported no detection for FlipAi.exe.'
+
+      - name: Install Inno Setup compiler if needed
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --yes --no-progress
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           }
-          Write-Host 'Microsoft Defender reported no detection for AISMSBridge.exe.'
+          if (-not $iscc) { throw 'Inno Setup compiler was not found' }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Build no-admin Windows Setup EXE
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          Remove-Item .\installer-output -Recurse -Force -ErrorAction SilentlyContinue
+          & $env:ISCC "/DMyVersion=$version" "/DSourceDir=$((Resolve-Path .\dist).Path)" .\installer\FlipAi.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $setup = ".\installer-output\FlipAi-Setup-v$version.exe"
+          if (-not (Test-Path $setup)) { throw "Setup EXE not found: $setup" }
+
+      - name: Real installer install, Start Menu, startup, Settings, and uninstall test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content VERSION -Raw).Trim()
+          $setup = (Resolve-Path ".\installer-output\FlipAi-Setup-v$version.exe").Path
+          $installDir = Join-Path $env:RUNNER_TEMP 'FlipAi-Installed'
+          $dataDir = Join-Path $env:RUNNER_TEMP 'FlipAi-Installed-Data'
+          $browserCapture = Join-Path $env:RUNNER_TEMP 'flipai-open-settings.txt'
+          $trayCapture = Join-Path $env:RUNNER_TEMP 'flipai-installed-tray-icon.txt'
+
+          Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $browserCapture,$trayCapture -Force -ErrorAction SilentlyContinue
+
+          $args = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$installDir`"")
+          $p = Start-Process -FilePath $setup -ArgumentList $args -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
+
+          $app = Join-Path $installDir 'FlipAi.exe'
+          $icon = Join-Path $installDir 'FlipAi.ico'
+          $uninstaller = Join-Path $installDir 'unins000.exe'
+          foreach ($path in @($app,$icon,$uninstaller)) { if (-not (Test-Path $path)) { throw "installed file missing: $path" } }
+
+          $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\FlipAi.lnk'
+          if (-not (Test-Path $shortcut)) { throw "Start Menu shortcut missing: $shortcut" }
+
+          $uninstallEntry = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Where-Object {
+            (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'FlipAi'
+          } | Select-Object -First 1
+          if (-not $uninstallEntry) { throw 'FlipAi is missing from the per-user Windows uninstall registry' }
+
+          $runValue = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction Stop).FlipAi
+          if (-not $runValue -or $runValue -notmatch 'FlipAi\.exe.*--watchdog') { throw "FlipAi startup entry is wrong: $runValue" }
+          $legacyRun = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name AISMSBridge -ErrorAction SilentlyContinue).AISMSBridge
+          if ($legacyRun) { throw 'legacy AISMSBridge startup entry still exists' }
+
+          $env:LOCALAPPDATA = $dataDir
+          $env:FLIPAI_BROWSER_TEST_CAPTURE = $browserCapture
+          $env:FLIPAI_TRAY_ICON_TEST_CAPTURE = $trayCapture
+          Remove-Item Env:AISMSBRIDGE_NO_BROWSER -ErrorAction SilentlyContinue
+
+          function Wait-Health([int]$seconds = 20) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              try {
+                $r = Invoke-WebRequest 'http://127.0.0.1:8765/health' -UseBasicParsing -TimeoutSec 1
+                if ($r.StatusCode -eq 200) { return }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            throw 'installed FlipAi host never became healthy'
+          }
+          function Wait-NoInstalledFlipAi([int]$seconds = 15) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              $p = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'FlipAi.exe' })
+              if ($p.Count -eq 0) { return }
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            throw 'installed FlipAi processes remained running'
+          }
+
+          $launcher = Start-Process -FilePath $app -PassThru
+          if (-not $launcher.WaitForExit(15000)) { throw 'installed launcher did not exit' }
+          Wait-Health
+          Start-Sleep -Seconds 2
+
+          if (-not (Test-Path $browserCapture)) { throw 'Open Settings did not invoke the browser opener' }
+          $opened = Get-Content $browserCapture -Raw
+          if ($opened -notmatch '^http://127\.0\.0\.1:8765/\?token=') { throw "Settings target is wrong: $opened" }
+
+          if (-not (Test-Path $trayCapture)) { throw 'installed tray did not report its icon source' }
+          $traySource = Get-Content $trayCapture -Raw
+          if ($traySource -notmatch '^file:.*FlipAi\.ico$') { throw "installed tray used the wrong icon: $traySource" }
+
+          Start-Process -FilePath $app -ArgumentList '--quit' -Wait
+          Wait-NoInstalledFlipAi
+
+          $u = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -PassThru -Wait
+          if ($u.ExitCode -ne 0) { throw "uninstaller exited with $($u.ExitCode)" }
+          Start-Sleep -Seconds 1
+
+          if (Test-Path $app) { throw 'FlipAi.exe remained after uninstall' }
+          if (Test-Path $shortcut) { throw 'Start Menu shortcut remained after uninstall' }
+          $stillRegistered = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Where-Object {
+            (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'FlipAi'
+          } | Select-Object -First 1
+          if ($stillRegistered) { throw 'FlipAi uninstall registry entry remained after uninstall' }
+          $startupAfter = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name FlipAi -ErrorAction SilentlyContinue).FlipAi
+          if ($startupAfter) { throw 'FlipAi startup entry remained after uninstall' }
+
+      - name: Microsoft Defender scan installer (when available)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) -or -not (Get-Command Start-MpScan -ErrorAction SilentlyContinue)) { exit 0 }
+          $version = (Get-Content VERSION -Raw).Trim()
+          $setup = (Resolve-Path ".\installer-output\FlipAi-Setup-v$version.exe").Path
+          $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
+          if ($null -eq $status -or -not $status.AntivirusEnabled) { exit 0 }
+          Start-MpScan -ScanType CustomScan -ScanPath $setup
+          $hits = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object {
+            $_.Resources -and (($_.Resources -join "`n") -match [regex]::Escape($setup))
+          })
+          if ($hits.Count -gt 0) { throw "Microsoft Defender reported $($hits.Count) detection(s) for the FlipAi installer" }
+          Write-Host 'Microsoft Defender reported no detection for the FlipAi installer.'
+
       - name: SHA-256
         shell: pwsh
         run: |
-          $h=(Get-FileHash dist/AISMSBridge.exe -Algorithm SHA256).Hash.ToLower()
-          "$h  AISMSBridge.exe" | Out-File -Encoding ascii dist/SHA256.txt
+          $version = (Get-Content VERSION -Raw).Trim()
+          $setup = ".\installer-output\FlipAi-Setup-v$version.exe"
+          $h = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          "$h  FlipAi-Setup-v$version.exe" | Out-File -Encoding ascii .\installer-output\SHA256SUMS.txt
+
       - uses: actions/upload-artifact@v4
         with:
-          name: AISMSBridge-windows-x64
-          path: dist/
+          name: FlipAi-Windows-Setup
+          path: |
+            installer-output/FlipAi-Setup-*.exe
+            installer-output/SHA256SUMS.txt

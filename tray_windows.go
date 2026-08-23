@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -34,6 +35,9 @@ const (
 
 	idiApplication = 32512
 	idcArrow       = 32512
+	imageIcon      = 1
+	lrLoadFromFile = 0x00000010
+	lrDefaultSize  = 0x00000040
 )
 
 type trayPoint struct{ X, Y int32 }
@@ -97,6 +101,8 @@ var (
 	procPostQuitMessage        = trayUser32.NewProc("PostQuitMessage")
 	procPostMessageW           = trayUser32.NewProc("PostMessageW")
 	procLoadIconW              = trayUser32.NewProc("LoadIconW")
+	procLoadImageW             = trayUser32.NewProc("LoadImageW")
+	procDestroyIcon            = trayUser32.NewProc("DestroyIcon")
 	procLoadCursorW            = trayUser32.NewProc("LoadCursorW")
 	procCreatePopupMenu        = trayUser32.NewProc("CreatePopupMenu")
 	procAppendMenuW            = trayUser32.NewProc("AppendMenuW")
@@ -118,6 +124,33 @@ var (
 	activeTaskbarCreated uint32
 )
 
+func recordTrayIconSource(source string) {
+	if capture := os.Getenv("FLIPAI_TRAY_ICON_TEST_CAPTURE"); capture != "" {
+		_ = os.WriteFile(capture, []byte(source), 0600)
+	}
+}
+
+func loadFlipAiTrayIcon(hInstance uintptr) (icon uintptr, destroy bool) {
+	if exe, err := os.Executable(); err == nil {
+		iconPath := filepath.Join(filepath.Dir(exe), "FlipAi.ico")
+		if p, e := syscall.UTF16PtrFromString(iconPath); e == nil {
+			if h, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(p)), imageIcon, 0, 0, lrLoadFromFile|lrDefaultSize); h != 0 {
+				recordTrayIconSource("file:" + iconPath)
+				return h, true
+			}
+		}
+	}
+	// Future signed/resource builds may embed resource 1. Prefer it over the
+	// stock Windows application icon when present.
+	if h, _, _ := procLoadIconW.Call(hInstance, 1); h != 0 {
+		recordTrayIconSource("embedded")
+		return h, false
+	}
+	h, _, _ := procLoadIconW.Call(0, idiApplication)
+	recordTrayIconSource("fallback-generic")
+	return h, false
+}
+
 func showTrayMenu(hwnd uintptr) bool {
 	menu, _, _ := procCreatePopupMenu.Call()
 	if menu == 0 {
@@ -125,7 +158,7 @@ func showTrayMenu(hwnd uintptr) bool {
 	}
 	defer procDestroyMenu.Call(menu)
 	openText, _ := syscall.UTF16PtrFromString("Open FlipAi Settings")
-	quitText, _ := syscall.UTF16PtrFromString("Quit FlipAi")
+	quitText, _ := syscall.UTF16PtrFromString("Quit FlipAi Completely")
 	procAppendMenuW.Call(menu, mfString, trayOpenID, uintptr(unsafe.Pointer(openText)))
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	procAppendMenuW.Call(menu, mfString, trayQuitID, uintptr(unsafe.Pointer(quitText)))
@@ -174,7 +207,13 @@ func runSystemTray(ctx context.Context, tooltip string, onOpen, onQuit func()) e
 	className, _ := syscall.UTF16PtrFromString(fmt.Sprintf("FlipAiTray_%d", os.Getpid()))
 	windowName, _ := syscall.UTF16PtrFromString("FlipAi")
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
-	icon, _, _ := procLoadIconW.Call(0, idiApplication)
+	icon, destroyIcon := loadFlipAiTrayIcon(hInstance)
+	if icon == 0 {
+		return fmt.Errorf("load FlipAi tray icon")
+	}
+	if destroyIcon {
+		defer procDestroyIcon.Call(icon)
+	}
 	cursor, _, _ := procLoadCursorW.Call(0, idcArrow)
 	callback := syscall.NewCallback(trayWindowProc)
 	wc := trayWndClassEx{
@@ -189,7 +228,7 @@ func runSystemTray(ctx context.Context, tooltip string, onOpen, onQuit func()) e
 	if atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); atom == 0 {
 		return fmt.Errorf("register tray window: %v", err)
 	}
-	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(windowName)), 0, 0, 0, 0, 0, 0, 0, hInstance, 0)
+	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(windowName)), 0, 0, 0, 0, 0, 0, 0, 0, hInstance, 0)
 	if hwnd == 0 {
 		return fmt.Errorf("create tray window: %v", err)
 	}
@@ -233,6 +272,8 @@ func runSystemTray(ctx context.Context, tooltip string, onOpen, onQuit func()) e
 }
 
 func acquireWatchdogInstance() (func(), bool, error) {
+	// Keep the legacy mutex name during upgrades so a pre-v0.6.1 watchdog and a
+	// new FlipAi watchdog cannot run at the same time.
 	name, _ := syscall.UTF16PtrFromString(`Local\AISMSBridgeWatchdog`)
 	h, _, err := procCreateMutexW.Call(0, 1, uintptr(unsafe.Pointer(name)))
 	if h == 0 {
