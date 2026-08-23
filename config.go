@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.6.3"
+const version = "0.6.4"
 
 type Config struct {
 	CodexPath          string            `json:"codexPath"`
@@ -60,8 +60,9 @@ type ClaudeConfig struct {
 }
 
 type SecurityConfig struct {
-	CodeSalt string `json:"codeSalt,omitempty"`
-	CodeHash string `json:"codeHash,omitempty"`
+	RequireCode bool   `json:"requireCode"`
+	CodeSalt    string `json:"codeSalt,omitempty"`
+	CodeHash    string `json:"codeHash,omitempty"`
 }
 
 type State struct {
@@ -145,8 +146,9 @@ func defaultConfig(dataDir string) Config {
 		DefaultAgent: "C",
 		Gmail:        GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
 		GoogleVoice:  GoogleVoiceConfig{RequiredSubjectPhrase: "new text message from", ReplyMaxChars: 300, SendReplyViaAgentBrowser: true, GmailReplyFallback: true},
-		Codex:        CodexConfig{ApprovalPolicy: "on-request"},
+		Codex:        CodexConfig{ApprovalPolicy: "never"},
 		Claude:       ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
+		Security:     SecurityConfig{RequireCode: true},
 	}
 }
 
@@ -184,8 +186,17 @@ func loadConfig(path, dataDir string) (Config, error) {
 	if cfg.GoogleVoice.ReplyMaxChars < 80 {
 		cfg.GoogleVoice.ReplyMaxChars = 300
 	}
-	if cfg.Codex.ApprovalPolicy == "" || cfg.Codex.ApprovalPolicy == "unlessTrusted" {
-		cfg.Codex.ApprovalPolicy = "on-request"
+	// SMS turns intentionally use Codex full normal-user access. This removes
+	// the Codex sandbox/approval layer but does not elevate the Windows process.
+	cfg.Codex.ApprovalPolicy = "never"
+	// Older configs predate RequireCode. Because loadConfig starts from
+	// defaultConfig, they inherit RequireCode=true. If a manually edited config
+	// disables the code without a stored hash, create an unguessable placeholder
+	// so the older startup readiness check remains satisfied; parsing ignores it.
+	if !cfg.Security.RequireCode && cfg.Security.CodeHash == "" {
+		if placeholder, e := secureRandomToken(24); e == nil {
+			_ = setSecurityCode(&cfg, placeholder)
+		}
 	}
 	if cfg.Claude.PermissionMode == "" || cfg.Claude.PermissionMode == "auto" || cfg.Claude.PermissionMode == "bypassPermissions" {
 		cfg.Claude.PermissionMode = "acceptEdits"

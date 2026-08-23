@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type RPCError struct {
@@ -43,10 +44,14 @@ type CodexClient struct {
 	nextID        atomic.Int64
 	notifications chan rpcEnvelope
 	done          chan struct{}
+	threadMu      sync.Mutex
+	subscribed    map[string]bool
+	turnThreads   map[string]string
+	completedTurns map[string]bool
 }
 
 func NewCodexClient(path, cwd string) *CodexClient {
-	return &CodexClient{path: path, cwd: cwd, pending: map[int64]chan pendingResponse{}, notifications: make(chan rpcEnvelope, 2048), done: make(chan struct{})}
+	return &CodexClient{path: path, cwd: cwd, pending: map[int64]chan pendingResponse{}, notifications: make(chan rpcEnvelope, 2048), done: make(chan struct{}), subscribed: map[string]bool{}, turnThreads: map[string]string{}, completedTurns: map[string]bool{}}
 }
 
 // scrubOpenAIEnv prevents an unrelated machine-level API key or custom API
@@ -166,6 +171,12 @@ func (c *CodexClient) route(m rpcEnvelope) {
 		default:
 			log.Printf("Codex notification queue full: %s", m.Method)
 		}
+		if m.Method == "turn/completed" {
+			var p struct { Turn struct { ID string `json:"id"` } `json:"turn"` }
+			if json.Unmarshal(m.Params, &p) == nil && p.Turn.ID != "" {
+				c.markTurnCompleted(p.Turn.ID)
+			}
+		}
 	}
 }
 func (c *CodexClient) handleServerRequest(m rpcEnvelope) {
@@ -178,7 +189,119 @@ func (c *CodexClient) handleServerRequest(m rpcEnvelope) {
 	}
 	_ = c.send(map[string]any{"id": id, "result": result})
 }
-func (c *CodexClient) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+func cloneParamsMap(params any) map[string]any {
+	src, ok := params.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]any, len(src)+4)
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+// applyCodexRequestDefaults gives SMS-created Codex work the full permissions
+// of the current Windows user while intentionally never requesting UAC/admin
+// elevation. These shapes match the current Codex App Server v2 protocol:
+// thread start/resume use sandbox="danger-full-access"; turns use the
+// SandboxPolicy object {type:"dangerFullAccess"}.
+func applyCodexRequestDefaults(method string, params any) any {
+	m := cloneParamsMap(params)
+	if m == nil {
+		return params
+	}
+	switch method {
+	case "thread/start":
+		m["approvalPolicy"] = "never"
+		m["sandbox"] = "danger-full-access"
+		if _, exists := m["ephemeral"]; !exists {
+			m["ephemeral"] = false
+		}
+	case "thread/resume":
+		m["approvalPolicy"] = "never"
+		m["sandbox"] = "danger-full-access"
+	case "turn/start":
+		m["approvalPolicy"] = "never"
+		m["sandboxPolicy"] = map[string]any{"type": "dangerFullAccess"}
+	}
+	return m
+}
+
+func stringParam(params any, key string) string {
+	m, _ := params.(map[string]any)
+	v, _ := m[key].(string)
+	return v
+}
+
+func (c *CodexClient) setThreadSubscribed(threadID string, subscribed bool) {
+	if threadID == "" {
+		return
+	}
+	c.threadMu.Lock()
+	c.subscribed[threadID] = subscribed
+	c.threadMu.Unlock()
+}
+
+func (c *CodexClient) threadSubscribed(threadID string) bool {
+	c.threadMu.Lock()
+	defer c.threadMu.Unlock()
+	return c.subscribed[threadID]
+}
+
+func (c *CodexClient) rememberTurnThread(turnID, threadID string) {
+	if turnID == "" || threadID == "" {
+		return
+	}
+	releaseNow := false
+	c.threadMu.Lock()
+	if c.completedTurns[turnID] {
+		delete(c.completedTurns, turnID)
+		releaseNow = true
+	} else {
+		c.turnThreads[turnID] = threadID
+	}
+	c.threadMu.Unlock()
+	if releaseNow {
+		go c.releaseThreadWithRetry(threadID)
+	}
+}
+
+func (c *CodexClient) markTurnCompleted(turnID string) {
+	if turnID == "" {
+		return
+	}
+	threadID := ""
+	c.threadMu.Lock()
+	threadID = c.turnThreads[turnID]
+	if threadID != "" {
+		delete(c.turnThreads, turnID)
+	} else {
+		c.completedTurns[turnID] = true
+	}
+	c.threadMu.Unlock()
+	if threadID != "" {
+		go c.releaseThreadWithRetry(threadID)
+	}
+}
+
+func startedThreadID(raw json.RawMessage) string {
+	var v struct { Thread struct { ID string `json:"id"` } `json:"thread"` }
+	if json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	return v.Thread.ID
+}
+
+func startedTurnID(raw json.RawMessage) string {
+	var v struct { Turn struct { ID string `json:"id"` } `json:"turn"` }
+	if json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	return v.Turn.ID
+}
+
+func (c *CodexClient) requestRaw(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
 	ch := make(chan pendingResponse, 1)
 	c.pendingMu.Lock()
@@ -208,6 +331,78 @@ func (c *CodexClient) Request(ctx context.Context, method string, params any) (j
 		return nil, errors.New("codex app-server stopped")
 	}
 }
+
+func (c *CodexClient) releaseThread(ctx context.Context, threadID string) error {
+	if threadID == "" || !c.threadSubscribed(threadID) {
+		return nil
+	}
+	_, err := c.requestRaw(ctx, "thread/unsubscribe", map[string]any{"threadId": threadID})
+	if err == nil {
+		c.setThreadSubscribed(threadID, false)
+	}
+	return err
+}
+
+func (c *CodexClient) releaseThreadWithRetry(threadID string) {
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.releaseThread(ctx, threadID)
+		cancel()
+		if err == nil {
+			return
+		}
+		log.Printf("Codex thread/unsubscribe %s attempt %d: %v", threadID, attempt+1, err)
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+// Request wraps the raw JSON-RPC request with two FlipAi invariants:
+// 1) Codex gets full access available to this normal Windows user (never UAC).
+// 2) Persisted threads are released whenever FlipAi is not actively running a
+//    turn, so Codex Desktop can open the same history and continue it normally.
+func (c *CodexClient) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	params = applyCodexRequestDefaults(method, params)
+	if method == "turn/start" {
+		tid := stringParam(params, "threadId")
+		if tid != "" && !c.threadSubscribed(tid) {
+			resume := applyCodexRequestDefaults("thread/resume", map[string]any{"threadId": tid})
+			if _, err := c.requestRaw(ctx, "thread/resume", resume); err != nil {
+				return nil, fmt.Errorf("resume Codex thread %s: %w", tid, err)
+			}
+			c.setThreadSubscribed(tid, true)
+		}
+	}
+
+	raw, err := c.requestRaw(ctx, method, params)
+	if err != nil {
+		return nil, err
+	}
+	switch method {
+	case "thread/start":
+		if tid := startedThreadID(raw); tid != "" {
+			c.setThreadSubscribed(tid, true)
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if e := c.releaseThread(releaseCtx, tid); e != nil {
+				log.Printf("Codex thread/start handoff %s: %v", tid, e)
+			}
+			cancel()
+		}
+	case "thread/resume":
+		tid := stringParam(params, "threadId")
+		c.setThreadSubscribed(tid, true)
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if e := c.releaseThread(releaseCtx, tid); e != nil {
+			log.Printf("Codex thread/resume handoff %s: %v", tid, e)
+		}
+		cancel()
+	case "turn/start":
+		c.rememberTurnThread(startedTurnID(raw), stringParam(params, "threadId"))
+	case "thread/unsubscribe":
+		c.setThreadSubscribed(stringParam(params, "threadId"), false)
+	}
+	return raw, nil
+}
+
 func (c *CodexClient) Notify(method string, params any) error {
 	return c.send(map[string]any{"method": method, "params": params})
 }
