@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+// Structurally faithful to a real Google Voice notification — the leading URL
+// line, the SMS, then the YOUR ACCOUNT/legal footer — but every phone number,
+// conversation token and DKIM signature is fictional. Numbers use the 555-01xx
+// range reserved for examples.
 const realVoiceBodyFixture = `<https://voice.google.com>
 123456 C: FLIPAI_CODEX_OK
 YOUR ACCOUNT <https://voice.google.com> HELP CENTER
@@ -25,11 +29,11 @@ Mountain View CA 94043 USA`
 func realVoiceMessageFixture() GmailMessage {
 	return GmailMessage{
 		ID:      "real-voice-20260823",
-		From:    `"Me (SMS)" <18453842803.18453241813.V4lzKMXhjH@txt.voice.google.com>`,
+		From:    `"Me (SMS)" <18455550199.18455550142.AbCdEfGhIj@txt.voice.google.com>`,
 		ReplyTo: "", // The real notification has no Reply-To header.
-		Subject: "New text message from Me (845) 324-1813",
+		Subject: "New text message from Me (845) 555-0142",
 		AuthenticationResults: `mx.google.com;
-       dkim=pass header.i=@google.com header.s=20251104 header.b=JwDU4Ehb;
+       dkim=pass header.i=@google.com header.s=20251104 header.b=AAAABBBBCCCC;
        spf=pass smtp.mailfrom=grandcentral.bounces.google.com;
        dmarc=pass header.from=google.com`,
 		Body:         realVoiceBodyFixture,
@@ -39,7 +43,7 @@ func realVoiceMessageFixture() GmailMessage {
 
 func TestRealGoogleVoiceNotificationExtractsSMSNotLeadingURL(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
-	cfg.GoogleVoice.AllowedFrom = "8453241813"
+	cfg.GoogleVoice.AllowedFrom = "8455550142"
 	if err := setSecurityCode(&cfg, "123456"); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +52,7 @@ func TestRealGoogleVoiceNotificationExtractsSMSNotLeadingURL(t *testing.T) {
 	if !ok {
 		t.Fatalf("real Google Voice notification was rejected: %s", reason)
 	}
-	if sender != "8453241813" {
+	if sender != "8455550142" {
 		t.Fatalf("wrong sender: %q", sender)
 	}
 	if raw != "123456 C: FLIPAI_CODEX_OK" {
@@ -69,7 +73,7 @@ func TestRealGoogleVoiceNotificationRunsCodexAndRepliesWithoutReplyTo(t *testing
 
 	cfg := defaultConfig(t.TempDir())
 	cfg.Gmail.Method = GmailMethodAppPassword
-	cfg.GoogleVoice.AllowedFrom = "8453241813"
+	cfg.GoogleVoice.AllowedFrom = "8455550142"
 	cfg.GoogleVoice.RequiredSubjectPhrase = "new text message from"
 	cfg.CodexPath = os.Args[0]
 	if err := setSecurityCode(&cfg, "123456"); err != nil {
@@ -98,7 +102,7 @@ func TestRealGoogleVoiceNotificationRunsCodexAndRepliesWithoutReplyTo(t *testing
 	if texts := fm.sentTexts(); len(texts) < 2 || !strings.Contains(texts[0], "working on it") {
 		t.Fatalf("expected an ack text ahead of the result, got %q", texts)
 	}
-	wantTo := "18453842803.18453241813.V4lzKMXhjH@txt.voice.google.com"
+	wantTo := "18455550199.18455550142.AbCdEfGhIj@txt.voice.google.com"
 	if gotTo != wantTo {
 		t.Fatalf("reply fallback did not use the safe From conversation address: got %q want %q", gotTo, wantTo)
 	}

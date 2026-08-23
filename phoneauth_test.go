@@ -6,11 +6,11 @@ import (
 )
 
 func TestNormalizeAllowedPhoneList(t *testing.T) {
-	got, err := normalizeAllowedPhoneList("(845) 604-3655\n+1 212-555-1212,8456043655")
+	got, err := normalizeAllowedPhoneList("(845) 555-0177\n+1 212-555-1212,8455550177")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0] != "2125551212" || got[1] != "8456043655" {
+	if len(got) != 2 || got[0] != "2125551212" || got[1] != "8455550177" {
 		t.Fatalf("unexpected list: %#v", got)
 	}
 	if _, err := normalizeAllowedPhoneList("911"); err == nil {
@@ -19,9 +19,9 @@ func TestNormalizeAllowedPhoneList(t *testing.T) {
 }
 
 func TestGoogleVoiceSenderUsesStructuredEnvelope(t *testing.T) {
-	m := GmailMessage{Subject: "New text message from Alice", From: `Alice (SMS) <18453241813.8456043655.abcdef@txt.voice.google.com>`}
+	m := GmailMessage{Subject: "New text message from Alice", From: `Alice (SMS) <18455550142.8455550177.abcdef@txt.voice.google.com>`}
 	sender, ok := googleVoiceSender(m, "new text message from")
-	if !ok || sender != "8456043655" {
+	if !ok || sender != "8455550177" {
 		t.Fatalf("sender=%q ok=%v", sender, ok)
 	}
 }
@@ -30,10 +30,10 @@ func TestGoogleVoiceSenderUsesReplyToWhenFromIsNoreply(t *testing.T) {
 	m := GmailMessage{
 		Subject: "New text message from Alice",
 		From:    "Google Voice <voice-noreply@google.com>",
-		ReplyTo: `18453241813.8456043655.abcdef@txt.voice.google.com`,
+		ReplyTo: `18455550142.8455550177.abcdef@txt.voice.google.com`,
 	}
 	sender, ok := googleVoiceSender(m, "new text message from")
-	if !ok || sender != "8456043655" {
+	if !ok || sender != "8455550177" {
 		t.Fatalf("sender=%q ok=%v", sender, ok)
 	}
 }
@@ -41,22 +41,22 @@ func TestGoogleVoiceSenderUsesReplyToWhenFromIsNoreply(t *testing.T) {
 func TestUnauthorizedBodyCannotSpoofAllowedNumber(t *testing.T) {
 	m := GmailMessage{
 		Subject: "New text message from Mallory",
-		From:    `Mallory (SMS) <18453241813.6465550101.abcdef@txt.voice.google.com>`,
-		Body:    "My message mentions the allowed number 845-604-3655",
+		From:    `Mallory (SMS) <18455550142.6465550101.abcdef@txt.voice.google.com>`,
+		Body:    "My message mentions the allowed number 845-555-0177",
 	}
 	sender, ok := googleVoiceSender(m, "new text message from")
 	if !ok || sender != "6465550101" {
 		t.Fatalf("sender=%q ok=%v", sender, ok)
 	}
-	if allowedPhone("8456043655\n2125551212", sender) {
+	if allowedPhone("8455550177\n2125551212", sender) {
 		t.Fatal("unauthorized sender was accepted")
 	}
 }
 
 func TestVoiceNoreplySubjectFallback(t *testing.T) {
-	m := GmailMessage{Subject: "New text message from (845) 604-3655", From: "Google Voice <voice-noreply@google.com>"}
+	m := GmailMessage{Subject: "New text message from (845) 555-0177", From: "Google Voice <voice-noreply@google.com>"}
 	sender, ok := googleVoiceSender(m, "new text message from")
-	if !ok || sender != "8456043655" {
+	if !ok || sender != "8455550177" {
 		t.Fatalf("sender=%q ok=%v", sender, ok)
 	}
 }
@@ -64,11 +64,11 @@ func TestVoiceNoreplySubjectFallback(t *testing.T) {
 func TestParseGoogleVoiceRejectsUnauthorizedSenderEvenIfBodyMentionsAllowed(t *testing.T) {
 	m := GmailMessage{
 		Subject:               "New text message from Mallory",
-		From:                  `Mallory (SMS) <18453241813.6465550101.abcdef@txt.voice.google.com>`,
+		From:                  `Mallory (SMS) <18455550142.6465550101.abcdef@txt.voice.google.com>`,
 		AuthenticationResults: "mx.google.com; dkim=pass header.d=google.com",
-		Body:                  "482913 C: the allowed number is 8456043655",
+		Body:                  "482913 C: the allowed number is 8455550177",
 	}
-	if _, _, ok := parseGoogleVoiceBody(m, "8456043655\n2125551212", "new text message from"); ok {
+	if _, _, ok := parseGoogleVoiceBody(m, "8455550177\n2125551212", "new text message from"); ok {
 		t.Fatal("unauthorized sender passed because body mentioned allowed number")
 	}
 }
@@ -78,13 +78,13 @@ func TestParseGoogleVoiceRejectsUnauthorizedSenderEvenIfBodyMentionsAllowed(t *t
 // the user's own text plus one line of framing.
 func TestAgentPromptCarriesNoDeliveryInstructionsOrPhoneNumbers(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
-	cfg.GoogleVoice.AllowedFrom = "8456043655\n2125551212"
+	cfg.GoogleVoice.AllowedFrom = "8455550177\n2125551212"
 	b := NewBridge(cfg, t.TempDir()+"/state.json", State{}, nil, nil, nil)
 	p := b.composePrompt("do the job")
 
 	for _, banned := range []string{
 		"SMS_BRIDGE_SENT", "voice.google.com", "browser", "Chrome",
-		"RETURN-CHANNEL", "2125551212", "8456043655",
+		"RETURN-CHANNEL", "2125551212", "8455550177",
 	} {
 		if strings.Contains(strings.ToLower(p), strings.ToLower(banned)) {
 			t.Fatalf("prompt still contains %q: %s", banned, p)
