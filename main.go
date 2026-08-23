@@ -100,7 +100,7 @@ func showLauncherError(dataDir string, cfg Config, detail string) {
 		detail = "The FlipAi background host did not become ready."
 	}
 	path := filepath.Join(dataDir, "launch-error.html")
-	body := fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>FlipAi could not start</title><style>body{margin:0;background:#f5f6fa;color:#17151f;font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.box{max-width:680px;margin:10vh auto;padding:24px}.card{background:#fff;border:1px solid #e7e4ee;border-radius:22px;padding:30px;box-shadow:0 20px 60px rgba(45,34,88,.09)}.mark{width:44px;height:44px;border-radius:14px;background:#fff0ee;color:#b42318;display:grid;place-items:center;font-weight:900;font-size:24px}h1{font-size:26px;margin:18px 0 8px}p{color:#625d6b}.code{background:#18151f;color:#f2edff;padding:13px;border-radius:12px;font:13px ui-monospace,Consolas,monospace}.note{background:#fff6df;color:#765000;padding:13px;border-radius:12px;margin-top:14px}</style></head><body><div class="box"><div class="card"><div class="mark">!</div><h1>FlipAi could not open its local control page</h1><p>%s</p><div class="code">Expected local address: http://%s</div><div class="note">Common causes: another program is using this local port, endpoint security blocked the EXE, or the background process could not start. FlipAi does not request administrator access or attempt to bypass security policy.</div><p>Open Task Manager to confirm AISMSBridge.exe is allowed to run, then launch FlipAi again. If this is a managed PC, your administrator may need to allow the application.</p></div></div></body></html>`, html.EscapeString(detail), html.EscapeString(cfg.Listen))
+	body := fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>FlipAi could not start</title><style>body{margin:0;background:#f5f6fa;color:#17151f;font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.box{max-width:680px;margin:10vh auto;padding:24px}.card{background:#fff;border:1px solid #e7e4ee;border-radius:22px;padding:30px;box-shadow:0 20px 60px rgba(45,34,88,.09)}.mark{width:44px;height:44px;border-radius:14px;background:#fff0ee;color:#b42318;display:grid;place-items:center;font-weight:900;font-size:24px}h1{font-size:26px;margin:18px 0 8px}p{color:#625d6b}.code{background:#18151f;color:#f2edff;padding:13px;border-radius:12px;font:13px ui-monospace,Consolas,monospace}.note{background:#fff6df;color:#765000;padding:13px;border-radius:12px;margin-top:14px}</style></head><body><div class="box"><div class="card"><div class="mark">!</div><h1>FlipAi could not open its local control page</h1><p>%s</p><div class="code">Expected local address: http://%s</div><div class="note">Common causes: another program is using this local port, endpoint security blocked the EXE, or the background process could not start. FlipAi does not request administrator access or attempt to bypass security policy.</div><p>Open Task Manager to confirm FlipAi.exe is allowed to run, then launch FlipAi again. If this is a managed PC, your administrator may need to allow the application.</p></div></div></body></html>`, html.EscapeString(detail), html.EscapeString(cfg.Listen))
 	if err := os.WriteFile(path, []byte(body), 0600); err == nil && os.Getenv("AISMSBRIDGE_NO_BROWSER") != "1" {
 		_ = openBrowser(path)
 	}
@@ -310,10 +310,13 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 		log.SetOutput(io.MultiWriter(lf))
 		defer lf.Close()
 	}
+	activity := activityLogForStatePath(statePath)
+	activity.Add("info", "host", "FlipAi background host is starting", "", "", "")
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
 	mailClient, oauthClient, ge := buildConfiguredMailClient(cfg.Gmail, dataDir, tokenPath)
 	if ge != nil {
 		log.Printf("Gmail not ready: %v", ge)
+		activity.Add("warn", "gmail", "Gmail backend is not ready: "+truncate(ge.Error(), 220), "", "", "")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -335,15 +338,27 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 			}
 		}
 	}()
-	srv := &http.Server{Addr: cfg.Listen, Handler: app.handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second}
+	baseHandler := app.handler()
+	srv := &http.Server{Addr: cfg.Listen, Handler: withActivityRoutes(app, baseHandler), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second}
 	go func() {
 		log.Printf("FlipAi v%s host starting on http://%s", version, cfg.Listen)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("HTTP: %v", err)
+			activity.Add("error", "host", "Local control server stopped unexpectedly: "+truncate(err.Error(), 220), "", "", "")
 			cancel()
 		}
 	}()
-	go func() { time.Sleep(800 * time.Millisecond); app.startBridge(ctx) }()
+	go func() {
+		time.Sleep(800 * time.Millisecond)
+		app.startBridge(ctx)
+		time.Sleep(100 * time.Millisecond)
+		app.mu.Lock()
+		started := app.bridge != nil
+		app.mu.Unlock()
+		if !started {
+			activity.Add("warn", "bridge", "SMS processing did not start. Check Gmail, phone security, and agent diagnostics.", "", "", "")
+		}
+	}()
 	<-ctx.Done()
 	sd, c := context.WithTimeout(context.Background(), 5*time.Second)
 	defer c()
