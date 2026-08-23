@@ -1,35 +1,60 @@
-# AI SMS Bridge
+# FlipAi — AI SMS Bridge
 
-> **Repository:** FlipAi — open-source SMS bridge for Codex and Claude on Windows.
-
-## Download
-
-For normal Windows use, download the newest `AISMSBridge-vX.Y.Z-windows-x64.zip` from the repository **Releases** page, extract it, and run `AISMSBridge.exe`. No administrator rights are required.
-
-AI SMS Bridge lets a Windows user send a Google Voice SMS to **Codex** or **Claude Code** running on that PC.
+FlipAi is an open-source Windows bridge that turns Google Voice SMS messages into local Codex or Claude Code tasks on the user's PC.
 
 ```text
-SMS -> Google Voice -> Gmail -> AI SMS Bridge -> C: Codex / A: Claude -> short SMS reply
+SMS -> Google Voice -> Gmail -> FlipAi -> C: Codex / A: Claude -> short reply
 ```
 
-The bridge is not an AI model and does not require an OpenAI or Anthropic API key. Codex uses its local App Server and requires **Sign in with ChatGPT**. Claude uses the local Claude Code CLI and requires a normal Claude subscription login. Gmail can be connected in one of two user-selected ways: a personal Google App Password over IMAP/SMTP, or the user's own Google OAuth/Gmail API project. There is no default Gmail method.
+FlipAi does not require OpenAI or Anthropic API keys. Codex uses the local Codex App Server with **Sign in with ChatGPT**. Claude uses the local Claude Code CLI with a normal Claude subscription login.
+
+## Download and install
+
+For normal Windows use, download the newest **`FlipAi-Setup-vX.Y.Z.exe`** from GitHub **Releases** and run it.
+
+The Setup EXE is a real **per-user Windows installer**. It does **not** request administrator/UAC elevation. It:
+
+- installs FlipAi under `%LOCALAPPDATA%\Programs\FlipAi`;
+- creates a **FlipAi** Start Menu shortcut;
+- registers **FlipAi** in Windows **Installed apps / Programs and Features** with an uninstaller;
+- installs the FlipAi icon used by the Start Menu, installer, and system tray;
+- enables current-user startup by default through `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
+- launches FlipAi after installation so the first-time setup page opens immediately.
+
+The release intentionally publishes the installer rather than asking normal users to extract a folder containing README/source files.
 
 ## Windows behavior
 
-AI SMS Bridge is one clean executable with separate internal roles:
+FlipAi has several internal roles, all inside the installed `FlipAi.exe`:
 
-- **Launcher/UI opener** — double-click `AISMSBridge.exe`; it makes sure the background bridge is alive and opens the local settings page. The launcher then exits.
-- **Watchdog** — stays hidden and restarts both the background host and tray process if either crashes.
+- **Launcher / Settings opener** — launching FlipAi from the Start Menu makes sure the background bridge is alive and opens the local Settings page in the user's default browser.
+- **Watchdog** — stays hidden and restarts the background host and tray process if either unexpectedly exits.
 - **Background host** — monitors Gmail and talks to Codex/Claude.
-- **System tray** — shows **AI SMS Bridge** in the Windows notification area. Double-click it or choose **Open Settings** to reopen the GUI. Choose **Quit AI SMS Bridge** to stop the tray, host, and watchdog completely.
+- **System tray** — shows the FlipAi icon in the notification area. Double-click it or choose **Open FlipAi Settings** to reopen Settings. Choose **Quit FlipAi Completely** to stop the tray, host, and watchdog.
 
-Closing the browser settings page with **X does not stop the bridge** because the settings page is not the background process. Only **Quit AI SMS Bridge** from the tray or the **Quit Bridge** button in Settings stops the bridge. Launching the EXE again starts it again. The tray re-registers itself if Windows Explorer restarts.
+Closing the browser tab or browser window **does not stop FlipAi**. The background bridge continues running. Only an explicit Quit stops it.
 
-No administrator rights are required. “Start with Windows” copies the EXE to `%LOCALAPPDATA%\Programs\AISMSBridge\AISMSBridge.exe` and adds a current-user `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry. It starts after that Windows user signs in and continues while the workstation is locked. Sleep/hibernate pauses it.
+Settings are opened with the Windows Shell API (`ShellExecuteW`) so the localhost URL is sent to the user's default browser. FlipAi does not use `explorer.exe` to open Settings.
+
+No administrator rights are required. The bridge continues while Windows is locked. Sleep or hibernate pauses it until the computer wakes.
+
+## First setup
+
+1. Run `FlipAi-Setup-vX.Y.Z.exe`.
+2. Complete the normal Windows installation wizard.
+3. On the Finish page, leave **Launch FlipAi and complete setup** checked.
+4. FlipAi starts its tray/background processes and opens the local Settings page.
+5. Choose one Gmail connection method: **App Password** or **your own Google API/OAuth project**. There is no default.
+6. Add one or more allowed phone numbers and create an SMS security code.
+7. Test Gmail.
+8. Test Codex, and Claude if you want `A:` routing.
+9. Send a fresh Google Voice SMS.
+
+Afterward, open FlipAi from either the **Start Menu** or the **system tray**.
 
 ## SMS routing and allowed numbers
 
-During setup add one or more allowed SMS phone numbers and choose an SMS security code. Separate multiple numbers with commas, semicolons, or new lines. Every remote command must come from an **exact allowed sender** and begin with the code.
+Every remote command must come from an exact allowed Google Voice sender and begin with the configured SMS security code.
 
 ```text
 482913 C: check GitHub and fix the failed build
@@ -43,124 +68,143 @@ During setup add one or more allowed SMS phone numbers and choose an SMS securit
 - `A:` routes to Claude.
 - No prefix uses the configured default agent.
 - US/Canada numbers are normalized to 10 digits; `+1`, spaces, parentheses, and hyphens are accepted during setup.
-- A sender that is not on the allowlist is ignored even if the SMS body mentions an allowed number.
+- A sender not on the allowlist is ignored even if the SMS body contains an allowed number.
+
+FlipAi extracts the sender from Google Voice's authenticated message envelope/Reply-To information rather than trusting phone numbers written in the SMS body.
 
 ## Gmail / Google Voice
 
-1. Enable Google Voice **Forward messages to email**.
-2. In the bridge GUI, choose exactly one Gmail connection method. New installs have **no default**.
+Enable Google Voice **Forward messages to email**, then choose exactly one Gmail method in FlipAi.
 
 ### Option 1 — Gmail App Password
 
-This is the easiest independent setup and requires no Google Cloud project.
+This is the simplest independent setup and requires no Google Cloud project.
 
 1. Turn on Google 2-Step Verification.
-2. Create a 16-character Google App Password for the bridge.
-3. Enter the Gmail address + App Password in the GUI.
-4. Click **Test Gmail connection**.
+2. Create a Google App Password.
+3. Enter the Gmail address and App Password in FlipAi.
+4. Run **Test Gmail**.
 
-The bridge connects directly to `imap.gmail.com:993` over TLS and uses **IMAP IDLE**, so Gmail can wake the bridge as soon as the Google Voice notification reaches the Inbox. A 30-second fallback poll protects against a dropped IDLE signal. SMTP on `smtp.gmail.com:465` is used only for the Google Voice email-reply fallback. The App Password is protected locally with Windows DPAPI and is never stored in plaintext by the Windows build.
+FlipAi connects directly to `imap.gmail.com:993` over TLS. It uses **IMAP IDLE**, so Gmail can wake FlipAi immediately when the Google Voice email arrives. A fallback timer protects against a dropped IDLE connection. SMTP is used only for the Google Voice email-reply fallback.
 
-Google may not offer App Passwords for some managed/Advanced Protection/security-key-only accounts. Those users should choose OAuth instead.
+The App Password is protected locally with Windows DPAPI and is not stored as plaintext by the Windows build.
 
 ### Option 2 — Your own Google API / OAuth project
 
 1. Create your own Google Cloud project.
 2. Enable Gmail API.
-3. Create an OAuth **Desktop app**.
-4. Upload that Desktop OAuth JSON in the local setup page.
-5. Click **Connect / Reconnect Gmail**, then **Test Gmail connection**.
+3. Create OAuth credentials with application type **Desktop app**.
+4. Upload the JSON in FlipAi.
+5. Connect the Google account and run **Test Gmail**.
 
-The OAuth backend requests `gmail.readonly` to inspect Google Voice notifications and `gmail.send` for the Google Voice email-reply fallback. OAuth tokens are protected locally with Windows DPAPI. Without Google Pub/Sub there is no local Gmail API equivalent of IMAP IDLE, so OAuth mode checks about once per second for near-immediate delivery.
+OAuth tokens are protected locally with Windows DPAPI. Without Google Pub/Sub, the local OAuth/Gmail API method checks approximately once per second.
 
-**OAuth testing warning:** for personal Google Cloud OAuth apps, refresh-token lifetime can be limited while the consent screen remains in Testing. If Gmail disconnects later, review the current Google OAuth publishing/test-user rules for that user's own project.
+## Google Voice sender security
 
-Incoming commands are accepted only after Google DKIM validation, exact extraction of the sender from Google Voice's structured `@txt.voice.google.com` envelope (or a strict subject-header fallback), exact membership in the configured phone-number allowlist, and the SMS security code all pass. The untrusted SMS body is never searched to decide who the sender is.
+An incoming command is accepted only after all of these checks pass:
 
-The bridge can react immediately once Gmail has the forwarded message. Any delay between the original SMS and Gmail receiving the Google Voice notification is controlled by Google Voice and is outside the bridge.
+1. the message looks like a real Google Voice notification;
+2. Google's DKIM authentication passed;
+3. FlipAi extracts the actual Google Voice SMS sender from trusted headers/envelope data;
+4. that exact normalized number appears in the user's allowlist;
+5. the SMS security code matches.
+
+The untrusted message body is never used to decide who sent the SMS.
 
 ## Codex connection
 
-The bridge starts the official local interface:
+FlipAi starts the local Codex interface:
 
 ```text
 codex app-server --listen stdio://
 ```
 
-It initializes the JSON-RPC connection, checks `account/read`, and refuses Codex work unless the account type is `chatgpt`. It creates/resumes a persistent Codex thread and sends each `C:` message as a turn.
-
-If the App Server process dies, the bridge reports the failed task and automatically creates a fresh App Server connection on the next Codex SMS. The outer Windows watchdog separately restarts the entire bridge host if the host itself crashes.
-
-A separately launched App Server is not guaranteed to expose every Desktop-only browser/computer tool. Every remote turn therefore receives an explicit return-channel instruction: reply through Google Voice to the **exact authenticated sender number**, using an already-authenticated Google Voice/browser/Chrome session when available, never another allowed number. If browser delivery is unavailable, the bridge uses the authenticated Google Voice email Reply-To fallback.
+It verifies that Codex is using ChatGPT-managed authentication and refuses provider/API-key auth. FlipAi can discover the normal per-user Codex Desktop runtime on Windows when `codex` is not already on PATH.
 
 ## Claude connection
 
-The bridge invokes the official Claude Code CLI in non-interactive mode:
+FlipAi invokes Claude Code in non-interactive mode:
 
 ```text
 claude -p "..." --output-format json
 ```
 
-It stores the returned `session_id` and uses `--resume` for later `A:` messages. API-related Anthropic environment variables are stripped from the child process. `claude auth status` must report a signed-in non-API/Console account. Dangerous permission bypass is not used.
-
-If the installed Claude Code version supports `--chrome`, the bridge enables it when configured so Claude can use its Chrome integration. Claude receives the same exact-sender Google Voice return-channel instruction as Codex.
+It strips Anthropic API-key environment variables and requires a signed-in subscription account. Dangerous permission bypass mode is not used.
 
 ## Replies
 
-For every accepted command, the selected agent is told the exact authenticated sender phone number and is instructed to send a short Google Voice browser reply to that same number when an authenticated browser/computer tool is available. It must emit `SMS_BRIDGE_SENT` only after confirming that Google Voice actually sent to that exact destination.
+For each accepted command, FlipAi tells the selected agent the **exact authenticated sender phone number** and instructs it to reply through Google Voice to that number when browser/computer tools are genuinely available.
 
-If that marker is absent, the bridge uses the safer fallback: send the short result through Gmail to the exact observed `@txt.voice.google.com` Reply-To address from the authenticated Google Voice notification. The agent is never asked to enter passwords, recovery codes, or 2FA secrets to sign into Google Voice.
+If the agent cannot confirm a Google Voice browser send, FlipAi can use the authenticated Google Voice email Reply-To fallback instead.
 
-## First setup
+## Runtime data
 
-1. Run `AISMSBridge.exe`.
-2. The background watchdog/host starts and your browser opens the localhost settings page.
-3. Choose **App Password** or **Google API / OAuth** for Gmail; neither is preselected on a new install.
-4. Complete the chosen Gmail setup and click **Test Gmail connection**.
-5. Enter one or more allowed phone numbers and an SMS security code.
-6. Test Codex.
-7. Test Claude if you want `A:` routing.
-8. Click **Start with Windows**.
-9. Send a fresh Google Voice SMS.
+Runtime configuration, encrypted credentials/tokens, state, and logs are stored under:
 
-Runtime files are stored under `%LOCALAPPDATA%\AISMSBridge`.
+```text
+%LOCALAPPDATA%\AISMSBridge
+```
+
+The legacy data-directory name is intentionally retained for upgrade compatibility. The installed application itself lives under `%LOCALAPPDATA%\Programs\FlipAi`.
+
+## Uninstall
+
+Use **Windows Settings -> Apps -> Installed apps -> FlipAi -> Uninstall**, or the classic **Programs and Features** Control Panel.
+
+The uninstaller stops FlipAi, removes the Start Menu shortcut, removes the current-user startup entry, removes the installed app files, and removes the local FlipAi bridge data/credentials.
 
 ## Security notes
 
 - No public listening port; the web UI binds to loopback only.
 - Local setup actions require a random local session token/cookie.
-- Google OAuth token **or** Gmail App Password is protected with Windows DPAPI.
-- SMS code is stored as a salted, iterated hash rather than plaintext.
-- Google Voice sender authorization uses trusted email envelope/header data, not phone numbers written inside the SMS body.
+- Google OAuth tokens or Gmail App Passwords are protected with Windows DPAPI.
+- The SMS code is stored as a salted, iterated hash rather than plaintext.
 - Codex approval requests that reach the unattended bridge are declined.
 - Claude `--dangerously-skip-permissions` is never used.
-- Prompt/result bodies are not intentionally stored in state or operational logs.
-- No telemetry, obfuscation, packer, auto-updater, browser-password extraction, process injection, remote-thread creation, keylogging, or code injection.
-- The normal browser is opened through Windows Explorer instead of DLL-launch tricks.
-- CI includes source-level checks for malware-style Windows techniques; a Defender scan can also be used when available on the runner.
+- No telemetry, packer, obfuscation, browser-password extraction, keylogging, process injection, or code injection.
+- No service, driver, HKLM startup entry, scheduled task, firewall rule, or administrator elevation is required.
+
+A managed organization can still block user-profile executables or startup entries with AppLocker, WDAC, or endpoint-security policy. FlipAi does not attempt to bypass those controls.
 
 See [SECURITY.md](SECURITY.md).
 
 ## Build
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Generate-FlipAiIcon.ps1 -OutputPath .\dist\FlipAi.ico
 go test ./...
 go vet ./...
 go test -race ./...
-go build -trimpath -ldflags "-H=windowsgui -s -w" -o AISMSBridge.exe .
+go build -trimpath -ldflags "-H=windowsgui -s -w" -o .\dist\FlipAi.exe .
 ```
 
-## Lifecycle and security tests
+The GitHub workflow also compiles the no-admin Inno Setup installer.
 
-The Windows GitHub Actions build performs a real process-level smoke test on a fresh Windows runner: normal launch, launcher exit while background monitoring remains healthy, one-watchdog enforcement, host crash/restart, tray registration/process survival, tray crash/restart, and explicit Quit stopping all bridge processes. Windows-only unit tests also verify the current-user startup registry entry and the per-user install location.
+## Release and lifecycle tests
 
-Additional tests verify multiple-number normalization, exact Google Voice sender extraction, rejection of sender-spoof attempts in SMS content, exact return-destination instructions, immediate IMAP IDLE wakeups, and approximately one-second OAuth polling.
+Before a Windows artifact is accepted, GitHub Actions verifies:
 
-The only thing CI cannot visually inspect is the pixels of the notification-area icon on a human desktop; it verifies that the Windows tray process successfully registers with the shell and remains alive.
+- unit tests and `go vet`;
+- Go race detector;
+- Windows `FlipAi.exe` build;
+- background watchdog/host/tray startup;
+- branded tray icon loading;
+- host crash and automatic restart;
+- tray crash and automatic restart;
+- explicit Quit stopping all FlipAi processes;
+- Microsoft Defender scan when Defender is available;
+- real Setup EXE installation without admin rights;
+- installed `FlipAi.exe` and `FlipAi.ico` existence;
+- Start Menu shortcut creation;
+- Windows uninstall/Installed-apps registry registration;
+- current-user startup registration;
+- Settings opener targeting the FlipAi localhost URL;
+- installed tray loading the branded icon;
+- real uninstaller cleanup of app files, Start Menu shortcut, uninstall registration, and startup entry.
 
 ## SmartScreen / antivirus
 
-The binary is intentionally ordinary, unobfuscated Go code and avoids process injection, browser credential scraping, keylogging, packers, DLL-launch browser tricks, and self-updaters. A newly built **unsigned** executable can still receive a Windows SmartScreen reputation warning or a third-party false positive. For a public release, Authenticode signing is strongly recommended. No project can honestly guarantee that every antivirus product will always trust a new unsigned binary.
+FlipAi is intentionally ordinary, unobfuscated Go code. A newly built **unsigned** Setup EXE can still receive a Windows SmartScreen reputation warning or a third-party false positive. For broader public distribution, Authenticode signing is recommended.
 
 ## License
 
