@@ -22,6 +22,11 @@ type ActivityEvent struct {
 	Sender    string    `json:"sender,omitempty"`
 	Agent     string    `json:"agent,omitempty"`
 	MessageID string    `json:"messageId,omitempty"`
+
+	// DurationMS is how long the reported step took, when the step is one
+	// FlipAi times end to end (an agent turn, a reply delivery). It is a
+	// measurement of FlipAi's own work, not of message content.
+	DurationMS int64 `json:"durationMs,omitempty"`
 }
 
 type ActivityLog struct {
@@ -34,6 +39,12 @@ func activityLogForStatePath(statePath string) *ActivityLog {
 }
 
 func (l *ActivityLog) Add(level, stage, message, sender, agent, messageID string) {
+	l.AddTimed(level, stage, message, sender, agent, messageID, 0)
+}
+
+// AddTimed records an event together with how long the step took. A zero
+// duration is omitted, so untimed events look exactly as they did before.
+func (l *ActivityLog) AddTimed(level, stage, message, sender, agent, messageID string, took time.Duration) {
 	if l == nil || strings.TrimSpace(l.path) == "" {
 		return
 	}
@@ -45,6 +56,9 @@ func (l *ActivityLog) Add(level, stage, message, sender, agent, messageID string
 		Sender:    normalizeUSPhone(sender),
 		Agent:     strings.TrimSpace(agent),
 		MessageID: strings.TrimSpace(messageID),
+	}
+	if took > 0 {
+		e.DurationMS = took.Milliseconds()
 	}
 	if e.Level == "" {
 		e.Level = "info"

@@ -44,6 +44,15 @@ type Bridge struct {
 	// progress heartbeat so a long turn reports something specific.
 	progress string
 
+	// paused stops the poll loop from claiming new texts. Nothing is discarded
+	// while paused: unread mail simply stays unread until FlipAi resumes.
+	paused bool
+
+	// lastPollAt/lastPollErr record how the most recent mailbox check went so
+	// the desktop UI can report a real "last sync" instead of assuming one.
+	lastPollAt  time.Time
+	lastPollErr string
+
 	// processedSet indexes state.ProcessedMessageIDs for O(1) replay checks.
 	processedSet map[string]struct{}
 }
@@ -54,7 +63,39 @@ func NewBridge(cfg Config, statePath string, state State, g MailClient, c *Codex
 		gmail: g, codex: c, claude: a,
 		activity: activityLogForStatePath(statePath),
 		queueSig: make(chan struct{}, 1),
+		paused:   cfg.Paused,
 	}
+}
+
+// SetPaused takes effect on the next mailbox check, with no restart. A paused
+// bridge finishes the turn it is already running rather than abandoning it.
+func (b *Bridge) SetPaused(paused bool) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.paused = paused
+	b.mu.Unlock()
+}
+
+func (b *Bridge) Paused() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.paused
+}
+
+// pollStatus reports when the mailbox was last checked and whether that check
+// succeeded, for the Connections and Home pages.
+func (b *Bridge) pollStatus() (time.Time, string) {
+	if b == nil {
+		return time.Time{}, ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastPollAt, b.lastPollErr
 }
 
 // enqueue adds a job and signals the worker without ever blocking the caller.
@@ -108,6 +149,14 @@ func (b *Bridge) currentProgress() string {
 func (b *Bridge) event(level, stage, message, sender, agent, messageID string) {
 	if b != nil && b.activity != nil {
 		b.activity.Add(level, stage, message, sender, agent, messageID)
+	}
+}
+
+// timedEvent is event plus how long the reported step took, so the Activity
+// page can show a real duration for the work FlipAi measures itself.
+func (b *Bridge) timedEvent(level, stage, message, sender, agent, messageID string, took time.Duration) {
+	if b != nil && b.activity != nil {
+		b.activity.AddTimed(level, stage, message, sender, agent, messageID, took)
 	}
 }
 
@@ -274,7 +323,7 @@ func (b *Bridge) ensureCodex(ctx context.Context) error {
 	if runCtx == nil {
 		runCtx = context.Background()
 	}
-	nc := NewCodexClient(b.cfg.CodexPath, b.cfg.Cwd)
+	nc := NewCodexClient(b.cfg.CodexPath, b.cfg.codexWorkingDir())
 	if err := nc.Start(runCtx); err != nil {
 		return err
 	}
@@ -308,8 +357,8 @@ func (b *Bridge) initCodexThread(ctx context.Context) error {
 		}
 	}
 	p := map[string]any{}
-	if b.cfg.Cwd != "" {
-		p["cwd"] = b.cfg.Cwd
+	if cwd := b.cfg.codexWorkingDir(); cwd != "" {
+		p["cwd"] = cwd
 	}
 	raw, err := b.codex.Request(ctx, "thread/start", p)
 	if err != nil {
@@ -453,12 +502,19 @@ func (b *Bridge) markProcessed(id string) {
 }
 func (b *Bridge) poll(ctx context.Context) {
 	b.mu.Lock()
-	if b.busy {
+	if b.busy || b.paused {
 		b.mu.Unlock()
 		return
 	}
 	b.mu.Unlock()
 	ids, err := b.gmail.List(ctx)
+	b.mu.Lock()
+	b.lastPollAt = time.Now()
+	b.lastPollErr = ""
+	if err != nil {
+		b.lastPollErr = truncate(err.Error(), 240)
+	}
+	b.mu.Unlock()
 	if err != nil {
 		log.Printf("Gmail poll: %v", err)
 		b.event("error", "gmail", "Mailbox check failed: "+truncate(err.Error(), 240), "", "", "")
@@ -579,6 +635,7 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	// queued job rather than merely delaying it.
 	b.runMu.Lock()
 	defer b.runMu.Unlock()
+	startedAt := time.Now()
 	b.mu.Lock()
 	b.busy = true
 	b.progress = ""
@@ -629,11 +686,11 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		final, err = b.runCodex(ctx, rc.Text, rc.Sender)
 	}
 	if err != nil {
-		b.event("error", "agent", "Agent failed: "+truncate(err.Error(), 240), rc.Sender, rc.Agent, m.ID)
+		b.timedEvent("error", "agent", "Agent failed: "+truncate(err.Error(), 240), rc.Sender, rc.Agent, m.ID, time.Since(startedAt))
 		// Send one actionable sentence rather than a truncated JSON blob.
 		final = "FAILED: " + truncate(friendlyAgentError(err), b.cfg.GoogleVoice.ReplyMaxChars)
 	} else {
-		b.event("success", "agent", "Agent completed successfully", rc.Sender, rc.Agent, m.ID)
+		b.timedEvent("success", "agent", "Agent completed successfully", rc.Sender, rc.Agent, m.ID, time.Since(startedAt))
 	}
 
 	// Delivery is unconditional and happens here, in Go. The agent is never
@@ -677,8 +734,8 @@ func (b *Bridge) heartbeat(ctx context.Context, stop <-chan struct{}, m GmailMes
 
 func (b *Bridge) newCodexThread(ctx context.Context) error {
 	p := map[string]any{}
-	if b.cfg.Cwd != "" {
-		p["cwd"] = b.cfg.Cwd
+	if cwd := b.cfg.codexWorkingDir(); cwd != "" {
+		p["cwd"] = cwd
 	}
 	raw, err := b.codex.Request(ctx, "thread/start", p)
 	if err != nil {
@@ -918,10 +975,11 @@ func (b *Bridge) deliver(ctx context.Context, m GmailMessage, rc remoteCommand, 
 	if len(parts) == 0 {
 		return
 	}
+	startedAt := time.Now()
 	for _, p := range parts {
 		if err := b.gmail.SendText(ctx, target, p); err != nil {
 			log.Printf("Google Voice reply: %v", err)
-			b.event("error", "reply", "Google Voice reply failed: "+truncate(err.Error(), 220), rc.Sender, rc.Agent, m.ID)
+			b.timedEvent("error", "reply", "Google Voice reply failed: "+truncate(err.Error(), 220), rc.Sender, rc.Agent, m.ID, time.Since(startedAt))
 			return
 		}
 	}
@@ -929,7 +987,7 @@ func (b *Bridge) deliver(ctx context.Context, m GmailMessage, rc remoteCommand, 
 	if len(parts) > 1 {
 		msg = fmt.Sprintf("Reply sent through Google Voice in %d parts", len(parts))
 	}
-	b.event("success", "reply", msg, rc.Sender, rc.Agent, m.ID)
+	b.timedEvent("success", "reply", msg, rc.Sender, rc.Agent, m.ID, time.Since(startedAt))
 }
 
 // notify sends a single short status line (the ack or a progress heartbeat).

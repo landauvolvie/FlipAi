@@ -3,6 +3,9 @@
 *.zip
 /dist/
 
+# Local `go build ./...` drops the module-named binary in the repo root.
+/ai-sms-bridge
+
 # Runtime data written under %LOCALAPPDATA%\AISMSBridge. Listed defensively so a
 # local run or debug session inside the repo can never commit a credential or a
 # log containing phone numbers.

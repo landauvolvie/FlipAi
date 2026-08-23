@@ -27,14 +27,14 @@ The release intentionally publishes the installer rather than asking normal user
 
 FlipAi has several internal roles, all inside the installed `FlipAi.exe`:
 
-- **Launcher / Settings opener** — launching FlipAi from the Start Menu makes sure the background bridge is alive and opens the local Settings page in the user's default browser.
+- **Launcher / window** — launching FlipAi from the Start Menu makes sure the background bridge is alive and opens the FlipAi app window.
 - **Watchdog** — stays hidden and restarts the background host and tray process if either unexpectedly exits.
-- **Background host** — monitors Gmail and talks to Codex/Claude.
-- **System tray** — shows the FlipAi icon in the notification area. Double-click it or choose **Open FlipAi Settings** to reopen Settings. Choose **Quit FlipAi Completely** to stop the tray, host, and watchdog.
+- **Background host** — monitors Gmail, talks to Codex/Claude, and serves the app window on `127.0.0.1` only.
+- **System tray** — shows the FlipAi icon in the notification area. Double-click it or choose **Open FlipAi Settings** to reopen the window. Choose **Quit FlipAi Completely** to stop the tray, host, and watchdog.
 
-Closing the browser tab or browser window **does not stop FlipAi**. The background bridge continues running. Only an explicit Quit stops it.
+Closing the window **does not stop FlipAi**. The background bridge keeps running in the notification area, which Settings can change with **Close to tray**. Only an explicit Quit stops everything.
 
-Settings are opened with the Windows Shell API (`ShellExecuteW`) so the localhost URL is sent to the user's default browser. FlipAi does not use `explorer.exe` to open Settings.
+The window is a Microsoft Edge WebView2 frame over the local control server, so it looks and behaves like an ordinary desktop app: no address bar, no browser tab, and no external site involved. External links, such as the Google OAuth consent page, still open in the user's normal browser through the Windows Shell API (`ShellExecuteW`).
 
 No administrator rights are required. The bridge continues while Windows is locked. Sleep or hibernate pauses it until the computer wakes.
 
@@ -43,7 +43,7 @@ No administrator rights are required. The bridge continues while Windows is lock
 1. Run `FlipAi-Setup-vX.Y.Z.exe`.
 2. Complete the normal Windows installation wizard.
 3. On the Finish page, leave **Launch FlipAi and complete setup** checked.
-4. FlipAi starts its tray/background processes and opens the local Settings page.
+4. FlipAi starts its tray/background processes and opens the app window.
 5. Choose one Gmail connection method: **App Password** or **your own Google API/OAuth project**. There is no default.
 6. Add one or more allowed phone numbers and create an SMS security code.
 7. Test Gmail.
@@ -51,6 +51,24 @@ No administrator rights are required. The bridge continues while Windows is lock
 9. Send a fresh Google Voice SMS.
 
 Afterward, open FlipAi from either the **Start Menu** or the **system tray**.
+
+## The FlipAi app
+
+The window has a sidebar with seven pages:
+
+| Page | What it does |
+| --- | --- |
+| **Home** | Live status of Gmail, both agents, the allowlist, and security; recent activity; **Pause FlipAi**, which leaves incoming texts unread in Gmail until you resume |
+| **Connections** | Gmail method and credentials, subject-phrase matching, and a message-flow test that checks the whole inbound path |
+| **Agents** | Codex and Claude executables, a working folder per agent, real background tests, default agent, turn timeout, and Claude permission mode |
+| **Phone** | Allowed numbers with labels, reply length and split limits, acknowledgement and progress texts, and the SMS security code |
+| **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took |
+| **Settings** | Start with Windows, close to tray, light/dark/system theme, compact layout, in-window error alerts, log export, and reset |
+| **Advanced** | Executable paths with a live "found" check, loopback service state, health check, log tools, restart, and quit |
+
+Everything the UI reports is real state: an agent tile says **Ready** only
+because a test actually succeeded, and says **Not tested yet** otherwise.
+
 
 ## SMS routing and allowed numbers
 
@@ -135,7 +153,7 @@ It strips Anthropic API-key environment variables and requires a signed-in subsc
 
 Claude Code CLI keeps its own sign-in, separate from the Claude desktop app. Being signed into Claude Desktop does **not** sign in the CLI, and the CLI's browser session eventually expires with `OAuth session expired and could not be refreshed`, which strands an unattended bridge.
 
-To avoid that, run this once in PowerShell and paste the value into **Settings → Advanced → Claude long-lived token**:
+To avoid that, run this once in PowerShell and paste the value into **Agents → Claude → Advanced → Long-lived token**:
 
 ```powershell
 claude setup-token

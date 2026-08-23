@@ -77,7 +77,25 @@ func openFlipAiWindow(target string) error {
 	w.Init(desktopInitScript)
 	w.Navigate(target)
 	w.Run()
+	handleWindowClosed()
 	return nil
+}
+
+// handleWindowClosed honours the Settings "Close to tray" choice. With it on
+// (the default) closing the window leaves the bridge running in the tray; with
+// it off, closing the window stops FlipAi completely.
+func handleWindowClosed() {
+	dataDir, cfgPath, _, _, err := appPaths()
+	if err != nil {
+		return
+	}
+	cfg, err := loadConfig(cfgPath, dataDir)
+	if err != nil {
+		return
+	}
+	if !cfg.UI.CloseToTray {
+		requestQuit(dataDir, "desktop window closed with close-to-tray off")
+	}
 }
 
 func hideWindow(cmd *exec.Cmd) {
@@ -112,6 +130,36 @@ func uninstallAutostartNamed(name string) error {
 	cmd := exec.Command("reg.exe", "DELETE", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name, "/f")
 	hideWindow(cmd)
 	_ = cmd.Run()
+	return nil
+}
+
+// autostartEnabled reports whether this Windows user's Run key still holds the
+// FlipAi entry, so Settings shows the real state instead of a remembered one.
+func autostartEnabled() bool {
+	cmd := exec.Command("reg.exe", "QUERY", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "FlipAi")
+	hideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	return err == nil && strings.Contains(string(out), "FlipAi")
+}
+
+// openFolder shows a local folder in File Explorer. It is used only for the
+// FlipAi data and log folders the user already owns.
+func openFolder(path string) error {
+	if capture := os.Getenv("FLIPAI_BROWSER_TEST_CAPTURE"); capture != "" {
+		return os.WriteFile(capture, []byte(path), 0600)
+	}
+	verb, err := syscall.UTF16PtrFromString("open")
+	if err != nil {
+		return err
+	}
+	target, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	r, _, callErr := procPlatformShellOpen.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
+	if r <= 32 {
+		return fmt.Errorf("open folder %q failed (ShellExecuteW=%d): %v", path, r, callErr)
+	}
 	return nil
 }
 

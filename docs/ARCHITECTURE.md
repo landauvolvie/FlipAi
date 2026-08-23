@@ -2,13 +2,14 @@
 
 ## Process model
 
-One signed/unsigned `AISMSBridge.exe` binary runs in three internal modes:
+One `FlipAi.exe` binary runs in several internal modes:
 
-1. **Launcher**: double-click entry point; ensures the watchdog is alive, then opens the localhost settings page.
+1. **Launcher**: double-click entry point; ensures the watchdog is alive, then opens the FlipAi desktop window (a WebView2 frame over the loopback control server).
 2. **Watchdog**: hidden process started at Windows user sign-in; owns the host lifecycle and restarts it after unexpected exit with bounded exponential backoff.
-3. **Host**: hidden background process that owns Gmail polling, the local setup/status HTTP server, and the Codex/Claude connectors.
+3. **Host**: hidden background process that owns Gmail polling, the local control server that serves the desktop UI, and the Codex/Claude connectors.
+4. **Tray**: notification-area icon for reopening the window and quitting.
 
-Closing the browser UI has no effect on the watchdog or host. Explicit Quit writes a local stop flag; the host observes the flag and exits, then the watchdog exits without restarting it.
+Closing the window has no effect on the watchdog or host while "Close to tray" is on (the default); with it off, closing the window requests a full stop. Explicit Quit writes a local stop flag; the host observes the flag and exits, then the watchdog exits without restarting it.
 
 ## Message flow
 
@@ -19,6 +20,15 @@ Closing the browser UI has no effect on the watchdog or host. Explicit Quit writ
 5. `C:` routes to Codex App Server over local stdio JSON-RPC; `A:` routes to Claude Code print mode.
 6. Persistent Codex thread ID / Claude session ID provide conversational continuity.
 7. The agent performs the task using the tools actually available to that local agent runtime.
-8. The agent may send a short Google Voice browser reply if it really has an authenticated browser tool. Otherwise the bridge sends the short final result through Gmail to the validated `@txt.voice.google.com` Reply-To address.
+8. The bridge itself sends the final result through Gmail to the validated `@txt.voice.google.com` Reply-To address, splitting a long answer into numbered texts. The agent is never asked to deliver anything, so nothing in its output can redirect a reply.
 
 No public inbound port is required.
+
+## Local control surface
+
+The host serves the desktop UI on `127.0.0.1` only, behind a session cookie
+holding the local token FlipAi passes when it opens its own window. Pages are
+GET; every state change is a POST. See [UI-DESIGN.md](UI-DESIGN.md) for the page
+structure. Pausing is handled inside the running bridge, so it takes effect on
+the next mailbox check without a restart; settings that change how Gmail or the
+agents are connected restart the host, which the watchdog brings straight back.

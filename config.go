@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -23,18 +23,49 @@ const version = "0.8.0"
 const defaultReplyStyleHint = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."
 
 type Config struct {
-	CodexPath          string            `json:"codexPath"`
-	ClaudePath         string            `json:"claudePath"`
-	Cwd                string            `json:"cwd"`
-	Listen             string            `json:"listen"`
-	LocalToken         string            `json:"localToken"`
-	TurnTimeoutMinutes int               `json:"turnTimeoutMinutes"`
-	DefaultAgent       string            `json:"defaultAgent"`
-	Gmail              GmailConfig       `json:"gmail"`
-	GoogleVoice        GoogleVoiceConfig `json:"googleVoice"`
-	Codex              CodexConfig       `json:"codex"`
-	Claude             ClaudeConfig      `json:"claude"`
-	Security           SecurityConfig    `json:"security"`
+	CodexPath  string `json:"codexPath"`
+	ClaudePath string `json:"claudePath"`
+
+	// Cwd is the shared starting folder for local agents. CodexCwd and
+	// ClaudeCwd override it per agent when set, so Codex can start in a projects
+	// folder while Claude starts somewhere else.
+	Cwd       string `json:"cwd"`
+	CodexCwd  string `json:"codexCwd,omitempty"`
+	ClaudeCwd string `json:"claudeCwd,omitempty"`
+
+	Listen             string `json:"listen"`
+	LocalToken         string `json:"localToken"`
+	TurnTimeoutMinutes int    `json:"turnTimeoutMinutes"`
+	DefaultAgent       string `json:"defaultAgent"`
+
+	// Paused stops the bridge from picking up new texts without shutting the
+	// host down. The Home page toggles it, and the poll loop honours it live, so
+	// pausing never loses a message: it stays unread in Gmail until FlipAi
+	// resumes.
+	Paused bool `json:"paused,omitempty"`
+
+	Gmail       GmailConfig       `json:"gmail"`
+	GoogleVoice GoogleVoiceConfig `json:"googleVoice"`
+	Codex       CodexConfig       `json:"codex"`
+	Claude      ClaudeConfig      `json:"claude"`
+	Security    SecurityConfig    `json:"security"`
+	UI          UIConfig          `json:"ui"`
+}
+
+// UIConfig holds desktop-window preferences. Nothing here changes how SMS is
+// routed; these are only the app-window behaviours the Settings page offers.
+type UIConfig struct {
+	Theme   string `json:"theme"`   // light, dark, or system
+	Compact bool   `json:"compact"` // tighter spacing in the desktop window
+
+	// Alerts shows an in-window banner when a new error reaches the activity
+	// log while FlipAi is open; AlertSound adds a short tone to that banner.
+	Alerts     bool `json:"alerts"`
+	AlertSound bool `json:"alertSound"`
+
+	// CloseToTray keeps the background bridge alive when the desktop window is
+	// closed. Turning it off makes closing the window quit FlipAi completely.
+	CloseToTray bool `json:"closeToTray"`
 }
 
 type GmailConfig struct {
@@ -47,10 +78,15 @@ type GmailConfig struct {
 }
 
 type GoogleVoiceConfig struct {
-	AllowedFrom           string `json:"allowedFrom"`
-	RequiredSubjectPhrase string `json:"requiredSubjectPhrase"`
-	ReplyTo               string `json:"replyTo"`
-	ReplyMaxChars         int    `json:"replyMaxChars"`
+	// AllowedFrom stays the newline-separated list every routing and test path
+	// already reads. AllowedNumbers is the same allowlist with the label and
+	// added-on date the Phone page shows; syncAllowedNumbers keeps the two in
+	// step so neither representation can drift.
+	AllowedFrom           string          `json:"allowedFrom"`
+	AllowedNumbers        []AllowedNumber `json:"allowedNumbers,omitempty"`
+	RequiredSubjectPhrase string          `json:"requiredSubjectPhrase"`
+	ReplyTo               string          `json:"replyTo"`
+	ReplyMaxChars         int             `json:"replyMaxChars"`
 
 	// ReplyStyleHint is the single line of framing FlipAi appends to the SMS
 	// command before handing it to the agent. Everything else the agent sees is
@@ -101,7 +137,24 @@ type State struct {
 	LastMessageID       string    `json:"lastMessageId,omitempty"`
 	LastRunAt           time.Time `json:"lastRunAt,omitempty"`
 	LastAgent           string    `json:"lastAgent,omitempty"`
+
+	// Checks record the outcome of the last real connection test for each
+	// dependency. The UI reports these instead of guessing: a tile says "Ready"
+	// only because a test actually succeeded, and says when that happened.
+	GmailCheck  Check `json:"gmailCheck,omitempty"`
+	CodexCheck  Check `json:"codexCheck,omitempty"`
+	ClaudeCheck Check `json:"claudeCheck,omitempty"`
 }
+
+// Check is the result of one dependency test, kept so the desktop UI can show
+// verified state rather than an optimistic guess.
+type Check struct {
+	OK     bool      `json:"ok"`
+	At     time.Time `json:"at,omitempty"`
+	Detail string    `json:"detail,omitempty"`
+}
+
+func (c Check) Known() bool { return !c.At.IsZero() }
 
 func secureRandomToken(n int) (string, error) {
 	if n < 16 {
@@ -185,6 +238,41 @@ func defaultConfig(dataDir string) Config {
 		Codex:    CodexConfig{ApprovalPolicy: "never"},
 		Claude:   ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
 		Security: SecurityConfig{RequireCode: true},
+		UI:       UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
+	}
+}
+
+const (
+	ThemeLight  = "light"
+	ThemeDark   = "dark"
+	ThemeSystem = "system"
+)
+
+// codexWorkingDir and claudeWorkingDir resolve the folder an agent process
+// starts in. An empty per-agent value means "use the shared folder", so an
+// upgraded install behaves exactly as it did before per-agent folders existed.
+func (c Config) codexWorkingDir() string {
+	if v := strings.TrimSpace(c.CodexCwd); v != "" {
+		return v
+	}
+	return c.Cwd
+}
+
+func (c Config) claudeWorkingDir() string {
+	if v := strings.TrimSpace(c.ClaudeCwd); v != "" {
+		return v
+	}
+	return c.Cwd
+}
+
+func normalizeTheme(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case ThemeDark:
+		return ThemeDark
+	case ThemeSystem:
+		return ThemeSystem
+	default:
+		return ThemeLight
 	}
 }
 
@@ -262,6 +350,18 @@ func loadConfig(path, dataDir string) (Config, error) {
 			return cfg, err
 		}
 	}
+	// Installs made before the desktop redesign have no ui block at all, and
+	// decoding leaves those booleans false — which would silently turn
+	// close-to-tray off. Probe for the block so an absent one keeps the
+	// defaults while an explicit one keeps the user's choices.
+	var probe struct {
+		UI *UIConfig `json:"ui"`
+	}
+	if json.Unmarshal(b, &probe) == nil && probe.UI == nil {
+		cfg.UI = defaultConfig(dataDir).UI
+	}
+	cfg.UI.Theme = normalizeTheme(cfg.UI.Theme)
+	syncAllowedNumbers(&cfg.GoogleVoice)
 	return cfg, nil
 }
 

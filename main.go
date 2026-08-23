@@ -305,6 +305,7 @@ func minInt(a, b int) int {
 }
 
 func runHost(dataDir, cfgPath, statePath, tokenPath string) {
+	hostStartedAt = time.Now()
 	lf, _ := os.OpenFile(filepath.Join(dataDir, "bridge.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if lf != nil {
 		log.SetOutput(io.MultiWriter(lf))
@@ -345,7 +346,11 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 		}
 	}()
 	baseHandler := app.handler()
-	srv := &http.Server{Addr: cfg.Listen, Handler: withActivityRoutes(app, baseHandler), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second}
+	// The write timeout has to outlast the longest action a page can start: the
+	// Codex and Claude tests run a real background turn, and the Gmail test
+	// opens a live IMAP/API connection. At 30s those could be cut off mid-answer
+	// and surface as a network error instead of a result.
+	srv := &http.Server{Addr: cfg.Listen, Handler: baseHandler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 150 * time.Second, IdleTimeout: 90 * time.Second}
 	go func() {
 		log.Printf("FlipAi v%s host starting on http://%s", version, cfg.Listen)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

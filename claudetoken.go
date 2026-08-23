@@ -87,7 +87,7 @@ func clearClaudeToken(path string) error {
 // long-lived token when the user has set one.
 func (a *App) newClaudeClient(cfg Config) *ClaudeClient {
 	token, _ := loadClaudeToken(claudeTokenPath(a.dataDir))
-	return NewClaudeClientWithToken(cfg.ClaudePath, cfg.Cwd, cfg.Claude, token)
+	return NewClaudeClientWithToken(cfg.ClaudePath, cfg.claudeWorkingDir(), cfg.Claude, token)
 }
 
 // secretishRE matches credential shapes that must never reach an SMS, the
