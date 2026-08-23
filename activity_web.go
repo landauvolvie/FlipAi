@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"time"
 )
 
 const activityHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Activity — FlipAi</title><style>
@@ -33,4 +38,117 @@ func (a *App) activityClear(w http.ResponseWriter, r *http.Request) {
 	log := activityLogForStatePath(a.statePath)
 	_ = log.Clear()
 	http.Redirect(w, r, "/activity", http.StatusSeeOther)
+}
+
+func (a *App) codexTestCorrected(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	c := NewCodexClient(cfg.CodexPath, cfg.Cwd)
+	if err := c.Start(ctx); err != nil {
+		activityLogForStatePath(a.statePath).Add("error", "agent", "Codex test could not start: "+truncate(err.Error(), 220), "", "C", "")
+		renderResult(w, 500, false, "Codex could not start", err.Error()+"\n\nOpen Codex on this Windows account and verify the executable path in Advanced agent paths.")
+		return
+	}
+	defer c.Close()
+	raw, err := c.Account(ctx)
+	if err != nil || !codexAccountIsChatGPT(raw) {
+		activityLogForStatePath(a.statePath).Add("error", "agent", "Codex test did not detect a ChatGPT-managed account", "", "C", "")
+		renderResult(w, 400, false, "Codex is not ready", "FlipAi could start Codex but did not detect a ChatGPT-managed account.")
+		return
+	}
+	if err := c.SmokeTest(ctx); err != nil {
+		activityLogForStatePath(a.statePath).Add("error", "agent", "Codex real background test failed: "+truncate(err.Error(), 220), "", "C", "")
+		renderResult(w, 500, false, "Codex background test failed", err.Error())
+		return
+	}
+	activityLogForStatePath(a.statePath).Add("success", "agent", "Codex real background test passed", "", "C", "")
+	renderResult(w, 200, true, "Codex is ready", "A real ephemeral Codex request completed successfully. C: SMS commands can be routed to Codex.")
+}
+
+func (a *App) claudeTestCorrected(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	c := NewClaudeClient(cfg.ClaudePath, cfg.Cwd, cfg.Claude)
+	if err := c.Test(ctx); err != nil {
+		activityLogForStatePath(a.statePath).Add("error", "agent", "Claude real background test failed: "+truncate(err.Error(), 220), "", "A", "")
+		renderResult(w, 500, false, "Claude is not ready", err.Error()+"\n\nClaude Desktop and Claude Code CLI can use separate login state. Sign into Claude Code on this Windows account if the real background request cannot authenticate.")
+		return
+	}
+	activityLogForStatePath(a.statePath).Add("success", "agent", "Claude real background test passed", "", "A", "")
+	renderResult(w, 200, true, "Claude is ready", "A real Claude Code background request completed successfully. A: SMS commands can be routed to Claude.")
+}
+
+func (a *App) enableStartupCurrent(w http.ResponseWriter, r *http.Request) {
+	exe, err := os.Executable()
+	if err == nil {
+		err = installAutostart(exe)
+	}
+	if err != nil {
+		renderResult(w, 500, false, "Could not enable startup", err.Error())
+		return
+	}
+	activityLogForStatePath(a.statePath).Add("success", "startup", "Start with Windows enabled for the installed FlipAi executable", "", "", "")
+	renderResult(w, 200, true, "Start with Windows is enabled", "FlipAi will start for this Windows user at sign-in. No second copy of the application was created.")
+}
+
+func copyRecordedResponse(w http.ResponseWriter, rec *httptest.ResponseRecorder, body []byte) {
+	for k, vv := range rec.Header() {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(rec.Code)
+	_, _ = w.Write(body)
+}
+
+// withActivityRoutes adds the diagnostics surface without weakening the
+// loopback token/cookie protection already used by the settings UI. It also
+// corrects two stale UI strings from the portable-build era.
+func withActivityRoutes(a *App, base http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/activity":
+			a.requireAuth(a.activityPage)(w, r)
+			return
+		case "/activity.json":
+			a.requireAuth(a.activityJSON)(w, r)
+			return
+		case "/activity/clear":
+			a.requireAuth(a.activityClear)(w, r)
+			return
+		case "/codex/test":
+			a.requireAuth(a.codexTestCorrected)(w, r)
+			return
+		case "/claude/test":
+			a.requireAuth(a.claudeTestCorrected)(w, r)
+			return
+		case "/install":
+			a.requireAuth(a.enableStartupCurrent)(w, r)
+			return
+	}
+		if r.URL.Path != "/" {
+			base.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		base.ServeHTTP(rec, r)
+		body := rec.Body.Bytes()
+		if rec.Code == http.StatusOK && strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+			s := string(body)
+			s = strings.Replace(s, `<a href="#diagnostics">Diagnostics</a>`, `<a href="/activity">Activity &amp; Logs</a><a href="#diagnostics">Diagnostics</a>`, 1)
+			s = strings.ReplaceAll(s, `%LOCALAPPDATA%\Programs\AISMSBridge\AISMSBridge.exe`, `%LOCALAPPDATA%\Programs\FlipAi\FlipAi.exe`)
+			s = strings.Replace(s, `Install &amp; start with Windows`, `Enable Start with Windows`, 1)
+			s = strings.Replace(s, `Install & start with Windows`, `Enable Start with Windows`, 1)
+			s = strings.Replace(s, `Tray → Open Settings reopens this page.`, `Tray → Open Settings reopens this page. Use Activity & Logs to trace each SMS end-to-end.`, 1)
+			body = []byte(s)
+			rec.Header().Del("Content-Length")
+		}
+		copyRecordedResponse(w, rec, body)
+	})
 }
