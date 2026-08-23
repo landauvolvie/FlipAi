@@ -136,9 +136,9 @@ func (c *ClaudeClient) authStatus(ctx context.Context) (ClaudeAuthStatus, error)
 		return st, nil
 	}
 	if runErr != nil {
-		return st, fmt.Errorf("Claude Code auth status could not run using %q: %v: %s", c.path, runErr, truncate(string(out), 800))
+		return st, fmt.Errorf("Claude Code auth status could not run using %q: %v: %s", c.path, runErr, truncate(c.redact(string(out)), 800))
 	}
-	return st, fmt.Errorf("Claude auth status did not return JSON; update Claude Code: %s", truncate(string(out), 500))
+	return st, fmt.Errorf("Claude auth status did not return JSON; update Claude Code: %s", truncate(c.redact(string(out)), 500))
 }
 
 func validateClaudeSubscriptionPath(st ClaudeAuthStatus) error {
@@ -199,13 +199,13 @@ func (c *ClaudeClient) Test(ctx context.Context) error {
 	out, runErr := c.runPrint(ctx, args)
 	if runErr != nil {
 		if !st.LoggedIn {
-			return fmt.Errorf("Claude Code CLI could not run a first-party background request: %v: %s\n\nClaude Desktop and Claude Code CLI have separate sign-in state on Windows. Being signed into the Claude desktop app does not prove the CLI at %q is authenticated. Open Claude Code in PowerShell and complete /login (or run `claude auth login`), then test again", runErr, truncate(string(out), 800), c.path)
+			return fmt.Errorf("Claude Code CLI could not run a first-party background request: %v: %s\n\nClaude Desktop and Claude Code CLI have separate sign-in state on Windows. Being signed into the Claude desktop app does not prove the CLI at %q is authenticated. Open Claude Code in PowerShell and complete /login (or run `claude auth login`), then test again", runErr, truncate(c.redact(string(out)), 800), c.path)
 		}
-		return fmt.Errorf("Claude subscription login exists, but the real background request failed: %v: %s", runErr, truncate(string(out), 800))
+		return fmt.Errorf("Claude subscription login exists, but the real background request failed: %v: %s", runErr, truncate(c.redact(string(out)), 800))
 	}
 	var r claudeResult
 	if err := json.Unmarshal(out, &r); err != nil {
-		return fmt.Errorf("Claude background test returned unexpected output; update Claude Code: %s", truncate(string(out), 500))
+		return fmt.Errorf("Claude background test returned unexpected output; update Claude Code: %s", truncate(c.redact(string(out)), 500))
 	}
 	if r.IsError {
 		return fmt.Errorf("Claude background test reported an error: %s", truncate(r.Result, 500))
@@ -244,13 +244,13 @@ func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (resul
 		// A failed run may mean the CLI was signed out since the last check.
 		c.invalidateAuthCache()
 		if !st.LoggedIn {
-			return "", sessionID, fmt.Errorf("Claude Code CLI is not usable from FlipAi yet: %v: %s. Claude Desktop sign-in is separate from Claude Code CLI sign-in; complete Claude Code /login once on this Windows account", runErr, truncate(string(out), 800))
+			return "", sessionID, fmt.Errorf("Claude Code CLI is not usable from FlipAi yet: %v: %s. Claude Desktop sign-in is separate from Claude Code CLI sign-in; complete Claude Code /login once on this Windows account", runErr, truncate(c.redact(string(out)), 800))
 		}
-		return "", sessionID, fmt.Errorf("Claude Code failed: %v: %s", runErr, truncate(string(out), 800))
+		return "", sessionID, fmt.Errorf("Claude Code failed: %v: %s", runErr, truncate(c.redact(string(out)), 800))
 	}
 	var r claudeResult
 	if json.Unmarshal(out, &r) != nil {
-		return strings.TrimSpace(string(out)), sessionID, nil
+		return strings.TrimSpace(c.redact(string(out))), sessionID, nil
 	}
 	if r.IsError {
 		return "", r.SessionID, fmt.Errorf("Claude reported an error: %s", r.Result)

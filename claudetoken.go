@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -87,4 +88,31 @@ func clearClaudeToken(path string) error {
 func (a *App) newClaudeClient(cfg Config) *ClaudeClient {
 	token, _ := loadClaudeToken(claudeTokenPath(a.dataDir))
 	return NewClaudeClientWithToken(cfg.ClaudePath, cfg.Cwd, cfg.Claude, token)
+}
+
+// secretishRE matches credential shapes that must never reach an SMS, the
+// Settings page, or a log file. Claude Code echoes CLAUDE_CODE_OAUTH_TOKEN in
+// some of its own error text, and FlipAi puts raw CLI output into the errors it
+// reports, so without this a token could ride out in a text message.
+var secretishRE = regexp.MustCompile(`(?i)(sk-ant-[A-Za-z0-9_-]{8,}|ya29\.[A-Za-z0-9._-]{8,}|CLAUDE_CODE_OAUTH_TOKEN=[^\s"']+)`)
+
+// redactSecrets removes the configured token and any credential-shaped text.
+// The exact token is replaced first so it is caught even if it does not match
+// the generic pattern.
+func redactSecrets(s, token string) string {
+	if s == "" {
+		return s
+	}
+	if t := strings.TrimSpace(token); len(t) >= 8 {
+		s = strings.ReplaceAll(s, t, "[redacted]")
+	}
+	return secretishRE.ReplaceAllString(s, "[redacted]")
+}
+
+// redact scrubs anything credential-shaped out of text about to be surfaced.
+func (c *ClaudeClient) redact(s string) string {
+	if c == nil {
+		return redactSecrets(s, "")
+	}
+	return redactSecrets(s, c.token)
 }

@@ -164,3 +164,40 @@ func TestStoredTokenOverridesInheritedEnvironment(t *testing.T) {
 		t.Fatalf("configured token did not win: %v", seen)
 	}
 }
+
+// Claude Code echoes CLAUDE_CODE_OAUTH_TOKEN in some of its own error text, and
+// FlipAi forwards raw CLI output into errors that reach an SMS and the Settings
+// page. A credential must never survive that trip.
+func TestSecretsAreRedactedFromSurfacedOutput(t *testing.T) {
+	const token = "sk-ant-oat01-SUPERSECRETVALUE1234567890"
+	c := NewClaudeClientWithToken(os.Args[0], "", ClaudeConfig{}, token)
+
+	cases := []string{
+		"OAuth 401: keeping the user-supplied CLAUDE_CODE_OAUTH_TOKEN=" + token + " instead",
+		"failed with token " + token,
+		"some other creds ya29.AbCdEfGhIjKlMnOpQrSt leaked here",
+		"unrelated sk-ant-oat01-ANOTHERTOKENVALUE99 in output",
+	}
+	for _, in := range cases {
+		got := c.redact(in)
+		if strings.Contains(got, token) {
+			t.Errorf("configured token survived redaction: %q", got)
+		}
+		if strings.Contains(got, "ya29.AbCdEfGhIjKlMnOpQrSt") || strings.Contains(got, "ANOTHERTOKENVALUE99") {
+			t.Errorf("credential-shaped value survived redaction: %q", got)
+		}
+		if !strings.Contains(got, "[redacted]") {
+			t.Errorf("nothing was redacted in %q -> %q", in, got)
+		}
+	}
+
+	// Ordinary text must pass through untouched.
+	const plain = "Claude Code failed: exit status 1: connection reset"
+	if got := c.redact(plain); got != plain {
+		t.Fatalf("non-secret text was altered: %q", got)
+	}
+	// Must be safe on a client with no token configured.
+	if got := NewClaudeClient(os.Args[0], "", ClaudeConfig{}).redact(plain); got != plain {
+		t.Fatalf("redact on a tokenless client altered text: %q", got)
+	}
+}

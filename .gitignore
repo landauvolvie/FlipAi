@@ -1,9 +1,20 @@
 *.exe
 *.msi
 *.zip
+/dist/
+
+# Runtime data written under %LOCALAPPDATA%\AISMSBridge. Listed defensively so a
+# local run or debug session inside the repo can never commit a credential or a
+# log containing phone numbers.
 bridge.json
 state.json
+bridge.log
+activity.jsonl
+quit.flag
+launch-error.html
+
+# Credentials. Encrypted with DPAPI on Windows, but never belong in git.
 google-credentials.json
 google-token.dat
-bridge.log
-/dist/
+gmail-app-password.dat
+claude-oauth-token.dat
