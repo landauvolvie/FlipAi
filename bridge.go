@@ -10,7 +10,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
+
+// bridgeJob is one authenticated SMS command waiting for an agent turn.
+type bridgeJob struct {
+	msg GmailMessage
+	cmd remoteCommand
+}
 
 type Bridge struct {
 	cfg       Config
@@ -20,13 +27,82 @@ type Bridge struct {
 	claude    *ClaudeClient
 	activity  *ActivityLog
 	mu        sync.Mutex
+	runMu     sync.Mutex
 	state     State
 	busy      bool
 	runCtx    context.Context
+
+	// queue decouples reading the mailbox from running an agent turn. Turns can
+	// last many minutes, and previously the single poll loop sat blocked inside
+	// execute for the whole turn, so a text sent meanwhile was not even read
+	// until the turn finished. poll now enqueues and returns; a worker drains
+	// the queue one job at a time, preserving the one-turn-at-a-time invariant.
+	queue    []bridgeJob
+	queueSig chan struct{}
+
+	// progress is the agent's most recent step, surfaced by the optional
+	// progress heartbeat so a long turn reports something specific.
+	progress string
+
+	// processedSet indexes state.ProcessedMessageIDs for O(1) replay checks.
+	processedSet map[string]struct{}
 }
 
 func NewBridge(cfg Config, statePath string, state State, g MailClient, c *CodexClient, a *ClaudeClient) *Bridge {
-	return &Bridge{cfg: cfg, statePath: statePath, state: state, gmail: g, codex: c, claude: a, activity: activityLogForStatePath(statePath)}
+	return &Bridge{
+		cfg: cfg, statePath: statePath, state: state,
+		gmail: g, codex: c, claude: a,
+		activity: activityLogForStatePath(statePath),
+		queueSig: make(chan struct{}, 1),
+	}
+}
+
+// enqueue adds a job and signals the worker without ever blocking the caller.
+func (b *Bridge) enqueue(j bridgeJob) int {
+	b.mu.Lock()
+	b.queue = append(b.queue, j)
+	depth := len(b.queue)
+	b.mu.Unlock()
+	select {
+	case b.queueSig <- struct{}{}:
+	default:
+	}
+	return depth
+}
+
+func (b *Bridge) dequeue() (bridgeJob, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.queue) == 0 {
+		return bridgeJob{}, false
+	}
+	j := b.queue[0]
+	b.queue = b.queue[1:]
+	return j, true
+}
+
+// drainQueue runs every queued job to completion, one at a time. Run calls it
+// from a dedicated worker goroutine; tests call it directly after poll.
+func (b *Bridge) drainQueue(ctx context.Context) {
+	for ctx.Err() == nil {
+		j, ok := b.dequeue()
+		if !ok {
+			return
+		}
+		b.execute(ctx, j.msg, j.cmd)
+	}
+}
+
+func (b *Bridge) setProgress(step string) {
+	b.mu.Lock()
+	b.progress = strings.TrimSpace(step)
+	b.mu.Unlock()
+}
+
+func (b *Bridge) currentProgress() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.progress
 }
 
 func (b *Bridge) event(level, stage, message, sender, agent, messageID string) {
@@ -250,6 +326,20 @@ func (b *Bridge) Run(ctx context.Context) {
 	b.runCtx = ctx
 	b.mu.Unlock()
 	b.event("info", "bridge", "Background bridge started and is monitoring Gmail", "", "", "")
+
+	// Agent turns run on their own worker so the mailbox loop below keeps
+	// reading and acknowledging new texts during a long turn.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-b.queueSig:
+				b.drainQueue(ctx)
+			}
+		}
+	}()
+
 	if b.state.GmailBaselineUnix == 0 {
 		b.mu.Lock()
 		b.state.GmailBaselineUnix = time.Now().Unix()
@@ -318,18 +408,37 @@ func (b *Bridge) Run(ctx context.Context) {
 	}
 }
 
-func (b *Bridge) processed(id string) bool {
-	for _, x := range b.state.ProcessedMessageIDs {
-		if x == id {
-			return true
+// processedSetLocked lazily indexes the on-disk checkpoint list. The slice is
+// kept as-is for state.json compatibility; the map exists so the per-message
+// lookup is O(1) instead of scanning up to 2000 entries for every candidate.
+// Callers already hold b.mu.
+func (b *Bridge) processedSetLocked() map[string]struct{} {
+	if b.processedSet == nil {
+		b.processedSet = make(map[string]struct{}, len(b.state.ProcessedMessageIDs)+16)
+		for _, x := range b.state.ProcessedMessageIDs {
+			b.processedSet[x] = struct{}{}
 		}
 	}
-	return false
+	return b.processedSet
 }
+
+func (b *Bridge) processed(id string) bool {
+	_, ok := b.processedSetLocked()[id]
+	return ok
+}
+
 func (b *Bridge) markProcessed(id string) {
-	b.state.ProcessedMessageIDs = append(b.state.ProcessedMessageIDs, id)
+	set := b.processedSetLocked()
+	if _, dup := set[id]; !dup {
+		b.state.ProcessedMessageIDs = append(b.state.ProcessedMessageIDs, id)
+		set[id] = struct{}{}
+	}
 	if len(b.state.ProcessedMessageIDs) > 2000 {
+		dropped := b.state.ProcessedMessageIDs[:len(b.state.ProcessedMessageIDs)-2000]
 		b.state.ProcessedMessageIDs = b.state.ProcessedMessageIDs[len(b.state.ProcessedMessageIDs)-2000:]
+		for _, x := range dropped {
+			delete(set, x)
+		}
 	}
 	b.state.LastMessageID = id
 }
@@ -388,26 +497,62 @@ func (b *Bridge) poll(ctx context.Context) {
 			continue
 		}
 		rc.Sender = sender
+
+		// STATUS needs no agent, so answer it inline. That keeps it instant even
+		// while a long turn is running, instead of queueing behind it.
+		if rc.Status {
+			b.event("success", "routing", "STATUS answered directly", sender, "", id)
+			b.deliver(ctx, m, rc, b.statusLine())
+			continue
+		}
+
 		agentName := "Codex"
 		if rc.Agent == "A" {
 			agentName = "Claude"
 		}
 		b.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
-		b.execute(ctx, m, rc)
+		depth := b.enqueue(bridgeJob{msg: m, cmd: rc})
+		if b.cfg.GoogleVoice.ReplyAck {
+			line := "✓ " + agentName + " working on it…"
+			if depth > 1 {
+				line = fmt.Sprintf("✓ Queued for %s (%d ahead)…", agentName, depth-1)
+			}
+			b.notify(ctx, m, line)
+		}
 	}
 }
 
-func (b *Bridge) composePrompt(command, agent, sender string) string {
-	max := b.cfg.GoogleVoice.ReplyMaxChars
-	if max <= 0 {
-		max = 300
+func (b *Bridge) statusLine() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	line := fmt.Sprintf("Bridge online. Codex thread: %v. Claude session: %v. Busy: %v.",
+		b.state.CodexThreadID != "", b.state.ClaudeSessionID != "", b.busy)
+	if n := len(b.queue); n > 0 {
+		line += fmt.Sprintf(" Queued: %d.", n)
 	}
-	suffix := ""
-	if b.cfg.GoogleVoice.SendReplyViaAgentBrowser {
-		suffix = fmt.Sprintf(`\n\nREMOTE SMS RETURN-CHANNEL INSTRUCTIONS (MANDATORY):\nThis request came from an authenticated SMS sender: %s. Complete the requested work using your available tools. When the work is finished, send the completion update back to THIS EXACT PHONE NUMBER through Google Voice. Prefer an already-authenticated Google Voice tab/session. If the built-in browser is not signed in, use an available authenticated Chrome/browser integration instead. Open https://voice.google.com, select or search for the conversation with %s, verify the destination before sending, and send a concise result of at most %d characters. Do not send the result to any other number. Do not enter, reveal, or request passwords, recovery codes, or 2FA secrets. If browser-based Google Voice is unavailable or not already authenticated, do not attempt to sign in with credentials; simply return the concise result to the bridge so its Gmail reply fallback can deliver it. If and only if you actually confirmed that Google Voice sent the message to %s, end your final response with the exact marker SMS_BRIDGE_SENT.`, sender, sender, max, sender)
+	if step := b.progress; step != "" {
+		line += " Now: " + truncate(step, 120)
 	}
-	_ = agent
-	return command + suffix
+	return line
+}
+
+// composePrompt hands the SMS to the agent with as little framing as possible.
+//
+// FlipAi is a transport: it delivers the reply itself over the authenticated
+// Google Voice email address, so the agent is never instructed to open a
+// browser, find a conversation, or emit a delivery marker. Whatever the agent
+// can do at the desktop it can still do here — including using the browser,
+// when the user's own text asks for it.
+//
+// The command is fenced so untrusted SMS text is read as data rather than as
+// instructions, and exactly one configurable line explains that the answer
+// travels as a text message.
+func (b *Bridge) composePrompt(command string) string {
+	hint := strings.TrimSpace(b.cfg.GoogleVoice.ReplyStyleHint)
+	if hint == "" {
+		hint = defaultReplyStyleHint
+	}
+	return "<sms_command>\n" + strings.TrimSpace(command) + "\n</sms_command>\n\n" + hint
 }
 
 func googleVoiceReplyTarget(m GmailMessage) string {
@@ -420,31 +565,40 @@ func googleVoiceReplyTarget(m GmailMessage) string {
 }
 
 func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteCommand) {
+	// One agent turn at a time, enforced structurally. The old busy flag
+	// returned early instead of waiting, which would now silently discard a
+	// queued job rather than merely delaying it.
+	b.runMu.Lock()
+	defer b.runMu.Unlock()
 	b.mu.Lock()
-	if b.busy {
-		b.mu.Unlock()
-		return
-	}
 	b.busy = true
+	b.progress = ""
 	b.state.LastRunAt = time.Now()
 	b.state.LastAgent = rc.Agent
 	s := b.state
 	b.mu.Unlock()
 	_ = saveState(b.statePath, s)
-	defer func() { b.mu.Lock(); b.busy = false; b.mu.Unlock() }()
+	defer func() { b.mu.Lock(); b.busy = false; b.progress = ""; b.mu.Unlock() }()
 	timeout := time.Duration(b.cfg.TurnTimeoutMinutes) * time.Minute
 	if timeout <= 0 {
 		timeout = 90 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+
+	// Optional heartbeat so a long turn reports in, the way watching the
+	// desktop app does. Stops as soon as the turn returns.
+	if b.cfg.GoogleVoice.ProgressUpdates && !rc.Status && !rc.New {
+		stop := make(chan struct{})
+		defer close(stop)
+		go b.heartbeat(ctx, stop, m, rc)
+	}
+
 	var final string
 	var err error
 	if rc.Status {
 		b.event("info", "agent", "STATUS command executing", rc.Sender, "", m.ID)
-		b.mu.Lock()
-		final = fmt.Sprintf("Bridge online. Codex thread: %v. Claude session: %v. Busy: %v", b.state.CodexThreadID != "", b.state.ClaudeSessionID != "", b.busy)
-		b.mu.Unlock()
+		final = b.statusLine()
 	} else if rc.New {
 		b.event("info", "agent", "Starting a new agent conversation", rc.Sender, rc.Agent, m.ID)
 		if rc.Agent == "C" {
@@ -472,27 +626,43 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		b.event("success", "agent", "Agent completed successfully", rc.Sender, rc.Agent, m.ID)
 	}
 
-	if strings.Contains(final, "SMS_BRIDGE_SENT") {
-		b.event("success", "reply", "Agent reported that Google Voice browser reply was sent", rc.Sender, rc.Agent, m.ID)
-		return
+	// Delivery is unconditional and happens here, in Go. The agent is never
+	// asked to send anything itself, so nothing in its output can change where
+	// this reply goes. Use the parent context: the turn's own context may have
+	// just expired, and the timeout notice still has to reach the phone.
+	sendCtx, sendCancel := context.WithTimeout(parent, 2*time.Minute)
+	defer sendCancel()
+	b.deliver(sendCtx, m, rc, final)
+}
+
+// heartbeat texts a periodic "still working" line during a long turn, naming
+// the agent's current step when one is known.
+func (b *Bridge) heartbeat(ctx context.Context, stop <-chan struct{}, m GmailMessage, rc remoteCommand) {
+	every := time.Duration(b.cfg.GoogleVoice.ProgressIntervalSeconds) * time.Second
+	if every < 30*time.Second {
+		every = 120 * time.Second
 	}
-	if !b.cfg.GoogleVoice.GmailReplyFallback {
-		b.event("warn", "reply", "No browser-send confirmation and Gmail reply fallback is disabled", rc.Sender, rc.Agent, m.ID)
-		return
+	t := time.NewTicker(every)
+	defer t.Stop()
+	agentName := "Codex"
+	if rc.Agent == "A" {
+		agentName = "Claude"
 	}
-	replyTarget := googleVoiceReplyTarget(m)
-	if replyTarget == "" {
-		b.event("error", "reply", "Could not find a safe @txt.voice.google.com reply address", rc.Sender, rc.Agent, m.ID)
-		return
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-t.C:
+			line := agentName + " still working…"
+			if step := b.currentProgress(); step != "" {
+				line += " " + truncate(step, 120)
+			}
+			b.notify(ctx, m, line)
+			b.event("info", "reply", "Progress update texted to the sender", rc.Sender, rc.Agent, m.ID)
+		}
 	}
-	msg := strings.ReplaceAll(final, "SMS_BRIDGE_SENT", "")
-	msg = truncate(msg, b.cfg.GoogleVoice.ReplyMaxChars)
-	if e := b.gmail.SendText(ctx, replyTarget, msg); e != nil {
-		log.Printf("Google Voice Gmail reply fallback: %v", e)
-		b.event("error", "reply", "Gmail/Google Voice reply failed: "+truncate(e.Error(), 220), rc.Sender, rc.Agent, m.ID)
-		return
-	}
-	b.event("success", "reply", "Reply sent through Gmail to the Google Voice conversation", rc.Sender, rc.Agent, m.ID)
 }
 
 func (b *Bridge) newCodexThread(ctx context.Context) error {
@@ -525,7 +695,7 @@ func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string,
 	b.mu.Lock()
 	sid := b.state.ClaudeSessionID
 	b.mu.Unlock()
-	res, nsid, err := b.claude.Run(ctx, sid, b.composePrompt(command, "A", sender))
+	res, nsid, err := b.claude.Run(ctx, sid, b.composePrompt(command))
 	if err != nil {
 		return "", err
 	}
@@ -559,7 +729,7 @@ func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, 
 		tid = b.state.CodexThreadID
 		b.mu.Unlock()
 	}
-	params := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt(command, "C", sender)}}}
+	params := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt(command)}}}
 	if b.cfg.Codex.ApprovalPolicy != "" {
 		params["approvalPolicy"] = b.cfg.Codex.ApprovalPolicy
 	}
@@ -596,8 +766,14 @@ func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, 
 						Text string `json:"text"`
 					} `json:"item"`
 				}
-				if json.Unmarshal(n.Params, &p) == nil && (p.TurnID == "" || p.TurnID == turnID) && p.Item.Type == "agentMessage" && p.Item.Text != "" {
-					final = p.Item.Text
+				if json.Unmarshal(n.Params, &p) == nil && (p.TurnID == "" || p.TurnID == turnID) && p.Item.Text != "" {
+					if p.Item.Type == "agentMessage" {
+						final = p.Item.Text
+					} else {
+						// Any other completed item is a step worth naming in a
+						// progress heartbeat.
+						b.setProgress(p.Item.Text)
+					}
 				}
 			case "turn/completed":
 				var p struct {
@@ -619,6 +795,103 @@ func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, 
 		}
 	}
 }
+
+// splitReply breaks a long answer into numbered SMS parts instead of cutting it
+// off. Truncating at ReplyMaxChars silently lost the end of any desktop-length
+// answer, which defeats the point of getting the same result by text.
+func splitReply(s string, max, maxParts int) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if max <= 0 {
+		max = 300
+	}
+	if maxParts < 1 {
+		maxParts = 1
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return []string{s}
+	}
+	if maxParts == 1 {
+		return []string{truncate(s, max)}
+	}
+	// Leave room for the "12/12 " prefix each part carries.
+	body := max - 7
+	if body < 20 {
+		body = max
+	}
+	var chunks []string
+	for len(r) > 0 && len(chunks) < maxParts {
+		if len(r) <= body {
+			chunks = append(chunks, strings.TrimSpace(string(r)))
+			r = nil
+			break
+		}
+		cut := body
+		// Prefer breaking on whitespace so words survive the split.
+		for i := body; i > body/2; i-- {
+			if unicode.IsSpace(r[i]) {
+				cut = i
+				break
+			}
+		}
+		chunks = append(chunks, strings.TrimSpace(string(r[:cut])))
+		r = []rune(strings.TrimLeft(string(r[cut:]), " \t\r\n"))
+	}
+	if len(r) > 0 && len(chunks) > 0 {
+		chunks[len(chunks)-1] += " …"
+	}
+	if len(chunks) == 1 {
+		return chunks
+	}
+	out := make([]string, len(chunks))
+	for i, c := range chunks {
+		out[i] = fmt.Sprintf("%d/%d %s", i+1, len(chunks), c)
+	}
+	return out
+}
+
+// deliver sends the agent's answer back as SMS by replying to the authenticated
+// Google Voice address. This is the only delivery path: it runs in Go, so a
+// prompt-injected SMS cannot redirect or suppress the reply.
+func (b *Bridge) deliver(ctx context.Context, m GmailMessage, rc remoteCommand, text string) {
+	target := googleVoiceReplyTarget(m)
+	if target == "" {
+		b.event("error", "reply", "Could not find a safe @txt.voice.google.com reply address", rc.Sender, rc.Agent, m.ID)
+		return
+	}
+	parts := splitReply(text, b.cfg.GoogleVoice.ReplyMaxChars, b.cfg.GoogleVoice.MaxReplyParts)
+	if len(parts) == 0 {
+		return
+	}
+	for _, p := range parts {
+		if err := b.gmail.SendText(ctx, target, p); err != nil {
+			log.Printf("Google Voice reply: %v", err)
+			b.event("error", "reply", "Google Voice reply failed: "+truncate(err.Error(), 220), rc.Sender, rc.Agent, m.ID)
+			return
+		}
+	}
+	msg := "Reply sent through Google Voice"
+	if len(parts) > 1 {
+		msg = fmt.Sprintf("Reply sent through Google Voice in %d parts", len(parts))
+	}
+	b.event("success", "reply", msg, rc.Sender, rc.Agent, m.ID)
+}
+
+// notify sends a single short status line (the ack or a progress heartbeat).
+// Delivery failures are non-fatal: they must never derail the actual answer.
+func (b *Bridge) notify(ctx context.Context, m GmailMessage, line string) {
+	target := googleVoiceReplyTarget(m)
+	if target == "" {
+		return
+	}
+	if err := b.gmail.SendText(ctx, target, truncate(line, b.cfg.GoogleVoice.ReplyMaxChars)); err != nil {
+		log.Printf("Google Voice status text: %v", err)
+	}
+}
+
 func truncate(s string, n int) string {
 	if n <= 0 {
 		n = 300

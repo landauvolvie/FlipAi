@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,6 +33,71 @@ type IMAPMailClient struct {
 	smtpServerName string
 	dialIMAP       func(context.Context) (net.Conn, error)
 	dialSMTP       func(context.Context) (net.Conn, error)
+
+	// A poll used to dial, TLS-handshake, LOGIN and EXAMINE twice — once for
+	// List and again for Get — costing seconds per SMS. One authenticated
+	// session is now reused for both, reconnecting only when it actually
+	// breaks. IDLE keeps its own separate connection: it monopolises a session.
+	sessMu   sync.Mutex
+	sess     *imapSession
+	sendMu   sync.Mutex
+	sendConn net.Conn
+	sendCli  *smtp.Client
+}
+
+// withSession runs fn against a reused authenticated IMAP session. On any
+// failure the session is dropped and fn is retried exactly once on a fresh
+// connection, so a server-side timeout is indistinguishable from before.
+func (c *IMAPMailClient) withSession(ctx context.Context, fn func(*imapSession) error) error {
+	c.sessMu.Lock()
+	defer c.sessMu.Unlock()
+
+	if s := c.sess; s != nil {
+		// NOOP is not merely a keepalive here: RFC 3501 requires the server to
+		// flush pending untagged EXISTS responses on it, which is what refreshes
+		// the selected mailbox so a reused session can see mail that arrived
+		// after EXAMINE.
+		if _, err := s.command(ctx, "NOOP"); err == nil {
+			if err := fn(s); err == nil {
+				return nil
+			}
+		}
+		c.dropSessionLocked()
+	}
+
+	s, err := c.openIMAP(ctx)
+	if err != nil {
+		return err
+	}
+	if err := fn(s); err != nil {
+		s.close()
+		return err
+	}
+	c.sess = s
+	return nil
+}
+
+// dropSessionLocked closes a suspect connection without a LOGOUT round trip.
+func (c *IMAPMailClient) dropSessionLocked() {
+	if c.sess != nil {
+		if c.sess.conn != nil {
+			_ = c.sess.conn.Close()
+		}
+		c.sess = nil
+	}
+}
+
+// Close releases the pooled IMAP and SMTP connections.
+func (c *IMAPMailClient) Close() {
+	if c == nil {
+		return
+	}
+	c.sessMu.Lock()
+	c.dropSessionLocked()
+	c.sessMu.Unlock()
+	c.sendMu.Lock()
+	c.dropSMTPLocked()
+	c.sendMu.Unlock()
 }
 
 func NewIMAPMailClient(cfg GmailConfig, secretPath string) (*IMAPMailClient, error) {
@@ -181,11 +247,6 @@ func (c *IMAPMailClient) Test(ctx context.Context) error {
 }
 
 func (c *IMAPMailClient) List(ctx context.Context) ([]string, error) {
-	s, err := c.openIMAP(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer s.close()
 	since := time.Now().Add(-72 * time.Hour).Format("02-Jan-2006")
 	query := "UID SEARCH SINCE " + since
 	phrase := strings.TrimSpace(c.cfg.SubjectPhrase)
@@ -193,10 +254,16 @@ func (c *IMAPMailClient) List(ctx context.Context) ([]string, error) {
 		phrase = "new text message from"
 	}
 	query += " HEADER Subject " + quoteIMAP(phrase)
-	lines, err := s.command(ctx, query)
-	if err != nil {
+
+	var lines []string
+	if err := c.withSession(ctx, func(s *imapSession) error {
+		var err error
+		lines, err = s.command(ctx, query)
+		return err
+	}); err != nil {
 		return nil, err
 	}
+
 	var ids []string
 	for _, line := range lines {
 		if !strings.HasPrefix(strings.ToUpper(line), "* SEARCH") {
@@ -228,49 +295,50 @@ func (c *IMAPMailClient) Get(ctx context.Context, id string) (GmailMessage, erro
 	if _, err := strconv.ParseUint(id, 10, 64); err != nil {
 		return GmailMessage{}, errors.New("invalid IMAP UID")
 	}
-	s, err := c.openIMAP(ctx)
-	if err != nil {
-		return GmailMessage{}, err
-	}
-	defer s.close()
-	_ = s.conn.SetDeadline(deadlineFor(ctx, 30*time.Second))
-	tag := s.nextTag()
-	if _, err := fmt.Fprintf(s.conn, "%s UID FETCH %s (INTERNALDATE BODY.PEEK[])\r\n", tag, id); err != nil {
-		return GmailMessage{}, err
-	}
 	var raw []byte
 	var internalDate time.Time
-	for {
-		line, err := s.r.ReadString('\n')
-		if err != nil {
-			return GmailMessage{}, err
+	err := c.withSession(ctx, func(s *imapSession) error {
+		raw, internalDate = nil, time.Time{}
+		_ = s.conn.SetDeadline(deadlineFor(ctx, 30*time.Second))
+		tag := s.nextTag()
+		if _, err := fmt.Fprintf(s.conn, "%s UID FETCH %s (INTERNALDATE BODY.PEEK[])\r\n", tag, id); err != nil {
+			return err
 		}
-		trimmed := strings.TrimRight(line, "\r\n")
-		if m := imapInternalDateRE.FindStringSubmatch(trimmed); len(m) == 2 {
-			internalDate, _ = time.Parse("02-Jan-2006 15:04:05 -0700", m[1])
+		for {
+			line, err := s.r.ReadString('\n')
+			if err != nil {
+				return err
+			}
+			trimmed := strings.TrimRight(line, "\r\n")
+			if m := imapInternalDateRE.FindStringSubmatch(trimmed); len(m) == 2 {
+				internalDate, _ = time.Parse("02-Jan-2006 15:04:05 -0700", m[1])
+			}
+			if m := imapLiteralRE.FindStringSubmatch(trimmed); len(m) == 2 {
+				n, _ := strconv.Atoi(m[1])
+				if n <= 0 || n > 10<<20 {
+					return fmt.Errorf("unexpected IMAP message size %d", n)
+				}
+				raw = make([]byte, n)
+				if _, err := io.ReadFull(s.r, raw); err != nil {
+					return err
+				}
+				// Consume the closing FETCH line after the literal.
+				if _, err := s.r.ReadString('\n'); err != nil {
+					return err
+				}
+				continue
+			}
+			if strings.HasPrefix(trimmed, tag+" ") {
+				parts := strings.SplitN(trimmed, " ", 3)
+				if len(parts) < 2 || !strings.EqualFold(parts[1], "OK") {
+					return fmt.Errorf("IMAP UID FETCH failed: %s", trimmed)
+				}
+				return nil
+			}
 		}
-		if m := imapLiteralRE.FindStringSubmatch(trimmed); len(m) == 2 {
-			n, _ := strconv.Atoi(m[1])
-			if n <= 0 || n > 10<<20 {
-				return GmailMessage{}, fmt.Errorf("unexpected IMAP message size %d", n)
-			}
-			raw = make([]byte, n)
-			if _, err := io.ReadFull(s.r, raw); err != nil {
-				return GmailMessage{}, err
-			}
-			// Consume the closing FETCH line after the literal.
-			if _, err := s.r.ReadString('\n'); err != nil {
-				return GmailMessage{}, err
-			}
-			continue
-		}
-		if strings.HasPrefix(trimmed, tag+" ") {
-			parts := strings.SplitN(trimmed, " ", 3)
-			if len(parts) < 2 || !strings.EqualFold(parts[1], "OK") {
-				return GmailMessage{}, fmt.Errorf("IMAP UID FETCH failed: %s", trimmed)
-			}
-			break
-		}
+	})
+	if err != nil {
+		return GmailMessage{}, err
 	}
 	if len(raw) == 0 {
 		return GmailMessage{}, errors.New("IMAP message contained no body")
@@ -301,21 +369,19 @@ func (c *IMAPMailClient) openSMTP(ctx context.Context) (*smtp.Client, net.Conn, 
 	return sc, conn, nil
 }
 
-func (c *IMAPMailClient) SendText(ctx context.Context, to, body string) error {
-	addr, err := safeGoogleVoiceReplyAddress(to)
-	if err != nil {
-		return err
+func (c *IMAPMailClient) dropSMTPLocked() {
+	if c.sendCli != nil {
+		_ = c.sendCli.Close()
+		c.sendCli = nil
 	}
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return errors.New("empty reply")
+	if c.sendConn != nil {
+		_ = c.sendConn.Close()
+		c.sendConn = nil
 	}
-	sc, conn, err := c.openSMTP(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	defer sc.Close()
+}
+
+// sendOnce writes one message over an already-authenticated SMTP client.
+func (c *IMAPMailClient) sendOnce(sc *smtp.Client, addr, body string) error {
 	if err := sc.Mail(c.email); err != nil {
 		return err
 	}
@@ -331,10 +397,51 @@ func (c *IMAPMailClient) SendText(ctx context.Context, to, body string) error {
 		_ = w.Close()
 		return err
 	}
-	if err := w.Close(); err != nil {
+	return w.Close()
+}
+
+// SendText delivers one SMS by replying to the authenticated Google Voice
+// address. An ack, any progress lines, and the result are separate messages, so
+// the authenticated SMTP connection is reused across them rather than paying a
+// TLS handshake and AUTH per text. A stale connection is retried once.
+func (c *IMAPMailClient) SendText(ctx context.Context, to, body string) error {
+	addr, err := safeGoogleVoiceReplyAddress(to)
+	if err != nil {
 		return err
 	}
-	return sc.Quit()
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return errors.New("empty reply")
+	}
+
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	if sc := c.sendCli; sc != nil {
+		if c.sendConn != nil {
+			_ = c.sendConn.SetDeadline(deadlineFor(ctx, 30*time.Second))
+		}
+		if err := sc.Noop(); err == nil {
+			if err := c.sendOnce(sc, addr, body); err == nil {
+				return nil
+			}
+			// Leave no half-finished transaction behind on a reused link.
+			_ = sc.Reset()
+		}
+		c.dropSMTPLocked()
+	}
+
+	sc, conn, err := c.openSMTP(ctx)
+	if err != nil {
+		return err
+	}
+	if err := c.sendOnce(sc, addr, body); err != nil {
+		_ = sc.Close()
+		_ = conn.Close()
+		return err
+	}
+	c.sendCli, c.sendConn = sc, conn
+	return nil
 }
 
 func parseRawGmailMessage(id string, data []byte, snippet string, internalDate time.Time) (GmailMessage, error) {

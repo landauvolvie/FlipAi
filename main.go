@@ -319,6 +319,12 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 		activity.Add("warn", "gmail", "Gmail backend is not ready: "+truncate(ge.Error(), 220), "", "", "")
 	}
 
+	// The App Password backend keeps pooled IMAP/SMTP connections open between
+	// polls and replies; release them on shutdown.
+	if closer, ok := mailClient.(interface{ Close() }); ok {
+		defer closer.Close()
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	app := &App{dataDir: dataDir, configPath: cfgPath, statePath: statePath, tokenPath: tokenPath, cfg: cfg, mail: mailClient, gmail: oauthClient, stop: cancel}

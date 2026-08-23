@@ -13,6 +13,7 @@ type fakeMailClient struct {
 	msg    GmailMessage
 	sentTo string
 	sent   string
+	all    []string
 }
 
 func (f *fakeMailClient) Authorized() bool                                  { return true }
@@ -24,16 +25,25 @@ func (f *fakeMailClient) SendText(_ context.Context, to string, body string) err
 	defer f.mu.Unlock()
 	f.sentTo = to
 	f.sent = body
+	f.all = append(f.all, body)
 	return nil
 }
+
+// sentTexts returns every text delivered so far. An ack and a result are now
+// separate messages, so tests assert against the whole conversation.
+func (f *fakeMailClient) sentTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.all...)
+}
+
+func (f *fakeMailClient) joined() string { return strings.Join(f.sentTexts(), "\n") }
 
 func TestEndToEndIncomingVoiceStatusAndReply(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
 	cfg.Gmail.Method = GmailMethodAppPassword
 	cfg.GoogleVoice.AllowedFrom = "8455551234\n2125557777"
 	cfg.GoogleVoice.RequiredSubjectPhrase = "new text message from"
-	cfg.GoogleVoice.GmailReplyFallback = true
-	cfg.GoogleVoice.SendReplyViaAgentBrowser = false
 	if err := setSecurityCode(&cfg, "482913"); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +79,6 @@ func TestEndToEndUnauthorizedSenderNeverExecutesOrReplies(t *testing.T) {
 	cfg.Gmail.Method = GmailMethodAppPassword
 	cfg.GoogleVoice.AllowedFrom = "8455551234\n2125557777"
 	cfg.GoogleVoice.RequiredSubjectPhrase = "new text message from"
-	cfg.GoogleVoice.GmailReplyFallback = true
 	if err := setSecurityCode(&cfg, "482913"); err != nil {
 		t.Fatal(err)
 	}

@@ -52,6 +52,10 @@ func fakeIMAPDial(raw string) func(context.Context) (net.Conn, error) {
 					_, _ = fmt.Fprintf(server, "%s OK LOGIN completed\r\n", tag)
 				case strings.Contains(upper, " EXAMINE INBOX"):
 					_, _ = fmt.Fprintf(server, "* 2 EXISTS\r\n%s OK EXAMINE completed\r\n", tag)
+				case strings.HasSuffix(upper, " NOOP"):
+					// Real servers flush pending untagged updates here; the
+					// pooled session issues this before reusing a connection.
+					_, _ = fmt.Fprintf(server, "* 2 EXISTS\r\n%s OK NOOP completed\r\n", tag)
 				case strings.Contains(upper, " UID SEARCH "):
 					_, _ = fmt.Fprintf(server, "* SEARCH 41 42\r\n%s OK SEARCH completed\r\n", tag)
 				case strings.Contains(upper, " UID FETCH 42 "):

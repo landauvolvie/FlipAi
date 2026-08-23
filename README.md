@@ -133,9 +133,20 @@ It strips Anthropic API-key environment variables and requires a signed-in subsc
 
 ## Replies
 
-For each accepted command, FlipAi tells the selected agent the **exact authenticated sender phone number** and instructs it to reply through Google Voice to that number when browser/computer tools are genuinely available.
+FlipAi delivers every reply itself. The agent is never asked to open a browser, find a conversation, or confirm that it sent anything.
 
-If the agent cannot confirm a Google Voice browser send, FlipAi can use the authenticated Google Voice email Reply-To fallback instead.
+When a turn finishes, FlipAi replies to the authenticated Google Voice conversation address (`…@txt.voice.google.com`), and Google converts that email back into an SMS. This is faster than a browser send by a wide margin, it cannot half-fail, and because delivery is decided in Go rather than by model output, nothing written in an incoming SMS can redirect or suppress a reply.
+
+The agent therefore keeps exactly the capabilities it has at the desktop. Texting `C: open my browser and compare these two tabs` still uses the browser — because *you* asked for it, not because FlipAi told it to.
+
+An answer longer than **Characters per text** is split across numbered messages (`1/3`, `2/3`, …) up to **Maximum texts per answer**, rather than being cut off.
+
+Two optional status texts are on by default and can be turned off in Settings:
+
+- **Text me when the agent starts** — a one-line confirmation within seconds of your text, so you know it landed before the work finishes.
+- **Text me progress while it works** — periodic updates during a long turn, naming the current step when the agent reports one.
+
+`STATUS` is answered directly by the bridge without involving an agent, so it stays instant even while a long turn is running. Commands that arrive during a turn are queued and run in order.
 
 ## Runtime data
 

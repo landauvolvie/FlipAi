@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ClaudeAuthStatus struct {
@@ -19,13 +20,22 @@ type ClaudeAuthStatus struct {
 	SubscriptionType string `json:"subscriptionType"`
 }
 
+// claudeAuthTTL is how long a validated auth status is reused. The check exists
+// to refuse API/Console billing, which does not change mid-session; running it
+// as a separate subprocess before every single SMS added seconds to each turn
+// for no benefit. A failed run clears the cache, so a genuine sign-out is
+// caught on the next attempt.
+const claudeAuthTTL = 10 * time.Minute
+
 type ClaudeClient struct {
-	path            string
-	cwd             string
-	cfg             ClaudeConfig
-	mu              sync.Mutex
-	chromeChecked   bool
-	chromeSupported bool
+	path string
+	cwd  string
+	cfg  ClaudeConfig
+	mu   sync.Mutex
+
+	authCached ClaudeAuthStatus
+	authAt     time.Time
+	authValid  bool
 }
 
 type claudeResult struct {
@@ -70,23 +80,30 @@ func scrubAnthropicEnv(env []string) []string {
 	return out
 }
 
-func (c *ClaudeClient) supportsChrome(ctx context.Context) bool {
+// cachedAuthStatus returns a recent validated status, or runs the real check.
+func (c *ClaudeClient) cachedAuthStatus(ctx context.Context) (ClaudeAuthStatus, error) {
 	c.mu.Lock()
-	if c.chromeChecked {
-		v := c.chromeSupported
+	if c.authValid && time.Since(c.authAt) < claudeAuthTTL {
+		st := c.authCached
 		c.mu.Unlock()
-		return v
+		return st, nil
 	}
 	c.mu.Unlock()
-	cmd := exec.CommandContext(ctx, c.path, "--help")
-	cmd.Env = scrubAnthropicEnv(os.Environ())
-	hideWindow(cmd)
-	out, _ := cmd.CombinedOutput()
-	v := strings.Contains(string(out), "--chrome")
+
+	st, err := c.authStatus(ctx)
+	if err != nil {
+		return st, err
+	}
 	c.mu.Lock()
-	c.chromeChecked, c.chromeSupported = true, v
+	c.authCached, c.authAt, c.authValid = st, time.Now(), true
 	c.mu.Unlock()
-	return v
+	return st, nil
+}
+
+func (c *ClaudeClient) invalidateAuthCache() {
+	c.mu.Lock()
+	c.authValid = false
+	c.mu.Unlock()
 }
 
 // authStatus deliberately parses Claude's JSON even when the command exits 1.
@@ -170,7 +187,7 @@ func (c *ClaudeClient) Test(ctx context.Context) error {
 }
 
 func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (result, newSession string, err error) {
-	st, err := c.authStatus(ctx)
+	st, err := c.cachedAuthStatus(ctx)
 	if err != nil {
 		return "", sessionID, err
 	}
@@ -186,11 +203,16 @@ func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (resul
 		pm = "acceptEdits"
 	}
 	args = append(args, "--permission-mode", pm)
-	if c.cfg.UseChrome && c.supportsChrome(ctx) {
+	// Claude keeps whatever capabilities it has at the desktop, browser
+	// included, so "check my sales in the browser" works by text too. FlipAi
+	// no longer probes `claude --help` for this: the flag is configuration.
+	if c.cfg.UseChrome {
 		args = append(args, "--chrome")
 	}
 	out, runErr := c.runPrint(ctx, args)
 	if runErr != nil {
+		// A failed run may mean the CLI was signed out since the last check.
+		c.invalidateAuthCache()
 		if !st.LoggedIn {
 			return "", sessionID, fmt.Errorf("Claude Code CLI is not usable from FlipAi yet: %v: %s. Claude Desktop sign-in is separate from Claude Code CLI sign-in; complete Claude Code /login once on this Windows account", runErr, truncate(string(out), 800))
 		}

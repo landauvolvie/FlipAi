@@ -17,6 +17,11 @@ import (
 
 const version = "0.6.3"
 
+// defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
+// command. FlipAi delivers the reply itself, so the agent is never told how or
+// where to send anything — only that its answer travels as a text message.
+const defaultReplyStyleHint = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."
+
 type Config struct {
 	CodexPath          string            `json:"codexPath"`
 	ClaudePath         string            `json:"claudePath"`
@@ -42,12 +47,35 @@ type GmailConfig struct {
 }
 
 type GoogleVoiceConfig struct {
-	AllowedFrom              string `json:"allowedFrom"`
-	RequiredSubjectPhrase    string `json:"requiredSubjectPhrase"`
-	ReplyTo                  string `json:"replyTo"`
-	ReplyMaxChars            int    `json:"replyMaxChars"`
-	SendReplyViaAgentBrowser bool   `json:"sendReplyViaAgentBrowser"`
-	GmailReplyFallback       bool   `json:"gmailReplyFallback"`
+	AllowedFrom           string `json:"allowedFrom"`
+	RequiredSubjectPhrase string `json:"requiredSubjectPhrase"`
+	ReplyTo               string `json:"replyTo"`
+	ReplyMaxChars         int    `json:"replyMaxChars"`
+
+	// ReplyStyleHint is the single line of framing FlipAi appends to the SMS
+	// command before handing it to the agent. Everything else the agent sees is
+	// the user's own text, so texting behaves like sitting at the desktop app.
+	ReplyStyleHint string `json:"replyStyleHint"`
+
+	// MaxReplyParts caps how many numbered SMS parts a long answer is split
+	// into. Splitting replaced truncation so a desktop-length answer survives
+	// the trip to the phone.
+	MaxReplyParts int `json:"maxReplyParts"`
+
+	// ReplyAck texts a one-line confirmation the moment a command is
+	// authenticated, before the agent starts. ProgressUpdates texts a periodic
+	// "still working" line during long turns. Google Voice texts are free, so
+	// both default on; both are user toggles in Settings.
+	ReplyAck                bool `json:"replyAck"`
+	ProgressUpdates         bool `json:"progressUpdates"`
+	ProgressIntervalSeconds int  `json:"progressIntervalSeconds"`
+
+	// Deprecated: FlipAi now always delivers replies itself over the
+	// authenticated Google Voice email address. These fields are retained only
+	// so existing bridge.json files keep parsing; loadConfig forces them and
+	// nothing reads them.
+	SendReplyViaAgentBrowser bool `json:"sendReplyViaAgentBrowser"`
+	GmailReplyFallback       bool `json:"gmailReplyFallback"`
 }
 
 type CodexConfig struct {
@@ -144,9 +172,17 @@ func defaultConfig(dataDir string) Config {
 		Listen: "127.0.0.1:8765", LocalToken: tok, TurnTimeoutMinutes: 90,
 		DefaultAgent: "C",
 		Gmail:        GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
-		GoogleVoice:  GoogleVoiceConfig{RequiredSubjectPhrase: "new text message from", ReplyMaxChars: 300, SendReplyViaAgentBrowser: true, GmailReplyFallback: true},
-		Codex:        CodexConfig{ApprovalPolicy: "on-request"},
-		Claude:       ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
+		GoogleVoice: GoogleVoiceConfig{
+			RequiredSubjectPhrase:   "new text message from",
+			ReplyMaxChars:           300,
+			ReplyStyleHint:          defaultReplyStyleHint,
+			MaxReplyParts:           4,
+			ReplyAck:                true,
+			ProgressUpdates:         true,
+			ProgressIntervalSeconds: 120,
+		},
+		Codex:  CodexConfig{ApprovalPolicy: "on-request"},
+		Claude: ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
 	}
 }
 
@@ -184,6 +220,22 @@ func loadConfig(path, dataDir string) (Config, error) {
 	if cfg.GoogleVoice.ReplyMaxChars < 80 {
 		cfg.GoogleVoice.ReplyMaxChars = 300
 	}
+	if strings.TrimSpace(cfg.GoogleVoice.ReplyStyleHint) == "" {
+		cfg.GoogleVoice.ReplyStyleHint = defaultReplyStyleHint
+	}
+	if cfg.GoogleVoice.MaxReplyParts < 1 {
+		cfg.GoogleVoice.MaxReplyParts = 4
+	}
+	if cfg.GoogleVoice.MaxReplyParts > 10 {
+		cfg.GoogleVoice.MaxReplyParts = 10
+	}
+	if cfg.GoogleVoice.ProgressIntervalSeconds < 30 {
+		cfg.GoogleVoice.ProgressIntervalSeconds = 120
+	}
+	// FlipAi always delivers the reply itself now. Force the retired fields so
+	// an upgraded install cannot resurrect the agent-driven browser reply.
+	cfg.GoogleVoice.SendReplyViaAgentBrowser = false
+	cfg.GoogleVoice.GmailReplyFallback = true
 	if cfg.Codex.ApprovalPolicy == "" || cfg.Codex.ApprovalPolicy == "unlessTrusted" {
 		cfg.Codex.ApprovalPolicy = "on-request"
 	}

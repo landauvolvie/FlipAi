@@ -71,8 +71,6 @@ func TestRealGoogleVoiceNotificationRunsCodexAndRepliesWithoutReplyTo(t *testing
 	cfg.Gmail.Method = GmailMethodAppPassword
 	cfg.GoogleVoice.AllowedFrom = "8453241813"
 	cfg.GoogleVoice.RequiredSubjectPhrase = "new text message from"
-	cfg.GoogleVoice.GmailReplyFallback = true
-	cfg.GoogleVoice.SendReplyViaAgentBrowser = false
 	cfg.CodexPath = os.Args[0]
 	if err := setSecurityCode(&cfg, "123456"); err != nil {
 		t.Fatal(err)
@@ -87,13 +85,18 @@ func TestRealGoogleVoiceNotificationRunsCodexAndRepliesWithoutReplyTo(t *testing
 	fm := &fakeMailClient{msg: realVoiceMessageFixture()}
 	stateFile := t.TempDir() + "/state.json"
 	b := NewBridge(cfg, stateFile, State{GmailBaselineUnix: time.Now().Add(-time.Minute).Unix()}, fm, c, nil)
+	// poll authenticates and enqueues; drainQueue runs the agent turn. In
+	// production these are a mailbox loop and a worker goroutine.
 	b.poll(ctx)
+	b.drainQueue(ctx)
 
-	fm.mu.Lock()
-	got, gotTo := fm.sent, fm.sentTo
-	fm.mu.Unlock()
+	got, gotTo := fm.joined(), fm.sentTo
 	if !strings.Contains(got, "FLIPAI_CODEX_OK") {
 		t.Fatalf("real Voice message did not make it through Codex: %q", got)
+	}
+	// The ack lands first, before the agent has produced anything.
+	if texts := fm.sentTexts(); len(texts) < 2 || !strings.Contains(texts[0], "working on it") {
+		t.Fatalf("expected an ack text ahead of the result, got %q", texts)
 	}
 	wantTo := "18453842803.18453241813.V4lzKMXhjH@txt.voice.google.com"
 	if gotTo != wantTo {
@@ -103,7 +106,7 @@ func TestRealGoogleVoiceNotificationRunsCodexAndRepliesWithoutReplyTo(t *testing
 	events := b.activity.Recent(100)
 	blob, _ := json.Marshal(events)
 	logText := string(blob)
-	for _, want := range []string{"New Google Voice candidate detected", "sender verified", "routed to Codex", "Codex command started", "Agent completed successfully", "Reply sent through Gmail"} {
+	for _, want := range []string{"New Google Voice candidate detected", "sender verified", "routed to Codex", "Codex command started", "Agent completed successfully", "Reply sent through Google Voice"} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("activity log missing %q: %s", want, logText)
 		}
