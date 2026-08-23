@@ -102,7 +102,10 @@ func TestCodexEphemeralSmokeTest(t *testing.T) {
 }
 
 func TestClaudeSubscriptionConnector(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The race detector significantly slows subprocess startup on Windows.
+	// Keep this comfortably above that instrumentation overhead so the test
+	// verifies Claude behavior rather than racing a synthetic 5-second deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	c := NewClaudeClient(os.Args[0], "", ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true})
 	if err := c.Test(ctx); err != nil { t.Fatal(err) }
