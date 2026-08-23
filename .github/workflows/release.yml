@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - VERSION
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -265,7 +266,7 @@ jobs:
             installer-output/FlipAi-Setup-*.exe
             installer-output/SHA256SUMS.txt
 
-      - name: Create GitHub Release if this version is new
+      - name: Create or refresh GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -273,9 +274,15 @@ jobs:
           $tag = '${{ steps.version.outputs.tag }}'
           $setup = '${{ steps.package.outputs.setup }}'
           $sums = '.\installer-output\SHA256SUMS.txt'
+          $notes = "Download **FlipAi-Setup-v${{ steps.version.outputs.version }}.exe**. It installs per-user with no administrator rights, adds FlipAi to the Start Menu and Windows Apps/Programs list, starts the tray bridge, and opens the first-time setup page."
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release $tag already exists; leaving it unchanged."
+            gh release upload $tag $setup $sums --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not refresh assets on release $tag" }
+            gh release edit $tag --title "FlipAi $tag" --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not refresh release notes for $tag" }
+            Write-Host "Release $tag refreshed with the current tested installer."
             exit 0
           }
-          gh release create $tag $setup $sums --target $env:GITHUB_SHA --title "FlipAi $tag" --notes "Download **FlipAi-Setup-v${{ steps.version.outputs.version }}.exe**. It installs per-user with no administrator rights, adds FlipAi to the Start Menu and Windows Apps/Programs list, starts the tray bridge, and opens the first-time setup page."
+          gh release create $tag $setup $sums --target $env:GITHUB_SHA --title "FlipAi $tag" --notes $notes
+          if ($LASTEXITCODE -ne 0) { throw "Could not create release $tag" }
