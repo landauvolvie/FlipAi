@@ -47,10 +47,11 @@ type CodexClient struct {
 	threadMu      sync.Mutex
 	subscribed    map[string]bool
 	turnThreads   map[string]string
+	completedTurns map[string]bool
 }
 
 func NewCodexClient(path, cwd string) *CodexClient {
-	return &CodexClient{path: path, cwd: cwd, pending: map[int64]chan pendingResponse{}, notifications: make(chan rpcEnvelope, 2048), done: make(chan struct{}), subscribed: map[string]bool{}, turnThreads: map[string]string{}}
+	return &CodexClient{path: path, cwd: cwd, pending: map[int64]chan pendingResponse{}, notifications: make(chan rpcEnvelope, 2048), done: make(chan struct{}), subscribed: map[string]bool{}, turnThreads: map[string]string{}, completedTurns: map[string]bool{}}
 }
 
 // scrubOpenAIEnv prevents an unrelated machine-level API key or custom API
@@ -173,9 +174,7 @@ func (c *CodexClient) route(m rpcEnvelope) {
 		if m.Method == "turn/completed" {
 			var p struct { Turn struct { ID string `json:"id"` } `json:"turn"` }
 			if json.Unmarshal(m.Params, &p) == nil && p.Turn.ID != "" {
-				if tid := c.takeTurnThread(p.Turn.ID); tid != "" {
-					go c.releaseThreadWithRetry(tid)
-				}
+				c.markTurnCompleted(p.Turn.ID)
 			}
 		}
 	}
@@ -254,17 +253,36 @@ func (c *CodexClient) rememberTurnThread(turnID, threadID string) {
 	if turnID == "" || threadID == "" {
 		return
 	}
+	releaseNow := false
 	c.threadMu.Lock()
-	c.turnThreads[turnID] = threadID
+	if c.completedTurns[turnID] {
+		delete(c.completedTurns, turnID)
+		releaseNow = true
+	} else {
+		c.turnThreads[turnID] = threadID
+	}
 	c.threadMu.Unlock()
+	if releaseNow {
+		go c.releaseThreadWithRetry(threadID)
+	}
 }
 
-func (c *CodexClient) takeTurnThread(turnID string) string {
+func (c *CodexClient) markTurnCompleted(turnID string) {
+	if turnID == "" {
+		return
+	}
+	threadID := ""
 	c.threadMu.Lock()
-	defer c.threadMu.Unlock()
-	tid := c.turnThreads[turnID]
-	delete(c.turnThreads, turnID)
-	return tid
+	threadID = c.turnThreads[turnID]
+	if threadID != "" {
+		delete(c.turnThreads, turnID)
+	} else {
+		c.completedTurns[turnID] = true
+	}
+	c.threadMu.Unlock()
+	if threadID != "" {
+		go c.releaseThreadWithRetry(threadID)
+	}
 }
 
 func startedThreadID(raw json.RawMessage) string {

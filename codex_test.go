@@ -74,8 +74,8 @@ func mockCodexServer() {
 		case "thread/start":
 			if os.Getenv("FLIPAI_TEST_REQUIRE_FULL_ACCESS") == "1" {
 				p, _ := m["params"].(map[string]any)
-				if p["approvalPolicy"] != "never" || p["sandbox"] != "danger-full-access" {
-					_ = enc.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32001, "message": "missing full user access thread settings"}})
+				if p["approvalPolicy"] != "never" || p["sandbox"] != "danger-full-access" || p["ephemeral"] != false {
+					_ = enc.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32001, "message": "missing full user access/durable thread settings"}})
 					continue
 				}
 			}

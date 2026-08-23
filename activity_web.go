@@ -196,6 +196,7 @@ func withActivityRoutes(a *App, base http.Handler) http.Handler {
 			s = strings.Replace(s, `<div class="field"><label>SMS security code`, toggle+`<div class="field"><label>SMS security code`, 1)
 			s = strings.Replace(s, `Uses the local Codex App Server. FlipAi requires <b>Sign in with ChatGPT</b> and rejects API/provider auth.`, `Uses the local Codex App Server with <b>Sign in with ChatGPT</b>. SMS turns get full permissions of this Windows user (no Codex sandbox and no UAC/admin elevation), then the thread is released so Codex Desktop can open the same history.`, 1)
 			if !requireCode {
+				s = strings.Replace(s, `name="securityCode" autocomplete="new-password" placeholder="Private code required at the start of every text" required>`, `name="securityCode" autocomplete="new-password" placeholder="Private code required at the start of every text">`, 1)
 				s = strings.Replace(s, `Private code required at the start of every text`, `Optional code — turn on “Require SMS security code” to enforce it`, 1)
 				s = strings.ReplaceAll(s, `YOURCODE C:`, `C:`)
 				s = strings.ReplaceAll(s, `YOURCODE A:`, `A:`)
