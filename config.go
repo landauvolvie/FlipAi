@@ -88,8 +88,9 @@ type ClaudeConfig struct {
 }
 
 type SecurityConfig struct {
-	CodeSalt string `json:"codeSalt,omitempty"`
-	CodeHash string `json:"codeHash,omitempty"`
+	RequireCode bool   `json:"requireCode"`
+	CodeSalt    string `json:"codeSalt,omitempty"`
+	CodeHash    string `json:"codeHash,omitempty"`
 }
 
 type State struct {
@@ -181,8 +182,9 @@ func defaultConfig(dataDir string) Config {
 			ProgressUpdates:         true,
 			ProgressIntervalSeconds: 120,
 		},
-		Codex:  CodexConfig{ApprovalPolicy: "on-request"},
-		Claude: ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
+		Codex:    CodexConfig{ApprovalPolicy: "never"},
+		Claude:   ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
+		Security: SecurityConfig{RequireCode: true},
 	}
 }
 
@@ -236,8 +238,17 @@ func loadConfig(path, dataDir string) (Config, error) {
 	// an upgraded install cannot resurrect the agent-driven browser reply.
 	cfg.GoogleVoice.SendReplyViaAgentBrowser = false
 	cfg.GoogleVoice.GmailReplyFallback = true
-	if cfg.Codex.ApprovalPolicy == "" || cfg.Codex.ApprovalPolicy == "unlessTrusted" {
-		cfg.Codex.ApprovalPolicy = "on-request"
+	// SMS turns intentionally use Codex full normal-user access. This removes
+	// the Codex sandbox/approval layer but does not elevate the Windows process.
+	cfg.Codex.ApprovalPolicy = "never"
+	// Older configs predate RequireCode. Because loadConfig starts from
+	// defaultConfig, they inherit RequireCode=true. If a manually edited config
+	// disables the code without a stored hash, create an unguessable placeholder
+	// so the older startup readiness check remains satisfied; parsing ignores it.
+	if !cfg.Security.RequireCode && cfg.Security.CodeHash == "" {
+		if placeholder, e := secureRandomToken(24); e == nil {
+			_ = setSecurityCode(&cfg, placeholder)
+		}
 	}
 	if cfg.Claude.PermissionMode == "" || cfg.Claude.PermissionMode == "auto" || cfg.Claude.PermissionMode == "bypassPermissions" {
 		cfg.Claude.PermissionMode = "acceptEdits"

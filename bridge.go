@@ -220,17 +220,30 @@ type remoteCommand struct {
 }
 
 func parseRemoteCommand(raw string, cfg Config) (remoteCommand, error) {
-	f := strings.Fields(strings.TrimSpace(raw))
-	if len(f) < 2 {
-		return remoteCommand{}, errors.New("missing SMS security code or command")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return remoteCommand{}, errors.New("empty command")
 	}
-	if !verifySecurityCode(cfg, f[0]) {
-		return remoteCommand{}, errors.New("invalid SMS security code")
+	rest := raw
+	if cfg.Security.RequireCode {
+		f := strings.Fields(raw)
+		if len(f) < 2 {
+			return remoteCommand{}, errors.New("missing SMS security code or command")
+		}
+		if !verifySecurityCode(cfg, f[0]) {
+			return remoteCommand{}, errors.New("invalid SMS security code")
+		}
+		rest = strings.TrimSpace(strings.TrimPrefix(raw, f[0]))
 	}
-	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), f[0]))
 	up := strings.ToUpper(rest)
 	if up == "STATUS" {
 		return remoteCommand{Status: true}, nil
+	}
+	if up == "C NEW" || up == "C: NEW" {
+		return remoteCommand{Agent: "C", New: true}, nil
+	}
+	if up == "A NEW" || up == "A: NEW" {
+		return remoteCommand{Agent: "A", New: true}, nil
 	}
 	agent := cfg.DefaultAgent
 	text := rest
@@ -240,10 +253,6 @@ func parseRemoteCommand(raw string, cfg Config) (remoteCommand, error) {
 	} else if strings.HasPrefix(up, "A:") {
 		agent = "A"
 		text = strings.TrimSpace(rest[2:])
-	} else if up == "C NEW" || up == "C: NEW" {
-		return remoteCommand{Agent: "C", New: true}, nil
-	} else if up == "A NEW" || up == "A: NEW" {
-		return remoteCommand{Agent: "A", New: true}, nil
 	}
 	if agent != "A" && agent != "C" {
 		agent = "C"

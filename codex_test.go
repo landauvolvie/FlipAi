@@ -72,8 +72,23 @@ func mockCodexServer() {
 			// selected provider; it does not mean the user is signed out.
 			_ = enc.Encode(map[string]any{"id": id, "result": map[string]any{"account": map[string]any{"type": "chatgpt", "email": "test@example.com", "planType": "pro"}, "requiresOpenaiAuth": true}})
 		case "thread/start":
+			if os.Getenv("FLIPAI_TEST_REQUIRE_FULL_ACCESS") == "1" {
+				p, _ := m["params"].(map[string]any)
+				if p["approvalPolicy"] != "never" || p["sandbox"] != "danger-full-access" || p["ephemeral"] != false {
+					_ = enc.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32001, "message": "missing full user access/durable thread settings"}})
+					continue
+				}
+			}
 			_ = enc.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thr_test", "ephemeral": true, "modelProvider": "openai"}, "modelProvider": "openai"}})
 		case "turn/start":
+			if os.Getenv("FLIPAI_TEST_REQUIRE_FULL_ACCESS") == "1" {
+				p, _ := m["params"].(map[string]any)
+				sp, _ := p["sandboxPolicy"].(map[string]any)
+				if p["approvalPolicy"] != "never" || sp["type"] != "dangerFullAccess" {
+					_ = enc.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32002, "message": "missing full user access turn settings"}})
+					continue
+				}
+			}
 			_ = enc.Encode(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn_test", "status": "inProgress"}}})
 			params, _ := json.Marshal(m["params"])
 			reply := "Done."
