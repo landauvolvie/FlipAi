@@ -51,7 +51,7 @@ const setupHTML = `<!doctype html>
 <section class="card" id="agents"><div class="cardhead"><div class="heading"><div class="num">3</div><div><h2>Choose your agents</h2><p>FlipAi uses your local Codex and Claude subscription logins—not OpenAI or Anthropic API billing.</p></div></div><span class="badge neutral">Local agents</span></div>
 <div class="agentcards"><div class="agent"><div class="agenttop"><h3>Codex</h3><span class="badge neutral">C:</span></div><p>Uses the local Codex App Server. FlipAi requires <b>Sign in with ChatGPT</b> and rejects API/provider auth.</p><div class="actions"><a class="btn outline" href="/codex/test">Test Codex</a></div></div><div class="agent"><div class="agenttop"><h3>Claude</h3><span class="badge neutral">A:</span></div><p>Uses Claude Code under your Claude subscription login. API environment variables are stripped before launch.</p><div class="actions"><a class="btn outline" href="/claude/test">Test Claude</a></div></div></div>
 <div class="grid2"><div class="field"><label>Default agent</label><select name="defaultAgent"><option value="C" {{if eq .DefaultAgent "C"}}selected{{end}}>Codex (C:)</option><option value="A" {{if eq .DefaultAgent "A"}}selected{{end}}>Claude (A:)</option></select><p class="help">Explicit <b>C:</b> or <b>A:</b> always overrides the default.</p></div><div class="field"><label>Working folder</label><input type="text" name="cwd" value="{{.Cwd}}"><p class="help">The starting folder given to local agent processes.</p></div></div>
-<details class="advanced"><summary>Advanced agent paths & reply behavior</summary><div class="grid2"><div class="field"><label>Codex executable</label><input type="text" name="codexPath" value="{{.CodexPath}}" placeholder="codex"></div><div class="field"><label>Claude executable</label><input type="text" name="claudePath" value="{{.ClaudePath}}" placeholder="claude"></div></div><div class="grid2"><div class="field"><label>Characters per text</label><input type="number" name="replyMaxChars" min="80" max="1000" value="{{.ReplyMaxChars}}"></div><div class="field"><label>Maximum texts per answer</label><input type="number" name="maxReplyParts" min="1" max="10" value="{{.MaxReplyParts}}"></div></div><p class="help">A longer answer is split across numbered texts (1/3, 2/3, …) rather than cut off. FlipAi always sends replies itself through the authenticated Google Voice address, so the agent is never asked to open a browser to reply.</p><label class="checkrow"><input type="checkbox" name="replyAck" value="1" {{if .ReplyAck}}checked{{end}}><span><b>Text me when the agent starts</b><span>A one-line confirmation arrives within seconds of your text, so you know it was received before the work finishes.</span></span></label><label class="checkrow"><input type="checkbox" name="progressUpdates" value="1" {{if .ProgressUpdates}}checked{{end}}><span><b>Text me progress while it works</b><span>Periodic updates during a long turn, like watching the desktop app.</span></span></label><div class="grid2"><div class="field"><label>Progress update interval (seconds)</label><input type="number" name="progressInterval" min="30" max="3600" value="{{.ProgressInterval}}"></div></div></details>
+<details class="advanced"><summary>Advanced agent paths & reply behavior</summary><div class="grid2"><div class="field"><label>Codex executable</label><input type="text" name="codexPath" value="{{.CodexPath}}" placeholder="codex"></div><div class="field"><label>Claude executable</label><input type="text" name="claudePath" value="{{.ClaudePath}}" placeholder="claude"></div></div><div class="grid2"><div class="field"><label>Characters per text</label><input type="number" name="replyMaxChars" min="80" max="1000" value="{{.ReplyMaxChars}}"></div><div class="field"><label>Maximum texts per answer</label><input type="number" name="maxReplyParts" min="1" max="10" value="{{.MaxReplyParts}}"></div></div><p class="help">A longer answer is split across numbered texts (1/3, 2/3, …) rather than cut off. FlipAi always sends replies itself through the authenticated Google Voice address, so the agent is never asked to open a browser to reply.</p><label class="checkrow"><input type="checkbox" name="replyAck" value="1" {{if .ReplyAck}}checked{{end}}><span><b>Text me when the agent starts</b><span>A one-line confirmation arrives within seconds of your text, so you know it was received before the work finishes.</span></span></label><label class="checkrow"><input type="checkbox" name="progressUpdates" value="1" {{if .ProgressUpdates}}checked{{end}}><span><b>Text me progress while it works</b><span>Periodic updates during a long turn, like watching the desktop app.</span></span></label><div class="grid2"><div class="field"><label>Progress update interval (seconds)</label><input type="number" name="progressInterval" min="30" max="3600" value="{{.ProgressInterval}}"></div></div><div class="field"><label>Claude long-lived token <em>{{if .HasClaudeToken}}saved{{else}}optional{{end}}</em></label><input type="password" name="claudeToken" autocomplete="off" placeholder="{{if .HasClaudeToken}}leave blank to keep the saved token{{else}}paste the value from claude setup-token{{end}}"></div><p class="help">Claude Code CLI signs in separately from the Claude desktop app, and that browser session expires. Run <b>claude setup-token</b> in PowerShell once and paste the result here to keep the bridge signed in for far longer. It is stored with Windows DPAPI. This is optional &mdash; leave it empty to use the normal <b>claude /login</b> session. The token still expires eventually, and Claude reports it as inference-only, so clear it if anything behaves oddly.</p>{{if .HasClaudeToken}}<label class="checkrow"><input type="checkbox" name="clearClaudeToken" value="1"><span><b>Remove the saved Claude token</b><span>Go back to the normal Claude Code CLI login.</span></span></label>{{end}}</details>
 <div class="actions"><button class="primary" type="submit">Save all settings</button></div></section></form>
 <section class="card" id="startup"><div class="cardhead"><div class="heading"><div class="num">4</div><div><h2>Start with Windows</h2><p>Install for this Windows user only. No UAC prompt, service, scheduled task, driver, or Program Files write.</p></div></div><span class="badge neutral">No admin</span></div><div class="codebox"><span class="mutedcode">Installed copy</span>  %LOCALAPPDATA%\Programs\AISMSBridge\AISMSBridge.exe<br><span class="mutedcode">Startup</span>         HKCU\Software\Microsoft\Windows\CurrentVersion\Run<br><span class="mutedcode">Starts</span>          after this user signs into Windows</div><div class="actions"><form action="/install" method="post"><button class="primary" type="submit">Install & start with Windows</button></form><form action="/startup/remove" method="post"><button class="secondary" type="submit">Disable startup</button></form></div><p class="help">The bridge continues while Windows is locked. Sleep or hibernate pauses it until Windows wakes. Some managed PCs can block user-profile executables with AppLocker/WDAC; FlipAi will report the failure instead of requesting elevation.</p></section>
 <section class="card" id="diagnostics"><div class="cardhead"><div class="heading"><div class="num">5</div><div><h2>Ready to text</h2><p>Closing this page does not stop FlipAi. The tray icon is the persistent control.</p></div></div>{{if .SetupComplete}}<span class="badge good">Configured</span>{{else}}<span class="badge attention">Setup incomplete</span>{{end}}</div><div class="grid2"><div><div class="codebox">YOURCODE C: check GitHub and fix the build<br>YOURCODE A: check Gmail and summarize today<br>YOURCODE STATUS</div></div><div><div class="codebox">C: → Codex<br>A: → Claude<br>No prefix → {{.DefaultAgentName}}<br>Reply → exact authenticated sender</div></div></div><details class="advanced"><summary>Technical status</summary><pre class="codebox">{{.Status}}</pre></details><div class="actions"><a class="btn outline" href="/gmail/test">Test Gmail</a><a class="btn outline" href="/codex/test">Test Codex</a><a class="btn outline" href="/claude/test">Test Claude</a><form action="/quit" method="post"><button class="dangerbtn" type="submit">Quit FlipAi completely</button></form></div><div class="footer-note">Tray → Open Settings reopens this page. Tray → Quit stops the tray, host, and watchdog.</div></section>
@@ -69,6 +69,7 @@ type pageData struct {
 	AllowedCount, ReplyMaxChars                                int
 	MaxReplyParts, ProgressInterval                            int
 	ReplyAck, ProgressUpdates                                  bool
+	HasClaudeToken                                             bool
 }
 
 type resultData struct{ Title, Message, Class, Icon string }
@@ -155,6 +156,7 @@ func (a *App) page(w http.ResponseWriter, r *http.Request) {
 		AllowedCount: len(allowed), ReplyMaxChars: cfg.GoogleVoice.ReplyMaxChars,
 		MaxReplyParts: cfg.GoogleVoice.MaxReplyParts, ProgressInterval: cfg.GoogleVoice.ProgressIntervalSeconds,
 		ReplyAck: cfg.GoogleVoice.ReplyAck, ProgressUpdates: cfg.GoogleVoice.ProgressUpdates,
+		HasClaudeToken: hasClaudeToken(claudeTokenPath(a.dataDir)),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = template.Must(template.New("setup").Parse(setupHTML)).Execute(w, d)
@@ -225,6 +227,21 @@ func (a *App) saveSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.GoogleVoice.ReplyAck = r.FormValue("replyAck") == "1"
 	cfg.GoogleVoice.ProgressUpdates = r.FormValue("progressUpdates") == "1"
+	// The Claude token lives in its own DPAPI-protected file, never in
+	// bridge.json. An empty field keeps whatever is already stored, so the
+	// Settings page never has to render the secret back to the browser.
+	tokenFile := claudeTokenPath(a.dataDir)
+	if r.FormValue("clearClaudeToken") == "1" {
+		if err := clearClaudeToken(tokenFile); err != nil {
+			renderResult(w, 500, false, "Could not remove the Claude token", err.Error())
+			return
+		}
+	} else if v := strings.TrimSpace(r.FormValue("claudeToken")); v != "" {
+		if err := saveClaudeToken(tokenFile, v); err != nil {
+			renderResult(w, 400, false, "Claude token is invalid", err.Error())
+			return
+		}
+	}
 	if code := strings.TrimSpace(r.FormValue("securityCode")); code != "" {
 		if err := setSecurityCode(&cfg, code); err != nil {
 			renderResult(w, 400, false, "Security code is invalid", err.Error())
@@ -419,9 +436,9 @@ func (a *App) claudeTest(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	c := NewClaudeClient(cfg.ClaudePath, cfg.Cwd, cfg.Claude)
+	c := a.newClaudeClient(cfg)
 	if err := c.Test(ctx); err != nil {
-		renderResult(w, 500, false, "Claude is not ready", err.Error()+"\n\nOpen Claude Code on this Windows account and sign in with your Claude subscription, then test again.")
+		renderResult(w, 500, false, "Claude is not ready", friendlyAgentError(err))
 		return
 	}
 	renderResult(w, 200, true, "Claude is ready", "Claude Code subscription authentication is available. A: messages can be routed to Claude.")
@@ -513,7 +530,7 @@ func (a *App) startBridge(ctx context.Context) {
 			codex = c
 		}
 	}
-	claude := NewClaudeClient(cfg.ClaudePath, cfg.Cwd, cfg.Claude)
+	claude := a.newClaudeClient(cfg)
 	b := NewBridge(cfg, a.statePath, loadState(a.statePath), mc, codex, claude)
 	if codex != nil {
 		tctx, cancel := context.WithTimeout(ctx, 20*time.Second)

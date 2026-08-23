@@ -35,23 +35,27 @@ type pendingResponse struct {
 }
 
 type CodexClient struct {
-	path, cwd     string
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	writeMu       sync.Mutex
-	pendingMu     sync.Mutex
-	pending       map[int64]chan pendingResponse
-	nextID        atomic.Int64
-	notifications chan rpcEnvelope
-	done          chan struct{}
-	threadMu      sync.Mutex
-	subscribed    map[string]bool
-	turnThreads   map[string]string
+	path, cwd      string
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	writeMu        sync.Mutex
+	pendingMu      sync.Mutex
+	pending        map[int64]chan pendingResponse
+	nextID         atomic.Int64
+	notifications  chan rpcEnvelope
+	done           chan struct{}
+	threadMu       sync.Mutex
+	subscribed     map[string]bool
+	turnThreads    map[string]string
 	completedTurns map[string]bool
+	// ephemeralThreads records threads started with ephemeral:true. Codex never
+	// writes a rollout for those, so they can be neither handed to Codex Desktop
+	// nor resumed — attempting either fails with "no rollout found".
+	ephemeralThreads map[string]bool
 }
 
 func NewCodexClient(path, cwd string) *CodexClient {
-	return &CodexClient{path: path, cwd: cwd, pending: map[int64]chan pendingResponse{}, notifications: make(chan rpcEnvelope, 2048), done: make(chan struct{}), subscribed: map[string]bool{}, turnThreads: map[string]string{}, completedTurns: map[string]bool{}}
+	return &CodexClient{path: path, cwd: cwd, pending: map[int64]chan pendingResponse{}, notifications: make(chan rpcEnvelope, 2048), done: make(chan struct{}), subscribed: map[string]bool{}, turnThreads: map[string]string{}, completedTurns: map[string]bool{}, ephemeralThreads: map[string]bool{}}
 }
 
 // scrubOpenAIEnv prevents an unrelated machine-level API key or custom API
@@ -172,7 +176,11 @@ func (c *CodexClient) route(m rpcEnvelope) {
 			log.Printf("Codex notification queue full: %s", m.Method)
 		}
 		if m.Method == "turn/completed" {
-			var p struct { Turn struct { ID string `json:"id"` } `json:"turn"` }
+			var p struct {
+				Turn struct {
+					ID string `json:"id"`
+				} `json:"turn"`
+			}
 			if json.Unmarshal(m.Params, &p) == nil && p.Turn.ID != "" {
 				c.markTurnCompleted(p.Turn.ID)
 			}
@@ -249,6 +257,41 @@ func (c *CodexClient) threadSubscribed(threadID string) bool {
 	return c.subscribed[threadID]
 }
 
+func (c *CodexClient) markEphemeralThread(threadID string, ephemeral bool) {
+	if threadID == "" || !ephemeral {
+		return
+	}
+	c.threadMu.Lock()
+	c.ephemeralThreads[threadID] = true
+	c.threadMu.Unlock()
+}
+
+func (c *CodexClient) threadIsEphemeral(threadID string) bool {
+	if threadID == "" {
+		return false
+	}
+	c.threadMu.Lock()
+	defer c.threadMu.Unlock()
+	return c.ephemeralThreads[threadID]
+}
+
+func (c *CodexClient) forgetThread(threadID string) {
+	if threadID == "" {
+		return
+	}
+	c.threadMu.Lock()
+	delete(c.ephemeralThreads, threadID)
+	c.threadMu.Unlock()
+}
+
+// boolParam reads a boolean request parameter, tolerating the interface{} typing
+// that cloneParamsMap produces.
+func boolParam(params any, key string) bool {
+	m, _ := params.(map[string]any)
+	v, _ := m[key].(bool)
+	return v
+}
+
 func (c *CodexClient) rememberTurnThread(turnID, threadID string) {
 	if turnID == "" || threadID == "" {
 		return
@@ -286,7 +329,11 @@ func (c *CodexClient) markTurnCompleted(turnID string) {
 }
 
 func startedThreadID(raw json.RawMessage) string {
-	var v struct { Thread struct { ID string `json:"id"` } `json:"thread"` }
+	var v struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
 	if json.Unmarshal(raw, &v) != nil {
 		return ""
 	}
@@ -294,7 +341,11 @@ func startedThreadID(raw json.RawMessage) string {
 }
 
 func startedTurnID(raw json.RawMessage) string {
-	var v struct { Turn struct { ID string `json:"id"` } `json:"turn"` }
+	var v struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
 	if json.Unmarshal(raw, &v) != nil {
 		return ""
 	}
@@ -332,8 +383,12 @@ func (c *CodexClient) requestRaw(ctx context.Context, method string, params any)
 	}
 }
 
+// releaseThread hands a thread back so Codex Desktop can open the same history.
+// Ephemeral threads are exempt: Codex persists no rollout for them, so there is
+// nothing for the desktop app to open and unsubscribing would only make the
+// thread unusable for the rest of its own turn.
 func (c *CodexClient) releaseThread(ctx context.Context, threadID string) error {
-	if threadID == "" || !c.threadSubscribed(threadID) {
+	if threadID == "" || !c.threadSubscribed(threadID) || c.threadIsEphemeral(threadID) {
 		return nil
 	}
 	_, err := c.requestRaw(ctx, "thread/unsubscribe", map[string]any{"threadId": threadID})
@@ -357,14 +412,17 @@ func (c *CodexClient) releaseThreadWithRetry(threadID string) {
 }
 
 // Request wraps the raw JSON-RPC request with two FlipAi invariants:
-// 1) Codex gets full access available to this normal Windows user (never UAC).
-// 2) Persisted threads are released whenever FlipAi is not actively running a
-//    turn, so Codex Desktop can open the same history and continue it normally.
+//  1. Codex gets full access available to this normal Windows user (never UAC).
+//  2. Persisted threads are released whenever FlipAi is not actively running a
+//     turn, so Codex Desktop can open the same history and continue it normally.
 func (c *CodexClient) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	params = applyCodexRequestDefaults(method, params)
 	if method == "turn/start" {
 		tid := stringParam(params, "threadId")
-		if tid != "" && !c.threadSubscribed(tid) {
+		// An ephemeral thread has no rollout on disk and is never released, so it
+		// is still subscribed and must not be resumed. Resuming one always fails
+		// with "no rollout found", which is what broke the Codex test button.
+		if tid != "" && !c.threadSubscribed(tid) && !c.threadIsEphemeral(tid) {
 			resume := applyCodexRequestDefaults("thread/resume", map[string]any{"threadId": tid})
 			if _, err := c.requestRaw(ctx, "thread/resume", resume); err != nil {
 				return nil, fmt.Errorf("resume Codex thread %s: %w", tid, err)
@@ -381,6 +439,9 @@ func (c *CodexClient) Request(ctx context.Context, method string, params any) (j
 	case "thread/start":
 		if tid := startedThreadID(raw); tid != "" {
 			c.setThreadSubscribed(tid, true)
+			// Record this before any release attempt: releaseThread exempts
+			// ephemeral threads, and only durable ones go to Codex Desktop.
+			c.markEphemeralThread(tid, boolParam(params, "ephemeral"))
 			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if e := c.releaseThread(releaseCtx, tid); e != nil {
 				log.Printf("Codex thread/start handoff %s: %v", tid, e)
@@ -398,7 +459,9 @@ func (c *CodexClient) Request(ctx context.Context, method string, params any) (j
 	case "turn/start":
 		c.rememberTurnThread(startedTurnID(raw), stringParam(params, "threadId"))
 	case "thread/unsubscribe":
-		c.setThreadSubscribed(stringParam(params, "threadId"), false)
+		tid := stringParam(params, "threadId")
+		c.setThreadSubscribed(tid, false)
+		c.forgetThread(tid)
 	}
 	return raw, nil
 }

@@ -31,7 +31,10 @@ type ClaudeClient struct {
 	path string
 	cwd  string
 	cfg  ClaudeConfig
-	mu   sync.Mutex
+	// token is the optional long-lived `claude setup-token` value. Empty means
+	// fall back to the CLI's own browser login, exactly as before.
+	token string
+	mu    sync.Mutex
 
 	authCached ClaudeAuthStatus
 	authAt     time.Time
@@ -48,6 +51,14 @@ type claudeResult struct {
 
 func NewClaudeClient(path, cwd string, cfg ClaudeConfig) *ClaudeClient {
 	return &ClaudeClient{path: resolveClaudeExecutable(path), cwd: cwd, cfg: cfg}
+}
+
+// NewClaudeClientWithToken builds a client that authenticates with a stored
+// long-lived token instead of relying on the CLI's expiring browser session.
+func NewClaudeClientWithToken(path, cwd string, cfg ClaudeConfig, token string) *ClaudeClient {
+	c := NewClaudeClient(path, cwd, cfg)
+	c.token = strings.TrimSpace(token)
+	return c
 }
 
 // scrubAnthropicEnv prevents FlipAi from silently using API-key, custom
@@ -117,7 +128,7 @@ func (c *ClaudeClient) authStatus(ctx context.Context) (ClaudeAuthStatus, error)
 		return st, errors.New("Claude Code path is empty")
 	}
 	cmd := exec.CommandContext(ctx, c.path, "auth", "status")
-	cmd.Env = scrubAnthropicEnv(os.Environ())
+	cmd.Env = c.childEnv()
 	hideWindow(cmd)
 	out, runErr := cmd.CombinedOutput()
 	trimmed := bytes.TrimSpace(out)
@@ -142,12 +153,31 @@ func validateClaudeSubscriptionPath(st ClaudeAuthStatus) error {
 	return nil
 }
 
+// childEnv builds the environment for a Claude Code subprocess: the scrubbed
+// parent environment, plus the long-lived token when one is stored.
+// scrubAnthropicEnv deliberately preserves CLAUDE_CODE_OAUTH_TOKEN, so setting
+// it here is the supported way to keep an unattended bridge signed in.
+func (c *ClaudeClient) childEnv() []string {
+	env := scrubAnthropicEnv(os.Environ())
+	if tok := strings.TrimSpace(c.token); tok != "" {
+		// Drop any inherited value first so the stored token always wins.
+		out := env[:0]
+		for _, e := range env {
+			if !strings.HasPrefix(strings.ToUpper(e), "CLAUDE_CODE_OAUTH_TOKEN=") {
+				out = append(out, e)
+			}
+		}
+		env = append(out, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+	}
+	return env
+}
+
 func (c *ClaudeClient) runPrint(ctx context.Context, args []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	if c.cwd != "" {
 		cmd.Dir = c.cwd
 	}
-	cmd.Env = scrubAnthropicEnv(os.Environ())
+	cmd.Env = c.childEnv()
 	hideWindow(cmd)
 	return cmd.CombinedOutput()
 }

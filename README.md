@@ -131,6 +131,18 @@ claude -p "..." --output-format json
 
 It strips Anthropic API-key environment variables and requires a signed-in subscription account. Dangerous permission bypass mode is not used.
 
+## Keeping Claude signed in
+
+Claude Code CLI keeps its own sign-in, separate from the Claude desktop app. Being signed into Claude Desktop does **not** sign in the CLI, and the CLI's browser session eventually expires with `OAuth session expired and could not be refreshed`, which strands an unattended bridge.
+
+To avoid that, run this once in PowerShell and paste the value into **Settings → Advanced → Claude long-lived token**:
+
+```powershell
+claude setup-token
+```
+
+FlipAi stores it with Windows DPAPI and passes it to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`. The token is **optional**: with the field empty, FlipAi uses the normal `claude /login` session exactly as before. It is also not permanent — Claude reports lifetimes up to a year and can ask for a fresh one — but it turns a session that lapses in hours or days into one measured in months.
+
 ## Replies
 
 FlipAi delivers every reply itself. The agent is never asked to open a browser, find a conversation, or confirm that it sent anything.

@@ -630,7 +630,8 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	}
 	if err != nil {
 		b.event("error", "agent", "Agent failed: "+truncate(err.Error(), 240), rc.Sender, rc.Agent, m.ID)
-		final = "FAILED: " + truncate(err.Error(), b.cfg.GoogleVoice.ReplyMaxChars)
+		// Send one actionable sentence rather than a truncated JSON blob.
+		final = "FAILED: " + truncate(friendlyAgentError(err), b.cfg.GoogleVoice.ReplyMaxChars)
 	} else {
 		b.event("success", "agent", "Agent completed successfully", rc.Sender, rc.Agent, m.ID)
 	}
@@ -717,7 +718,27 @@ func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string,
 	}
 	return res, nil
 }
+
+// codexThreadIsGone reports whether a turn failed because the stored thread's
+// on-disk rollout no longer exists, rather than for a transient reason. Codex
+// answers "no rollout found for thread id …" with JSON-RPC code -32600.
+func codexThreadIsGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if !strings.Contains(s, "resume codex thread") && !strings.Contains(s, "thread") {
+		return false
+	}
+	return strings.Contains(s, "no rollout found") ||
+		strings.Contains(s, "thread not found") ||
+		strings.Contains(s, "-32600")
+}
+
 func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
+	// Set when a dead conversation forced a fresh one, so the reply can say so
+	// instead of silently losing the previous context.
+	recovered := false
 	if err := b.ensureCodex(ctx); err != nil {
 		return "", err
 	}
@@ -743,6 +764,25 @@ func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, 
 		params["approvalPolicy"] = b.cfg.Codex.ApprovalPolicy
 	}
 	raw, err := b.codex.Request(ctx, "turn/start", params)
+	if err != nil && codexThreadIsGone(err) {
+		// The stored conversation's rollout is gone — Codex reinstalled, history
+		// cleared, or a different CODEX_HOME. Without this, the saved thread id
+		// stays poisoned and every future text fails the same way forever.
+		b.event("warn", "agent", "Stored Codex conversation is gone; starting a new one", sender, "C", "")
+		b.mu.Lock()
+		b.state.CodexThreadID = ""
+		s := b.state
+		b.mu.Unlock()
+		_ = saveState(b.statePath, s)
+		if nerr := b.newCodexThread(ctx); nerr != nil {
+			return "", nerr
+		}
+		b.mu.Lock()
+		params["threadId"] = b.state.CodexThreadID
+		b.mu.Unlock()
+		recovered = true
+		raw, err = b.codex.Request(ctx, "turn/start", params)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -797,6 +837,9 @@ func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, 
 				if json.Unmarshal(n.Params, &p) == nil && p.Turn.ID == turnID {
 					if p.Turn.Error != nil && p.Turn.Error.Message != "" {
 						return final, errors.New(p.Turn.Error.Message)
+					}
+					if recovered {
+						final = "(previous Codex conversation was gone — started a new one)\n" + final
 					}
 					return final, nil
 				}

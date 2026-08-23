@@ -53,6 +53,11 @@ func TestMain(m *testing.M) {
 func mockCodexServer() {
 	sc := bufio.NewScanner(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
+	// Real Codex writes a rollout only for durable threads. Resuming an
+	// ephemeral one fails, and the mock must model that: without it, the mock
+	// happily resumed ephemeral threads and hid a bug that broke the Codex test
+	// button for every user.
+	ephemeral := map[string]bool{}
 	for sc.Scan() {
 		var m map[string]any
 		if json.Unmarshal(sc.Bytes(), &m) != nil {
@@ -79,7 +84,20 @@ func mockCodexServer() {
 					continue
 				}
 			}
+			{
+				p, _ := m["params"].(map[string]any)
+				isEph, _ := p["ephemeral"].(bool)
+				ephemeral["thr_test"] = isEph
+			}
 			_ = enc.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thr_test", "ephemeral": true, "modelProvider": "openai"}, "modelProvider": "openai"}})
+		case "thread/resume":
+			p, _ := m["params"].(map[string]any)
+			tid, _ := p["threadId"].(string)
+			if ephemeral[tid] {
+				_ = enc.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32600, "message": "no rollout found for thread id " + tid}})
+				continue
+			}
+			_ = enc.Encode(map[string]any{"id": id, "result": map[string]any{}})
 		case "turn/start":
 			if os.Getenv("FLIPAI_TEST_REQUIRE_FULL_ACCESS") == "1" {
 				p, _ := m["params"].(map[string]any)
@@ -123,7 +141,9 @@ func TestCodexAppServerHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 	var tr struct {
-		Thread struct{ ID string `json:"id"` } `json:"thread"`
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
 	}
 	_ = json.Unmarshal(raw, &tr)
 	if tr.Thread.ID != "thr_test" {
@@ -236,5 +256,61 @@ func TestAuthEnvironmentScrubbing(t *testing.T) {
 	}
 	if !strings.Contains(joined, "CLAUDE_CODE_OAUTH_TOKEN=") {
 		t.Fatalf("Claude subscription OAuth token should be preserved: %v", claudeEnv)
+	}
+}
+
+// The Codex test button broke because every newly started thread was released
+// for desktop handoff and then resumed before its turn — including ephemeral
+// threads, which Codex never persists a rollout for. Durable threads must keep
+// the handoff; ephemeral ones must skip it entirely.
+func TestEphemeralThreadIsNeitherReleasedNorResumed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := NewCodexClient(os.Args[0], "")
+	if err := c.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if _, err := c.Request(ctx, "thread/start", map[string]any{"ephemeral": true}); err != nil {
+		t.Fatalf("ephemeral thread/start: %v", err)
+	}
+	if !c.threadIsEphemeral("thr_test") {
+		t.Fatal("ephemeral thread was not recorded as ephemeral")
+	}
+	if !c.threadSubscribed("thr_test") {
+		t.Fatal("ephemeral thread was released for desktop handoff; it has no rollout to hand over")
+	}
+	// Would fail with "no rollout found" if a resume were attempted.
+	if _, err := c.Request(ctx, "turn/start", map[string]any{"threadId": "thr_test", "input": []map[string]any{{"type": "text", "text": "hi"}}}); err != nil {
+		t.Fatalf("turn on an ephemeral thread must not resume it: %v", err)
+	}
+}
+
+func TestDurableThreadStillHandsOffAndResumes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := NewCodexClient(os.Args[0], "")
+	if err := c.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if _, err := c.Request(ctx, "thread/start", map[string]any{}); err != nil {
+		t.Fatalf("durable thread/start: %v", err)
+	}
+	if c.threadIsEphemeral("thr_test") {
+		t.Fatal("durable thread was misclassified as ephemeral")
+	}
+	// v0.6.4 handoff: released so Codex Desktop can open the same history.
+	if c.threadSubscribed("thr_test") {
+		t.Fatal("durable thread was not released for desktop handoff")
+	}
+	// And re-resumed transparently for the next turn.
+	if _, err := c.Request(ctx, "turn/start", map[string]any{"threadId": "thr_test", "input": []map[string]any{{"type": "text", "text": "hi"}}}); err != nil {
+		t.Fatalf("durable thread turn should resume cleanly: %v", err)
+	}
+	if !c.threadSubscribed("thr_test") {
+		t.Fatal("durable thread should be subscribed again after its resume")
 	}
 }

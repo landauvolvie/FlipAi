@@ -74,10 +74,10 @@ func (a *App) claudeTestCorrected(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	c := NewClaudeClient(cfg.ClaudePath, cfg.Cwd, cfg.Claude)
+	c := a.newClaudeClient(cfg)
 	if err := c.Test(ctx); err != nil {
 		activityLogForStatePath(a.statePath).Add("error", "agent", "Claude real background test failed: "+truncate(err.Error(), 220), "", "A", "")
-		renderResult(w, 500, false, "Claude is not ready", err.Error()+"\n\nClaude Desktop and Claude Code CLI can use separate login state. Sign into Claude Code on this Windows account if the real background request cannot authenticate.")
+		renderResult(w, 500, false, "Claude is not ready", friendlyAgentError(err))
 		return
 	}
 	activityLogForStatePath(a.statePath).Add("success", "agent", "Claude real background test passed", "", "A", "")
