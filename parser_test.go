@@ -13,7 +13,7 @@ func testConfigWithCode(t *testing.T) Config {
 }
 func TestParseGVAndRouting(t *testing.T) {
 	cfg := testConfigWithCode(t)
-	m := GmailMessage{From: "Google Voice <voice-noreply@google.com>", AuthenticationResults: "mx.google.com; dkim=pass header.d=google.com", Subject: "New text message from (845) 555-1212", Body: "Google Voice\n482913 C: Check my GitHub and fix the failing build.\nView message"}
+	m := GmailMessage{From: "Google Voice <voice-noreply@google.com>", AuthenticationResults: "mx.google.com; dkim=pass header.d=google.com", Subject: "New text message from (845) 555-1212", Body: "Google Voice\n482913 C: Check my GitHub and fix the failing build."}
 	raw, sender, ok := parseGoogleVoiceBody(m, cfg.GoogleVoice.AllowedFrom, "new text message from")
 	if !ok || sender != "8455551212" {
 		t.Fatalf("not parsed correctly: sender=%q ok=%v", sender, ok)
