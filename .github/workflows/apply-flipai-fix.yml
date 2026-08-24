@@ -1,0 +1,35 @@
+name: Apply FlipAi fix
+
+on:
+  push:
+    branches:
+      - fix/voice-threading-configurable-commands
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Apply patch
+        run: python3 scripts/apply_flipai_delivery_and_commands_fix.py
+      - name: Format Go files
+        run: gofmt -w bridge.go config.go ui_actions.go ui_pages.go ui_status.go commands.go threaded_reply.go commands_test.go threaded_reply_test.go
+      - name: Run tests
+        run: go test ./...
+      - name: Commit verified fix
+        run: |
+          rm scripts/apply_flipai_delivery_and_commands_fix.py
+          rm .github/workflows/apply-flipai-fix.yml
+          git config user.name "FlipAi Fix Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Voice reply threading and configurable SMS commands"
+          git push origin HEAD:${GITHUB_REF_NAME}
