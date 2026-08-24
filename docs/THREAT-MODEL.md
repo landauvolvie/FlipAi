@@ -43,12 +43,18 @@
   the signed-in account. They stay in the same per-user folder with the same
   file permissions, but an administrator or SYSTEM process on this PC could
   decrypt them. Turning the option off re-protects them for the account again.
-- **In-app updates.** The app reads this repository's release feed and, when the
-  user asks, downloads the published installer and verifies it against the
-  checksum published beside it. That defeats a tampered download, not a
-  compromise of the release itself: whoever can publish a FlipAi release can
-  publish an installer this check accepts. The same is true of downloading the
-  release by hand.
+- **In-app updates.** The app reads this repository's release feed, downloads
+  the published installer, and verifies it against the checksum published
+  beside it. That defeats a tampered download, not a compromise of the release
+  itself: whoever can publish a FlipAi release can publish an installer this
+  check accepts. The same is true of downloading the release by hand.
+
+- **Automatic updates.** On by default, and they shorten the window between a
+  release being published and it running on this PC to the check interval. The
+  checksum verification is identical to the manual path — automation changes
+  *when* an install happens, not *what* is trusted — but it does mean a
+  published release installs without anyone reading the notes first. Turn it
+  off in Settings → Updates to keep the install a deliberate act.
 
 ## Residual risk
 

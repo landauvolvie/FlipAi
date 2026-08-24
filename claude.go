@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,12 +42,64 @@ const claudeAuthTTL = 10 * time.Minute
 // access FlipAi already grants Codex is what makes the two agents behave alike.
 const claudeFullAccess = "bypassPermissions"
 
-// claudeSessionName labels the SMS conversation in Claude Code's own /resume
-// picker. Claude Code has no equivalent of Codex's thread/unsubscribe handoff —
-// a session is found by opening its project folder — so naming it is what keeps
-// the conversation identifiable instead of being one unlabelled row among the
-// user's other sessions.
-const claudeSessionName = "FlipAi SMS"
+// claudeSessionPrefix labels the SMS conversation so it is recognisable, and
+// resumable by name, in Claude Code.
+//
+// Claude Code deliberately leaves `claude -p` sessions out of the interactive
+// /resume picker, so a name does not put the conversation in that list. What it
+// does give is a working resume handle: `claude --resume "<name>"` continues
+// the session. That only holds while the name is unique — Claude Code answers
+// an ambiguous name with "matches N sessions" and exits — and FlipAi starts a
+// fresh session on every new-session command, so the name carries a timestamp
+// rather than being the same string every time.
+const claudeSessionPrefix = "FlipAi SMS"
+
+// newClaudeSessionName mints the name for one SMS conversation. It is stored
+// with the session id and reused on every resume, so the label stays put for
+// the life of the conversation instead of being rewritten each turn.
+//
+// The timestamp is for the user's benefit; the random suffix is what actually
+// guarantees uniqueness, because two new-session commands in the same second
+// would otherwise collide and make --resume by name ambiguous.
+func newClaudeSessionName(now time.Time) string {
+	return claudeSessionPrefix + " " + now.Format("2006-01-02 15:04") + " " + randomNameSuffix()
+}
+
+// randomNameSuffix returns four lowercase base32 characters. Randomness failing
+// is not worth failing a turn over, so the clock's nanoseconds stand in.
+func randomNameSuffix() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		n := uint32(time.Now().UnixNano())
+		for i := range b {
+			b[i] = byte(n >> (8 * i))
+		}
+	}
+	out := make([]byte, len(b))
+	for i, v := range b {
+		out[i] = alphabet[int(v)%len(alphabet)]
+	}
+	return string(out)
+}
+
+// claudeSessionIsGone reports whether a turn failed because the stored session
+// no longer exists, rather than for a transient reason.
+//
+// Claude Code answers every variant of this — transcript deleted, emptied,
+// corrupted beyond parsing, or aged out by cleanupPeriodDays (30 days by
+// default) — with exit 1 and the same single line, so one match covers them
+// all. Without this the stored id stays poisoned and every later Claude text
+// fails identically, forever. Codex has had the equivalent recovery since
+// codexThreadIsGone; this is the missing Claude half.
+func claudeSessionIsGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "no conversation found with session id") ||
+		strings.Contains(s, "no conversation found")
+}
 
 type ClaudeClient struct {
 	path string
@@ -134,16 +187,19 @@ func claudePermissionModeLabel(mode string) string {
 
 // claudeTurnArgs builds the command line for one SMS turn. It is separate from
 // Run so the flags an SMS turn actually receives can be asserted in a test.
-func claudeTurnArgs(cfg ClaudeConfig, sessionID, prompt string) []string {
+func claudeTurnArgs(cfg ClaudeConfig, sessionID, sessionName, prompt string) []string {
 	args := []string{"-p", prompt, "--output-format", "json"}
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
 	}
 	args = append(args, "--permission-mode", normalizeClaudePermissionMode(cfg.PermissionMode))
 	// Name every turn, not just the first. --name is accepted alongside
-	// --resume, so a resumed conversation keeps its label even if the session
-	// was first created before FlipAi started naming them.
-	args = append(args, "--name", claudeSessionName)
+	// --resume, so a conversation started by an older build picks the label up
+	// on its next turn. The name is minted once per conversation and stored, so
+	// resuming keeps the same one rather than renaming the session each turn.
+	if name := strings.TrimSpace(sessionName); name != "" {
+		args = append(args, "--name", name)
+	}
 	// Claude keeps whatever capabilities it has at the desktop, browser
 	// included, so "check my sales in the browser" works by text too. FlipAi
 	// no longer probes `claude --help` for this: the flag is configuration.
@@ -320,7 +376,7 @@ func (c *ClaudeClient) Test(ctx context.Context) error {
 	return nil
 }
 
-func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (result, newSession string, err error) {
+func (c *ClaudeClient) Run(ctx context.Context, sessionID, sessionName, prompt string) (result, newSession string, err error) {
 	st, err := c.cachedAuthStatus(ctx)
 	if err != nil {
 		return "", sessionID, err
@@ -328,13 +384,18 @@ func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (resul
 	if err := validateClaudeSubscriptionPath(st); err != nil {
 		return "", sessionID, err
 	}
-	args := claudeTurnArgs(c.cfg, sessionID, prompt)
+	args := claudeTurnArgs(c.cfg, sessionID, sessionName, prompt)
 	out, runErr := c.runPrint(ctx, args)
 	if runErr != nil {
 		// A failed run may mean the CLI was signed out since the last check.
 		c.invalidateAuthCache()
 		if elevErr := claudeElevationRefusal(string(out)); elevErr != nil {
 			return "", sessionID, elevErr
+		}
+		// Report a vanished conversation verbatim so the bridge can recognise
+		// it and start a fresh session instead of failing forever.
+		if sessionID != "" && claudeSessionIsGone(errors.New(string(out))) {
+			return "", sessionID, fmt.Errorf("no conversation found with session id %s: %s", sessionID, truncate(c.redact(string(out)), 300))
 		}
 		if !st.LoggedIn {
 			return "", sessionID, fmt.Errorf("Claude Code CLI is not usable from FlipAi yet: %v: %s. Claude Desktop sign-in is separate from Claude Code CLI sign-in; complete Claude Code /login once on this Windows account", runErr, truncate(c.redact(string(out)), 800))

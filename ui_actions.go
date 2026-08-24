@@ -501,6 +501,32 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	redirectTo(w, r, "/settings", "saved")
 }
 
+// saveUpdates stores the automatic-update choice and the background check
+// interval. Both take effect on the next check without a restart, because
+// watchForUpdates reads them from the live config each time round.
+func (a *App) saveUpdates(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		renderResult(w, r, 400, false, "Could not read the update settings", err.Error())
+		return
+	}
+	err := a.updateConfig(func(cfg *Config) error {
+		if v, ok := formFlag(r, "autoUpdate"); ok {
+			cfg.Updates.Automatic = v
+		}
+		if n, ok, err := formInt(r, "updateCheckHours", updateCheckHoursMin, updateCheckHoursMax); err != nil {
+			return fmt.Errorf("update check interval: %w", err)
+		} else if ok {
+			cfg.Updates.CheckHours = n
+		}
+		return nil
+	})
+	if err != nil {
+		renderResult(w, r, 400, false, "Update settings were not saved", err.Error())
+		return
+	}
+	redirectTo(w, r, "/settings", "saved")
+}
+
 func (a *App) saveStartup(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		renderResult(w, r, 400, false, "Could not read the startup setting", err.Error())
@@ -667,7 +693,8 @@ func (a *App) updateInstall(w http.ResponseWriter, r *http.Request) {
 		renderResult(w, r, 500, false, "Update could not be downloaded", err.Error())
 		return
 	}
-	if err := runUpdateInstaller(path); err != nil {
+	// The user pressed Install in the app, so bring the window back with it.
+	if err := runUpdateInstaller(path, true); err != nil {
 		renderResult(w, r, 500, false, "Update could not be started", err.Error()+
 			"\n\nThe verified installer is saved at "+path+" if you want to run it yourself.")
 		return

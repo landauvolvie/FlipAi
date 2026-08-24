@@ -37,7 +37,7 @@ func hasFlag(args []string, flag string) bool {
 // acceptEdits auto-approves file edits only, so Chrome — whose tools are MCP
 // tools — was refused on an unattended turn that nobody can approve.
 func TestClaudeSMSTurnRequestsFullAccessLikeCodex(t *testing.T) {
-	args := claudeTurnArgs(ClaudeConfig{}, "", "do something")
+	args := claudeTurnArgs(ClaudeConfig{}, "", claudeSessionPrefix, "do something")
 	if !hasFlagValue(args, "--permission-mode", claudeFullAccess) {
 		t.Fatalf("an unconfigured Claude SMS turn must request full access, got %v", args)
 	}
@@ -52,7 +52,7 @@ func TestClaudeSMSTurnRequestsFullAccessLikeCodex(t *testing.T) {
 // forced rewrite produced is migrated.
 func TestClaudeNarrowerPermissionModesArePreserved(t *testing.T) {
 	for _, mode := range []string{"plan", "acceptEdits", "dontAsk", "default"} {
-		args := claudeTurnArgs(ClaudeConfig{PermissionMode: mode}, "", "x")
+		args := claudeTurnArgs(ClaudeConfig{PermissionMode: mode}, "", claudeSessionPrefix, "x")
 		if !hasFlagValue(args, "--permission-mode", mode) {
 			t.Fatalf("mode %q was not passed through: %v", mode, args)
 		}
@@ -96,23 +96,23 @@ func TestLoadConfigMigratesForcedAcceptEditsToFullAccess(t *testing.T) {
 // has no such handoff — sessions are listed per working folder — so the SMS
 // session is named to stay identifiable in the /resume picker.
 func TestClaudeSMSSessionIsNamedForResumePicker(t *testing.T) {
-	fresh := claudeTurnArgs(ClaudeConfig{}, "", "x")
-	if !hasFlagValue(fresh, "--name", claudeSessionName) {
+	fresh := claudeTurnArgs(ClaudeConfig{}, "", claudeSessionPrefix, "x")
+	if !hasFlagValue(fresh, "--name", claudeSessionPrefix) {
 		t.Fatalf("a new SMS session must be named: %v", fresh)
 	}
 	// Naming is repeated on resume so a session created by an older build gets
 	// the label too.
-	resumed := claudeTurnArgs(ClaudeConfig{}, "sess-1", "x")
-	if !hasFlagValue(resumed, "--name", claudeSessionName) || !hasFlagValue(resumed, "--resume", "sess-1") {
+	resumed := claudeTurnArgs(ClaudeConfig{}, "sess-1", claudeSessionPrefix, "x")
+	if !hasFlagValue(resumed, "--name", claudeSessionPrefix) || !hasFlagValue(resumed, "--resume", "sess-1") {
 		t.Fatalf("a resumed SMS session must keep its name: %v", resumed)
 	}
 }
 
 func TestClaudeChromeFlagFollowsConfig(t *testing.T) {
-	if hasFlag(claudeTurnArgs(ClaudeConfig{UseChrome: false}, "", "x"), "--chrome") {
+	if hasFlag(claudeTurnArgs(ClaudeConfig{UseChrome: false}, "", claudeSessionPrefix, "x"), "--chrome") {
 		t.Fatal("--chrome must not be passed when the toggle is off")
 	}
-	if !hasFlag(claudeTurnArgs(ClaudeConfig{UseChrome: true}, "", "x"), "--chrome") {
+	if !hasFlag(claudeTurnArgs(ClaudeConfig{UseChrome: true}, "", claudeSessionPrefix, "x"), "--chrome") {
 		t.Fatal("--chrome must be passed when the toggle is on")
 	}
 }
@@ -174,13 +174,13 @@ func TestClaudeRunSendsFullAccessAndChromeToTheCLI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	c := NewClaudeClient(os.Args[0], "", ClaudeConfig{UseChrome: true})
-	line, _, err := c.Run(ctx, "", "check my sales in the browser")
+	line, _, err := c.Run(ctx, "", claudeSessionPrefix, "check my sales in the browser")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"--permission-mode " + claudeFullAccess,
-		"--name " + claudeSessionName,
+		"--name " + claudeSessionPrefix,
 		"--chrome",
 	} {
 		if !strings.Contains(line, want) {
@@ -196,7 +196,7 @@ func TestClaudeRunExplainsABlockedChromeTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	c := NewClaudeClient(os.Args[0], "", ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true})
-	answer, _, err := c.Run(ctx, "", "open chrome")
+	answer, _, err := c.Run(ctx, "", claudeSessionPrefix, "open chrome")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,13 +210,14 @@ func TestClaudeRunExplainsABlockedChromeTurn(t *testing.T) {
 // desktop app the way Codex does.
 func TestAgentsPageShowsHowToReopenTheClaudeSMSConversation(t *testing.T) {
 	a := newTestApp(t)
-	if err := saveState(a.statePath, State{ClaudeSessionID: "abc-123-session"}); err != nil {
+	if err := saveState(a.statePath, State{ClaudeSessionID: "abc-123-session", ClaudeSessionName: "FlipAi SMS 2026-08-24 17:49:00"}); err != nil {
 		t.Fatal(err)
 	}
 	body := a.do(t, http.MethodGet, "/agents", nil).Body.String()
 	for _, want := range []string{
 		"claude --resume abc-123-session",
-		claudeSessionName,
+		"FlipAi SMS 2026-08-24 17:49:00",
+		"/desktop",
 		"Full user access",
 		"claudeUseChrome",
 	} {

@@ -1,5 +1,5 @@
 #ifndef MyVersion
-  #define MyVersion "0.12.0"
+  #define MyVersion "0.13.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist"
@@ -52,10 +52,19 @@ Type: filesandordirs; Name: "{localappdata}\Programs\AISMSBridge"
 [Run]
 Filename: "{app}\FlipAi.exe"; Description: "Launch FlipAi and complete setup"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 ; A silent run is how FlipAi updates itself from inside the app: there is no
-; finish page to click, so the bridge has to be started again here. Only the
-; app asks for that, with /restartapp=1, so a plain silent install (packaging
-; tests, scripted deployment) still leaves nothing running.
-Filename: "{app}\FlipAi.exe"; Parameters: "--watchdog"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartRequested
+; finish page to click, so FlipAi has to be started again here. Only the app
+; asks for that, so a plain silent install (packaging tests, scripted
+; deployment) still leaves nothing running.
+;
+; /restartapp=1 is an update the user started from inside the app: run the
+; launcher with no arguments so the watchdog comes back AND the FlipAi window
+; opens again. Passing --watchdog here instead restored the tray and the
+; background bridge but never reopened the window, which is why an in-app
+; update looked like the app simply never came back.
+Filename: "{app}\FlipAi.exe"; WorkingDir: "{app}"; Flags: nowait; Check: RestartWithWindow
+; /restartapp=2 is an unattended automatic update. Nobody is waiting at the
+; screen, so restore the background bridge and tray without stealing focus.
+Filename: "{app}\FlipAi.exe"; Parameters: "--watchdog"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartBridgeOnly
 
 [UninstallRun]
 Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopFlipAi"
@@ -94,10 +103,23 @@ begin
   Result := True;
 end;
 
-{ True only when FlipAi itself launched this installer to update in place. }
-function RestartRequested(): Boolean;
+{ True only when FlipAi itself launched this installer to update in place.
+  1 = the user pressed Install in the app, so reopen the window too.
+  2 = an automatic background update, so restore the bridge silently. }
+function RestartWithWindow(): Boolean;
 begin
   Result := ExpandConstant('{param:restartapp|0}') = '1';
+end;
+
+function RestartBridgeOnly(): Boolean;
+begin
+  Result := ExpandConstant('{param:restartapp|0}') = '2';
+end;
+
+{ Kept so a Setup EXE built from this script still answers the old name. }
+function RestartRequested(): Boolean;
+begin
+  Result := RestartWithWindow() or RestartBridgeOnly();
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;

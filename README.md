@@ -71,17 +71,40 @@ because a test actually succeeded, and says **Not tested yet** otherwise.
 
 ## Updating
 
-FlipAi checks its own GitHub releases and tells you when a newer version is
-published. **Settings → Updates → Install** downloads that release, verifies it
-against the checksum published beside it, and runs it in place:
+FlipAi checks its own GitHub releases in the background, so a newer version is
+noticed without opening Settings. When one exists, the version in the sidebar
+turns into **v0.13.0 → v0.14.0** on every page.
+
+**Settings → Updates** has two controls:
+
+- **Install updates automatically** (on by default) — FlipAi downloads the
+  release, verifies it against the checksum published beside it, installs it,
+  and comes back on the new version on its own. An installer whose checksum
+  does not match is never run. An update never interrupts an SMS turn: if a
+  turn is running when the update is found, or starts during the download, the
+  install waits for the next check.
+- **Check for updates every** — hourly, 6 hours (default), 12 hours, daily, or
+  weekly.
+
+You can still install on demand with **Settings → Updates → Install**. Either
+way the install runs in place:
 
 - the existing install is detected, so the wizard asks **no setup questions**;
 - your Gmail connection, allowed numbers, security code, agent paths, and
   startup choice are kept;
 - the bridge stops for a few seconds and comes back on the new version.
 
+An update you started from inside the app **reopens the FlipAi window** when it
+finishes. An automatic background update restores the tray and bridge without
+stealing focus, since you did not ask for it at that moment. Before v0.13.0 an
+in-app update restarted only the background bridge, so the app looked like it
+never came back.
+
 Downloading a release by hand and running it does the same thing — an installer
 that finds FlipAi already installed goes straight to updating it.
+
+The release check sends no identifier, no configuration, and no message data,
+and contacts only `api.github.com` for this repository.
 
 ## Starting before sign-in
 
@@ -120,6 +143,7 @@ Every remote command must come from an exact allowed Google Voice sender and beg
 - `C:` routes to Codex.
 - `A:` routes to Claude.
 - No prefix uses the configured default agent.
+- `C NEW` / `A NEW` start a fresh conversation for that agent. Every later text to that agent continues the new conversation until you send `NEW` again. The active conversation is stored on disk, so it survives closing FlipAi, restarting it, and rebooting Windows.
 - US/Canada numbers are normalized to 10 digits; `+1`, spaces, parentheses, and hyphens are accepted during setup.
 - A sender not on the allowlist is ignored even if the SMS body contains an allowed number.
 
@@ -201,17 +225,39 @@ Claude refuses full-access mode when it is started with administrator privileges
 Codex and Claude persist conversations differently, and FlipAi cannot paper over the difference:
 
 - **Codex** — FlipAi starts durable (non-ephemeral) threads and hands each one back with `thread/unsubscribe` once its turn completes, so the same conversation opens in Codex Desktop.
-- **Claude** — Claude Code has no equivalent handoff. Sessions are stored per **working folder**, and `/resume` lists only the sessions belonging to the folder you started `claude` in.
+- **Claude** — Claude Code has no equivalent handoff, and it deliberately keeps `claude -p` sessions **out of the interactive `/resume` picker**. The SMS conversation is a real, resumable session; it just is not in that list.
 
-So the SMS conversation is a normal, resumable Claude Code session; it is just filed under Claude's working folder. FlipAi names it **FlipAi SMS** so it is identifiable in the `/resume` picker, and **Agents → Claude → Advanced** shows the exact command:
+**Agents → Claude → Advanced** shows the exact command to continue it:
 
 ```text
 claude --resume <session id>
 ```
 
-Run it from the working folder shown on that card. If you run `claude` somewhere else, the picker will not list the SMS session — that is the folder scoping, not a lost conversation.
+Resuming by id works from any folder on Claude Code 2.1.223 or newer, which searches every project on the machine. On older versions, run it from Claude's working folder.
 
-Claude Desktop keeps its own history, separate from Claude Code, and will not show this conversation.
+FlipAi also names each conversation `FlipAi SMS <date time> <suffix>`, which is a working resume handle — `claude --resume "FlipAi SMS …"` — as long as the name is unique. That is why the name carries a timestamp and a random suffix instead of being the same string every time: Claude Code refuses an ambiguous name with `matches N sessions`.
+
+### Move it to Claude Desktop
+
+Claude Desktop keeps its own session history and cannot list a CLI session. There is a supported way to move one across — resume the session, then run:
+
+```text
+/desktop
+```
+
+Claude saves the session and opens it in the desktop app. This works on Windows x64 and macOS with a Claude subscription; it is not available with API-key auth or on Bedrock, Vertex, or Foundry.
+
+FlipAi cannot do this for you on every text: `/desktop` is interactive-only and closes the CLI session as it hands over, so it is a deliberate step you take when you want to keep working on that conversation at the desktop.
+
+### When the old conversation is gone
+
+Claude Code deletes transcripts after 30 days by default (`cleanupPeriodDays`), and a transcript can also be deleted or corrupted. When FlipAi finds the stored conversation missing it starts a fresh one, retries your command on it, and prefixes the reply with:
+
+```text
+Previous Claude conversation was unavailable, so a new one was started.
+```
+
+Earlier builds returned the failure instead and kept the dead id, so every later Claude text failed the same way until you sent the new-session command. Codex has recovered from a missing rollout this way for some time; Claude now matches it.
 
 ## Keeping Claude signed in
 

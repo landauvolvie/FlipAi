@@ -103,6 +103,15 @@ h1,h2,h3{margin:0;letter-spacing:-.2px}
 }
 .side-status b{display:flex;align-items:center;gap:7px;color:var(--ink);font-size:12.5px;font-weight:600}
 .side-status span{display:block;margin-top:5px}
+/* The version line doubles as the update indicator, so a new release is
+   visible from every page without opening Settings. */
+.side-update{
+  display:flex;align-items:center;gap:6px;margin-top:5px;text-decoration:none;
+  color:var(--brand);font-weight:700;
+}
+.side-update:hover{text-decoration:underline}
+.side-update svg{width:13px;height:13px;flex:0 0 auto}
+.side-update span{margin-top:0}
 .dot{width:8px;height:8px;border-radius:50%;background:#12b76a;flex:0 0 auto}
 .dot.paused{background:#f79009}
 .dot.stopped{background:#f04438}

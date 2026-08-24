@@ -681,11 +681,12 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 			err = b.newCodexThread(ctx)
 			final = "New Codex conversation started."
 		} else {
-			b.mu.Lock()
-			b.state.ClaudeSessionID = ""
-			s := b.state
-			b.mu.Unlock()
-			err = saveState(b.statePath, s)
+			// Claude sessions are created by the CLI on the turn that uses them,
+			// so there is no session to start here the way there is for Codex.
+			// Clearing the id and minting the name now is what makes the next
+			// Claude text open a fresh conversation and every text after that
+			// continue it.
+			b.startNewClaudeSession()
 			final = "New Claude conversation started."
 		}
 	} else if rc.Agent == "A" {
@@ -765,25 +766,89 @@ func (b *Bridge) newCodexThread(ctx context.Context) error {
 	b.mu.Unlock()
 	return saveState(b.statePath, s)
 }
+
+// Busy reports whether an agent turn is running. The automatic updater asks
+// before restarting FlipAi, because a restart mid-turn loses the turn.
+func (b *Bridge) Busy() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.busy
+}
+
+// claudeSessionLost is prefixed to the reply when the stored conversation had
+// to be abandoned, so a silently emptied context is never mistaken for the
+// agent forgetting what it was told.
+const claudeSessionLost = "Previous Claude conversation was unavailable, so a new one was started. "
+
 func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
 	if b.claude == nil {
 		return "", errors.New("Claude Code unavailable")
 	}
-	b.mu.Lock()
-	sid := b.state.ClaudeSessionID
-	b.mu.Unlock()
-	res, nsid, err := b.claude.Run(ctx, sid, b.composePrompt(command))
+	prompt := b.composePrompt(command)
+	sid, name := b.claudeSession()
+	res, nsid, err := b.claude.Run(ctx, sid, name, prompt)
+
+	// The stored conversation is gone — transcript deleted, corrupted, or aged
+	// out by Claude Code's 30-day transcript cleanup. Without this the saved id
+	// stays poisoned and every later Claude text fails the same way forever.
+	// This mirrors what runCodex already does for a missing Codex rollout.
+	recovered := false
+	if err != nil && sid != "" && claudeSessionIsGone(err) {
+		b.event("warn", "agent", "Stored Claude conversation is gone; starting a new one", sender, "A", "")
+		name = b.startNewClaudeSession()
+		recovered = true
+		res, nsid, err = b.claude.Run(ctx, "", name, prompt)
+	}
 	if err != nil {
 		return "", err
 	}
 	if nsid != "" && nsid != sid {
-		b.mu.Lock()
-		b.state.ClaudeSessionID = nsid
-		s := b.state
-		b.mu.Unlock()
-		_ = saveState(b.statePath, s)
+		b.rememberClaudeSession(nsid, name)
+	}
+	if recovered {
+		return claudeSessionLost + res, nil
 	}
 	return res, nil
+}
+
+// claudeSession reads the active conversation, minting a name for a
+// conversation that does not have one yet — either because none has been
+// started or because it predates named sessions.
+func (b *Bridge) claudeSession() (id, name string) {
+	b.mu.Lock()
+	id, name = b.state.ClaudeSessionID, b.state.ClaudeSessionName
+	b.mu.Unlock()
+	if strings.TrimSpace(name) == "" {
+		name = newClaudeSessionName(time.Now())
+	}
+	return id, name
+}
+
+// startNewClaudeSession clears the stored conversation and returns the name the
+// next turn should create. Clearing is persisted immediately so a crash between
+// here and the next turn cannot leave the dead id behind.
+func (b *Bridge) startNewClaudeSession() string {
+	name := newClaudeSessionName(time.Now())
+	b.mu.Lock()
+	b.state.ClaudeSessionID = ""
+	b.state.ClaudeSessionName = name
+	s := b.state
+	b.mu.Unlock()
+	_ = saveState(b.statePath, s)
+	return name
+}
+
+// rememberClaudeSession persists the conversation every later text resumes.
+func (b *Bridge) rememberClaudeSession(id, name string) {
+	b.mu.Lock()
+	b.state.ClaudeSessionID = id
+	b.state.ClaudeSessionName = name
+	s := b.state
+	b.mu.Unlock()
+	_ = saveState(b.statePath, s)
 }
 
 // codexThreadIsGone reports whether a turn failed because the stored thread's

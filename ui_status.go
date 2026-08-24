@@ -49,6 +49,10 @@ type uiStatus struct {
 	// ClaudeUseChrome reports whether SMS turns pass --chrome.
 	ClaudeUseChrome bool
 
+	// AutoUpdate and UpdateCheckHours drive the Updates card on Settings.
+	AutoUpdate       bool
+	UpdateCheckHours int
+
 	// ClaudeSessionID and ClaudeSessionName are what the Agents page needs to
 	// tell the user how to reopen the SMS conversation in Claude Code, which
 	// lists sessions per working folder rather than handing them to a desktop
@@ -186,8 +190,10 @@ func (a *App) status() uiStatus {
 		HasClaudeToken:     hasClaudeToken(claudeTokenPath(a.dataDir)),
 		PermissionMode:     normalizeClaudePermissionMode(cfg.Claude.PermissionMode),
 		ClaudeUseChrome:    cfg.Claude.UseChrome,
+		AutoUpdate:         cfg.Updates.Automatic,
+		UpdateCheckHours:   int(cfg.Updates.checkInterval() / time.Hour),
 		ClaudeSessionID:    st.ClaudeSessionID,
-		ClaudeSessionName:  claudeSessionName,
+		ClaudeSessionName:  st.ClaudeSessionName,
 		LastAgent:          st.LastAgent,
 		LastRunAt:          st.LastRunAt,
 		Cwd:                cfg.Cwd,

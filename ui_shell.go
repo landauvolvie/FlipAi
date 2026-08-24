@@ -305,7 +305,7 @@ const shellHTML = `{{define "shell"}}<!doctype html>
     </nav>
     <div class="side-status">
       <b><span class="{{.Shell.DotClass}}"></span><span data-status="runningLabel">{{if .Shell.Paused}}FlipAi is paused{{else if .Shell.Running}}FlipAi is running{{else}}FlipAi is idle{{end}}</span></b>
-      <span>v{{.Shell.Version}}</span>
+      {{if .Shell.UpdateVersion}}<a class="side-update" href="/settings#updates" title="FlipAi {{.Shell.UpdateVersion}} is available">{{icon "download"}}<span>v{{.Shell.Version}} &rarr; {{.Shell.UpdateVersion}}</span></a>{{else}}<span>v{{.Shell.Version}}</span>{{end}}
     </div>
   </aside>
   <main class="content">

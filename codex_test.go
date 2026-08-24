@@ -46,6 +46,21 @@ func TestMain(m *testing.M) {
 				fmt.Print(string(b))
 				os.Exit(0)
 			}
+			// Model Claude Code refusing a resume whose transcript is gone:
+			// exit 1 with that one line on stderr, which is what a deleted,
+			// emptied, corrupted, or aged-out session all produce. A run with
+			// no --resume succeeds, so a test can prove the retry recovered.
+			if os.Getenv("FLIPAI_TEST_CLAUDE_SESSION_GONE") == "1" {
+				for i, a := range os.Args {
+					if a == "--resume" && i+1 < len(os.Args) {
+						fmt.Fprintf(os.Stderr, "No conversation found with session ID: %s", os.Args[i+1])
+						os.Exit(1)
+					}
+				}
+				b, _ := json.Marshal(map[string]any{"type": "result", "is_error": false, "result": "Fresh Claude session.", "session_id": "claude_session_recovered"})
+				fmt.Print(string(b))
+				os.Exit(0)
+			}
 			if os.Getenv("FLIPAI_TEST_CLAUDE_DENY_CHROME") == "1" {
 				b, _ := json.Marshal(map[string]any{"type": "result", "is_error": false,
 					"result":             "I do not have permission to control Chrome.",
@@ -210,7 +225,7 @@ func TestClaudeSubscriptionConnector(t *testing.T) {
 	if err := c.Test(ctx); err != nil {
 		t.Fatal(err)
 	}
-	res, sid, err := c.Run(ctx, "", "hello")
+	res, sid, err := c.Run(ctx, "", claudeSessionPrefix, "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +242,7 @@ func TestClaudeStatusFalseExitOneStillTriesRealFirstPartyRequest(t *testing.T) {
 	if err := c.Test(ctx); err != nil {
 		t.Fatalf("real Claude request should override false/inconclusive auth status: %v", err)
 	}
-	res, _, err := c.Run(ctx, "", "hello")
+	res, _, err := c.Run(ctx, "", claudeSessionPrefix, "hello")
 	if err != nil {
 		t.Fatalf("Run should use the working first-party background path: %v", err)
 	}

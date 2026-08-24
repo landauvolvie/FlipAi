@@ -28,7 +28,7 @@ func autostartEnabled() bool { return false }
 
 // The published installer is a Windows Setup EXE; there is nothing to run
 // elsewhere.
-func runUpdateInstaller(path string) error {
+func runUpdateInstaller(path string, reopenWindow bool) error {
 	return errors.New("the FlipAi installer only runs on Windows")
 }
 func openFolder(path string) error {

@@ -273,6 +273,7 @@ func (a *App) handler() http.Handler {
 		"/phone/numbers/remove": a.removePhoneNumber,
 		"/settings/save":        a.saveSettings,
 		"/settings/startup":     a.saveStartup,
+		"/settings/updates":     a.saveUpdates,
 		"/settings/bootstartup": a.saveBootStartup,
 		"/update/check":         a.updateCheck,
 		"/update/install":       a.updateInstall,

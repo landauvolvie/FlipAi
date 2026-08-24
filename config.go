@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.12.0"
+const version = "0.13.0"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -47,6 +47,7 @@ type Config struct {
 	// resumes.
 	Paused bool `json:"paused,omitempty"`
 
+	Updates     UpdateConfig      `json:"updates"`
 	Gmail       GmailConfig       `json:"gmail"`
 	GoogleVoice GoogleVoiceConfig `json:"googleVoice"`
 	Codex       CodexConfig       `json:"codex"`
@@ -133,6 +134,34 @@ type ClaudeConfig struct {
 	UseChrome bool `json:"useChrome"`
 }
 
+// UpdateConfig controls how FlipAi keeps itself current. The check runs in the
+// background host, so a new release is noticed without anyone opening Settings.
+type UpdateConfig struct {
+	// CheckHours is how often the background check runs. Clamped to a sane
+	// range on load so a hand-edited config cannot poll GitHub in a tight loop.
+	CheckHours int `json:"checkHours"`
+
+	// Automatic installs a verified update without waiting to be asked. FlipAi
+	// still refuses to run an installer whose checksum does not match, and it
+	// waits for the current SMS turn to finish before restarting anything.
+	Automatic bool `json:"automatic"`
+}
+
+const (
+	updateCheckHoursMin     = 1
+	updateCheckHoursMax     = 168
+	updateCheckHoursDefault = 6
+)
+
+// checkInterval is the validated background check period.
+func (u UpdateConfig) checkInterval() time.Duration {
+	h := u.CheckHours
+	if h < updateCheckHoursMin || h > updateCheckHoursMax {
+		h = updateCheckHoursDefault
+	}
+	return time.Duration(h) * time.Hour
+}
+
 type SecurityConfig struct {
 	RequireCode bool   `json:"requireCode"`
 	CodeSalt    string `json:"codeSalt,omitempty"`
@@ -146,8 +175,15 @@ type SecurityConfig struct {
 }
 
 type State struct {
-	CodexThreadID       string    `json:"codexThreadId,omitempty"`
-	ClaudeSessionID     string    `json:"claudeSessionId,omitempty"`
+	CodexThreadID   string `json:"codexThreadId,omitempty"`
+	ClaudeSessionID string `json:"claudeSessionId,omitempty"`
+
+	// ClaudeSessionName is the label minted when the current Claude
+	// conversation started. It is stored beside the id so every resume reuses
+	// the same name, and so the Agents page can show a resume handle that stays
+	// unambiguous across however many new-session commands have been sent.
+	ClaudeSessionName string `json:"claudeSessionName,omitempty"`
+
 	GmailBaselineUnix   int64     `json:"gmailBaselineUnix,omitempty"`
 	ProcessedMessageIDs []string  `json:"processedMessageIds,omitempty"`
 	LastMessageID       string    `json:"lastMessageId,omitempty"`
@@ -251,6 +287,7 @@ func defaultConfig(dataDir string) Config {
 			ProgressUpdates:         true,
 			ProgressIntervalSeconds: 120,
 		},
+		Updates:  UpdateConfig{CheckHours: updateCheckHoursDefault, Automatic: true},
 		Codex:    CodexConfig{ApprovalPolicy: "never"},
 		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true},
 		Security: SecurityConfig{RequireCode: true},
@@ -367,6 +404,18 @@ func loadConfig(path, dataDir string) (Config, error) {
 		cfg.Claude.PermissionMode = claudeFullAccess
 	}
 	cfg.Claude.PermissionMode = normalizeClaudePermissionMode(cfg.Claude.PermissionMode)
+	if cfg.Updates.CheckHours < updateCheckHoursMin || cfg.Updates.CheckHours > updateCheckHoursMax {
+		cfg.Updates.CheckHours = updateCheckHoursDefault
+	}
+	// Installs made before automatic updates existed have no updates block, so
+	// decoding leaves Automatic false. Probe for the block so an absent one
+	// takes the default and an explicit one keeps the user's choice.
+	var updProbe struct {
+		Updates *UpdateConfig `json:"updates"`
+	}
+	if json.Unmarshal(b, &updProbe) == nil && updProbe.Updates == nil {
+		cfg.Updates = defaultConfig(dataDir).Updates
+	}
 	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
 		cfg.DefaultAgent = "C"
 	}

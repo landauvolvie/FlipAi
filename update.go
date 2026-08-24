@@ -165,11 +165,27 @@ func saveUpdateState(statePath string, info ReleaseInfo) {
 	}
 }
 
+// updateInterval is the configured background check period.
+func (a *App) updateInterval() time.Duration {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+	return cfg.Updates.checkInterval()
+}
+
+// autoUpdateEnabled reports whether a verified update may install unattended.
+func (a *App) autoUpdateEnabled() bool {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+	return cfg.Updates.Automatic
+}
+
 // checkForUpdate refreshes the stored release info. force skips the interval
 // that keeps the background check quiet.
 func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
 	current := loadUpdateState(a.statePath)
-	if !force && time.Since(current.CheckedAt) < updateCheckInterval {
+	if !force && time.Since(current.CheckedAt) < a.updateInterval() {
 		return current
 	}
 	info, err := fetchLatestRelease(ctx)
@@ -184,10 +200,15 @@ func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
 }
 
 // watchForUpdates runs one check shortly after the host starts and then keeps
-// checking on a slow interval.
+// checking on the configured interval, so a new release is noticed without
+// anyone opening Settings. When automatic updates are on it also installs the
+// release it finds.
 func (a *App) watchForUpdates(ctx context.Context) {
 	timer := time.NewTimer(45 * time.Second)
 	defer timer.Stop()
+	// Remembering the version we already tried stops a release that fails to
+	// install from being downloaded again on every single tick.
+	attempted := ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -197,9 +218,57 @@ func (a *App) watchForUpdates(ctx context.Context) {
 		info := a.checkForUpdate(ctx, false)
 		if info.Newer() {
 			activityLogForStatePath(a.statePath).Add("info", "host", "Update available: FlipAi "+info.Version, "", "", "")
+			if a.autoUpdateEnabled() && info.Version != attempted {
+				attempted = info.Version
+				a.autoInstallUpdate(ctx, info)
+			}
 		}
-		timer.Reset(updateCheckInterval)
+		timer.Reset(a.updateInterval())
 	}
+}
+
+// autoInstallUpdate downloads, verifies, and installs a release without being
+// asked. It refuses to interrupt work: an SMS turn in flight would be killed by
+// the restart, so the install waits for the next check instead. Verification is
+// the same as the manual path — an installer whose checksum does not match the
+// one published with the release is never run.
+func (a *App) autoInstallUpdate(ctx context.Context, info ReleaseInfo) {
+	log := activityLogForStatePath(a.statePath)
+	if a.bridgeBusy() {
+		log.Add("info", "host", "Automatic update deferred: an agent turn is running", "", "", "")
+		return
+	}
+	dlCtx, cancel := context.WithTimeout(ctx, 12*time.Minute)
+	defer cancel()
+	path, err := downloadUpdate(dlCtx, info)
+	if err != nil {
+		log.Add("error", "host", "Automatic update download failed: "+truncate(err.Error(), 200), "", "", "")
+		return
+	}
+	// Re-check right before restarting: a text may have arrived during the
+	// download, and finishing that turn matters more than installing now.
+	if a.bridgeBusy() {
+		log.Add("info", "host", "Automatic update deferred: an agent turn started during download", "", "", "")
+		return
+	}
+	// reopenWindow=false: nobody asked for this one, so come back as the
+	// background bridge rather than popping a window open on its own.
+	if err := runUpdateInstaller(path, false); err != nil {
+		log.Add("error", "host", "Automatic update could not start: "+truncate(err.Error(), 200), "", "", "")
+		return
+	}
+	log.Add("info", "host", "Installing FlipAi "+info.Version+" automatically", "", "", "")
+}
+
+// bridgeBusy reports whether an agent turn is running right now.
+func (a *App) bridgeBusy() bool {
+	a.mu.Lock()
+	b := a.bridge
+	a.mu.Unlock()
+	if b == nil {
+		return false
+	}
+	return b.Busy()
 }
 
 // downloadUpdate fetches the release installer into the temp folder and checks

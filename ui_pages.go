@@ -491,9 +491,10 @@ const agentsHTML = `{{define "content"}}
           </div>
           {{end}}
           <div class="rows">
-            <div class="row"><div class="label">Conversation</div><div class="value"><b>{{if .S.ClaudeSessionActive}}Session active{{else}}No session yet{{end}}</b>{{if .S.ClaudeSessionActive}}<span>Named "{{.S.ClaudeSessionName}}" in Claude Code's /resume picker.</span>{{end}}</div></div>
+            <div class="row"><div class="label">Conversation</div><div class="value"><b>{{if .S.ClaudeSessionActive}}Session active{{else}}No session yet{{end}}</b>{{if .S.ClaudeSessionName}}<span>Named "{{.S.ClaudeSessionName}}".</span>{{end}}</div></div>
             {{if .S.ClaudeSessionActive}}
-            <div class="row"><div class="label">Open it in Claude Code<span>Claude Code lists sessions per folder, so open it from Claude's working folder above. Claude Desktop keeps a separate history and will not show this conversation.</span></div><div class="value"><b>claude --resume {{.S.ClaudeSessionID}}</b><span>Run in {{.S.ClaudeCwd}}</span></div></div>
+            <div class="row"><div class="label">Resume this conversation<span>Claude Code keeps SMS (<code>-p</code>) sessions out of the interactive /resume picker, so open it by id. This works from any folder on Claude Code 2.1.223 or newer.</span></div><div class="value"><b>claude --resume {{.S.ClaudeSessionID}}</b></div></div>
+            <div class="row"><div class="label">Move it to Claude Desktop<span>Resume it as above, then type <b>/desktop</b>. Claude saves the session and opens it in the desktop app. Supported on Windows x64 and macOS with a Claude subscription. Claude Desktop keeps its own history, so it cannot list this conversation until you move it across.</span></div><div class="value"><b>/desktop</b></div></div>
             {{end}}
             <div class="row"><div class="label">Access level<span>SMS turns run with this Windows user's normal permissions and no elevation, the same as Codex.</span></div><div class="value"><b>{{.S.PermissionModeLabel}}</b></div></div>
             <div class="row"><div class="label">Last test</div><div class="value"><b>{{if .S.ClaudeCheck.Known}}{{ago .S.ClaudeCheck.At}}{{else}}Never{{end}}</b>{{if .S.ClaudeCheck.Detail}}<span>{{.S.ClaudeCheck.Detail}}</span>{{end}}</div></div>
@@ -886,7 +887,7 @@ const settingsHTML = `{{define "content"}}
 
 <div class="tiles">{{range .Tiles}}{{template "tile" .}}{{end}}</div>
 
-<section class="card">
+<section class="card" id="updates">
   <div class="card-head divided">
     <div class="card-title-row">
       <span class="mark shield">{{icon "download"}}</span>
@@ -911,8 +912,25 @@ const settingsHTML = `{{define "content"}}
       {{if .S.Update.Error}}<div class="row"><div class="label">Last error</div><div class="value">{{.S.Update.Error}}</div></div>{{end}}
     </div>
     {{if .S.Update.Newer}}
-    <p class="hint">Installing runs the signed-in-user installer for v{{.S.Update.Version}} in place. It keeps this install's folder, settings, allowed numbers, and Windows startup choice, and asks no setup questions.</p>
+    <p class="hint">Installing runs the signed-in-user installer for v{{.S.Update.Version}} in place. It keeps this install's folder, settings, allowed numbers, and Windows startup choice, and asks no setup questions. FlipAi reopens when it finishes.</p>
     {{end}}
+    <form method="post" action="/settings/updates">
+      <div class="toggle">
+        <div class="label">Install updates automatically<span>FlipAi downloads the release, checks it against the checksum published with it, installs it, and comes back on the new version. It never interrupts an SMS turn that is already running.</span></div>
+        <label class="switch"><input type="hidden" name="autoUpdate" value="0"><input type="checkbox" name="autoUpdate" value="1" data-autosubmit{{if .S.AutoUpdate}} checked{{end}}><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label for="updateCheckHours">Check for updates every</label>
+        <select id="updateCheckHours" name="updateCheckHours" data-autosubmit>
+          <option value="1"{{if eq .S.UpdateCheckHours 1}} selected{{end}}>Hour</option>
+          <option value="6"{{if eq .S.UpdateCheckHours 6}} selected{{end}}>6 hours</option>
+          <option value="12"{{if eq .S.UpdateCheckHours 12}} selected{{end}}>12 hours</option>
+          <option value="24"{{if eq .S.UpdateCheckHours 24}} selected{{end}}>Day</option>
+          <option value="168"{{if eq .S.UpdateCheckHours 168}} selected{{end}}>Week</option>
+        </select>
+        <p class="hint">FlipAi checks on this schedule in the background, so you never have to open this page to find out. A new release also shows next to the version in the sidebar.</p>
+      </div>
+    </form>
   </div>
 </section>
 

@@ -102,10 +102,20 @@ func handleWindowClosed() {
 // runUpdateInstaller launches the downloaded Setup EXE in silent mode. The
 // installer stops the running bridge, replaces the files in place, and starts
 // FlipAi again; no setup questions are asked on an update.
-func runUpdateInstaller(path string) error {
-	// /restartapp=1 is FlipAi's own flag: it tells the installer to start the
-	// bridge again afterwards, which only makes sense for an in-app update.
-	cmd := exec.Command(path, "/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES", "/restartapp=1")
+//
+// reopenWindow says how FlipAi should come back. An update the user pressed
+// Install for should reopen the window they were just looking at; an automatic
+// background update should restore the bridge without stealing focus.
+func runUpdateInstaller(path string, reopenWindow bool) error {
+	// /restartapp is FlipAi's own flag; the installer maps 1 to "launcher, with
+	// the window" and 2 to "background bridge only". Without it a silent run
+	// leaves nothing running at all, which is correct for scripted deployment
+	// and wrong for an in-app update.
+	mode := "/restartapp=2"
+	if reopenWindow {
+		mode = "/restartapp=1"
+	}
+	cmd := exec.Command(path, "/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES", mode)
 	hideWindow(cmd)
 	return cmd.Start()
 }
