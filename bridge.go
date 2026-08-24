@@ -284,27 +284,37 @@ func parseRemoteCommand(raw string, cfg Config) (remoteCommand, error) {
 		}
 		rest = strings.TrimSpace(strings.TrimPrefix(raw, f[0]))
 	}
-	up := strings.ToUpper(rest)
-	if up == "STATUS" {
+	if strings.EqualFold(rest, "STATUS") {
 		return remoteCommand{Status: true}, nil
 	}
-	if up == "C NEW" || up == "C: NEW" {
+
+	codexPrefix := configuredCodexPrefix(cfg)
+	claudePrefix := configuredClaudePrefix(cfg)
+	newSession := configuredNewSessionCommand(cfg)
+	defaultAgent := cfg.DefaultAgent
+	if defaultAgent != "A" && defaultAgent != "C" {
+		defaultAgent = "C"
+	}
+
+	// The new-session word is configurable too. It works by itself for the
+	// configured default agent, or after either agent prefix. Existing installs
+	// keep C/A/NEW because those remain the defaults.
+	if strings.EqualFold(strings.TrimSpace(rest), newSession) {
+		return remoteCommand{Agent: defaultAgent, New: true}, nil
+	}
+	if isAgentNewSession(rest, codexPrefix, newSession) {
 		return remoteCommand{Agent: "C", New: true}, nil
 	}
-	if up == "A NEW" || up == "A: NEW" {
+	if isAgentNewSession(rest, claudePrefix, newSession) {
 		return remoteCommand{Agent: "A", New: true}, nil
 	}
-	agent := cfg.DefaultAgent
+
+	agent := defaultAgent
 	text := rest
-	if strings.HasPrefix(up, "C:") {
-		agent = "C"
-		text = strings.TrimSpace(rest[2:])
-	} else if strings.HasPrefix(up, "A:") {
-		agent = "A"
-		text = strings.TrimSpace(rest[2:])
-	}
-	if agent != "A" && agent != "C" {
-		agent = "C"
+	if tail, ok := stripAgentCommandPrefix(rest, codexPrefix); ok {
+		agent, text = "C", tail
+	} else if tail, ok := stripAgentCommandPrefix(rest, claudePrefix); ok {
+		agent, text = "A", tail
 	}
 	if text == "" {
 		return remoteCommand{}, errors.New("empty command")
@@ -977,7 +987,7 @@ func (b *Bridge) deliver(ctx context.Context, m GmailMessage, rc remoteCommand, 
 	}
 	startedAt := time.Now()
 	for _, p := range parts {
-		if err := b.gmail.SendText(ctx, target, p); err != nil {
+		if err := sendThreadedVoiceReply(ctx, b.gmail, m, p); err != nil {
 			log.Printf("Google Voice reply: %v", err)
 			b.timedEvent("error", "reply", "Google Voice reply failed: "+truncate(err.Error(), 220), rc.Sender, rc.Agent, m.ID, time.Since(startedAt))
 			return
@@ -997,7 +1007,7 @@ func (b *Bridge) notify(ctx context.Context, m GmailMessage, line string) {
 	if target == "" {
 		return
 	}
-	if err := b.gmail.SendText(ctx, target, truncate(line, b.cfg.GoogleVoice.ReplyMaxChars)); err != nil {
+	if err := sendThreadedVoiceReply(ctx, b.gmail, m, truncate(line, b.cfg.GoogleVoice.ReplyMaxChars)); err != nil {
 		log.Printf("Google Voice status text: %v", err)
 	}
 }

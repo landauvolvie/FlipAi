@@ -47,15 +47,18 @@ type uiStatus struct {
 	LastAgent           string
 	LastRunAt           time.Time
 
-	Cwd              string
-	CwdOK            bool
-	CodexCwd         string
-	ClaudeCwd        string
-	CodexCwdOK       bool
-	ClaudeCwdOK      bool
-	DefaultAgent     string
-	DefaultAgentName string
-	TurnTimeout      int
+	Cwd               string
+	CwdOK             bool
+	CodexCwd          string
+	ClaudeCwd         string
+	CodexCwdOK        bool
+	ClaudeCwdOK       bool
+	DefaultAgent      string
+	DefaultAgentName  string
+	CodexPrefix       string
+	ClaudePrefix      string
+	NewSessionCommand string
+	TurnTimeout       int
 
 	AllowedNumbers []AllowedNumber
 	AllowedCount   int
@@ -172,6 +175,9 @@ func (a *App) status() uiStatus {
 		LastRunAt:          st.LastRunAt,
 		Cwd:                cfg.Cwd,
 		DefaultAgent:       cfg.DefaultAgent,
+		CodexPrefix:        configuredCodexPrefix(cfg),
+		ClaudePrefix:       configuredClaudePrefix(cfg),
+		NewSessionCommand:  configuredNewSessionCommand(cfg),
 		TurnTimeout:        cfg.TurnTimeoutMinutes,
 		AllowedNumbers:     cfg.GoogleVoice.AllowedNumbers,
 		RequireCode:        cfg.Security.RequireCode,
