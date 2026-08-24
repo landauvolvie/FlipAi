@@ -37,6 +37,9 @@ type Config struct {
 	LocalToken         string `json:"localToken"`
 	TurnTimeoutMinutes int    `json:"turnTimeoutMinutes"`
 	DefaultAgent       string `json:"defaultAgent"`
+	CodexPrefix        string `json:"codexPrefix,omitempty"`
+	ClaudePrefix       string `json:"claudePrefix,omitempty"`
+	NewSessionCommand  string `json:"newSessionCommand,omitempty"`
 
 	// Paused stops the bridge from picking up new texts without shutting the
 	// host down. The Home page toggles it, and the poll loop honours it live, so
@@ -230,8 +233,8 @@ func defaultConfig(dataDir string) Config {
 	return Config{
 		CodexPath: "codex", ClaudePath: "claude", Cwd: home,
 		Listen: "127.0.0.1:8765", LocalToken: tok, TurnTimeoutMinutes: 90,
-		DefaultAgent: "C",
-		Gmail:        GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
+		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, NewSessionCommand: defaultNewSessionCommand,
+		Gmail: GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
 		GoogleVoice: GoogleVoiceConfig{
 			RequiredSubjectPhrase:   "new text message from",
 			ReplyMaxChars:           300,
@@ -349,6 +352,12 @@ func loadConfig(path, dataDir string) (Config, error) {
 	}
 	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
 		cfg.DefaultAgent = "C"
+	}
+	cfg.CodexPrefix = normalizeCommandToken(cfg.CodexPrefix, defaultCodexPrefix)
+	cfg.ClaudePrefix = normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)
+	cfg.NewSessionCommand = normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)
+	if strings.EqualFold(cfg.CodexPrefix, cfg.ClaudePrefix) {
+		cfg.CodexPrefix, cfg.ClaudePrefix = defaultCodexPrefix, defaultClaudePrefix
 	}
 	if cfg.LocalToken == "" {
 		cfg.LocalToken, err = secureRandomToken(24)

@@ -300,6 +300,32 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 				cfg.DefaultAgent = v
 			}
 		}
+		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("newSessionCommand") {
+			codexPrefix, claudePrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredNewSessionCommand(*cfg)
+			var err error
+			if r.Form.Has("codexPrefix") {
+				codexPrefix, err = validateCommandToken(r.FormValue("codexPrefix"), "Codex prefix")
+				if err != nil {
+					return err
+				}
+			}
+			if r.Form.Has("claudePrefix") {
+				claudePrefix, err = validateCommandToken(r.FormValue("claudePrefix"), "Claude prefix")
+				if err != nil {
+					return err
+				}
+			}
+			if strings.EqualFold(codexPrefix, claudePrefix) {
+				return fmt.Errorf("Codex and Claude prefixes must be different")
+			}
+			if r.Form.Has("newSessionCommand") {
+				newSession, err = validateCommandToken(r.FormValue("newSessionCommand"), "new-session command")
+				if err != nil {
+					return err
+				}
+			}
+			cfg.CodexPrefix, cfg.ClaudePrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, newSession
+		}
 		if n, ok, err := formInt(r, "turnTimeout", 1, 600); err != nil {
 			return fmt.Errorf("turn timeout: %w", err)
 		} else if ok {

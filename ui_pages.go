@@ -170,9 +170,9 @@ func agentRole(s uiStatus, agent string) string {
 		return "Default agent"
 	}
 	if agent == "C" {
-		return "Handles C: messages"
+		return "Handles " + s.CodexPrefix + ": messages"
 	}
-	return "Handles A: messages"
+	return "Handles " + s.ClaudePrefix + ": messages"
 }
 
 func pausedSub(s uiStatus) string {
@@ -510,7 +510,7 @@ const agentsHTML = `{{define "content"}}
             <option value="C"{{if eq .S.DefaultAgent "C"}} selected{{end}}>Codex</option>
             <option value="A"{{if eq .S.DefaultAgent "A"}} selected{{end}}>Claude</option>
           </select>
-          <p class="hint">Used when a text has no C: or A: prefix.</p>
+          <p class="hint">Used when a text has no {{.S.CodexPrefix}}: or {{.S.ClaudePrefix}}: prefix.</p>
         </div>
         <div class="field">
           <label for="turnTimeout">Turn timeout</label>
@@ -525,6 +525,23 @@ const agentsHTML = `{{define "content"}}
             <option value="default"{{if eq .S.PermissionMode "default"}} selected{{end}}>Ask (blocks unattended turns)</option>
           </select>
           <p class="hint">Texting is unattended, so "Ask" will stall a turn that needs approval.</p>
+        </div>
+      </div>
+      <div class="grid-3">
+        <div class="field">
+          <label for="codexPrefix">Codex SMS prefix</label>
+          <input id="codexPrefix" type="text" name="codexPrefix" value="{{.S.CodexPrefix}}" maxlength="24" required>
+          <p class="hint">Example: <b>{{.S.CodexPrefix}}: check the latest build</b>. Letters or numbers are fine.</p>
+        </div>
+        <div class="field">
+          <label for="claudePrefix">Claude SMS prefix</label>
+          <input id="claudePrefix" type="text" name="claudePrefix" value="{{.S.ClaudePrefix}}" maxlength="24" required>
+          <p class="hint">Example: <b>{{.S.ClaudePrefix}}: review this issue</b>. It must differ from the Codex prefix.</p>
+        </div>
+        <div class="field">
+          <label for="newSessionCommand">New-session command</label>
+          <input id="newSessionCommand" type="text" name="newSessionCommand" value="{{.S.NewSessionCommand}}" maxlength="24" required>
+          <p class="hint">Use <b>{{.S.CodexPrefix}} {{.S.NewSessionCommand}}</b>, <b>{{.S.ClaudePrefix}} {{.S.NewSessionCommand}}</b>, or send it alone for the default agent.</p>
         </div>
       </div>
       <div class="field">
@@ -551,7 +568,7 @@ func (a *App) agentsPage(w http.ResponseWriter, r *http.Request) {
 			FootLabel: "Executable", FootValue: foundLabel(s.CodexFound), FootTone: codexTone},
 		{Brand: "claude", Title: "Claude", Value: claudeValue, Tone: claudeTone, Sub: "Claude Code CLI",
 			FootLabel: "Executable", FootValue: foundLabel(s.ClaudeFound), FootTone: claudeTone},
-		{Icon: "cpu", Title: "Default agent", Value: s.DefaultAgentName, Tone: "brand", Sub: "Used without a C: or A: prefix",
+		{Icon: "cpu", Title: "Default agent", Value: s.DefaultAgentName, Tone: "brand", Sub: "Used without a " + s.CodexPrefix + ": or " + s.ClaudePrefix + ": prefix",
 			FootLabel: "Turn timeout", FootValue: itoa(s.TurnTimeout) + " min"},
 		{Icon: "folder", Title: "Working folders", Value: shortPath(s.CodexCwd), Tone: "", Sub: "Claude: " + shortPath(s.ClaudeCwd),
 			FootLabel: "Accessible", FootValue: yesNo(s.CodexCwdOK && s.ClaudeCwdOK)},
