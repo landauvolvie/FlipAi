@@ -65,19 +65,27 @@ func newClaudeSessionName(now time.Time) string {
 	return claudeSessionPrefix + " " + now.Format("2006-01-02 15:04") + " " + randomNameSuffix()
 }
 
-// randomNameSuffix returns four lowercase base32 characters. Randomness failing
-// is not worth failing a turn over, so the clock's nanoseconds stand in.
+// randomNameSuffix returns eight lowercase base32 characters. Randomness
+// failing is not worth failing a turn over, so the clock's nanoseconds stand in.
+//
+// Eight rather than four: the name carries the minute, so every conversation
+// started inside the same minute is separated by this suffix alone. Four
+// characters is 32^4 ≈ 1.05 million values, which collides about once in every
+// fifty runs of two hundred names — and a collision is not cosmetic, because
+// Claude Code refuses an ambiguous `--resume "FlipAi SMS …"` with "matches N
+// sessions". Eight characters make that around one in fifty million.
 func randomNameSuffix() string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
-	b := make([]byte, 4)
+	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		n := uint32(time.Now().UnixNano())
+		n := uint64(time.Now().UnixNano())
 		for i := range b {
 			b[i] = byte(n >> (8 * i))
 		}
 	}
 	out := make([]byte, len(b))
 	for i, v := range b {
+		// 32 divides 256 exactly, so the fold onto the alphabet is unbiased.
 		out[i] = alphabet[int(v)%len(alphabet)]
 	}
 	return string(out)
