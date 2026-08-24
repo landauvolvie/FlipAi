@@ -25,7 +25,13 @@
 - Checkpoint-before-execute semantics to avoid duplicate remote execution.
 - Gmail reply constrained to exact `txt.voice.google.com` domain.
 - Codex ChatGPT-account check and Claude non-API/Console auth check.
-- No dangerous Claude bypass-permissions flag; unresolved Codex approval requests are declined.
+- Unresolved Codex approval requests are declined. Neither agent is sandboxed
+  from the user's own files or tools: a Codex turn runs with
+  `approvalPolicy: never` and `danger-full-access`, and a Claude turn with the
+  matching `--permission-mode bypassPermissions`, so both act with the normal
+  permissions of the signed-in Windows user and neither requests elevation. The
+  authorization chain above — not an agent sandbox — is what stops an
+  unauthorized text from reaching either agent.
 - Watchdog restart is local only and uses a user-writable stop flag for intentional shutdown.
 
 ## Optional settings that change the trade-off

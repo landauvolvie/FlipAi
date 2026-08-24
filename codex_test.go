@@ -38,6 +38,22 @@ func TestMain(m *testing.M) {
 				fmt.Fprint(os.Stderr, "Not logged in. Please run /login")
 				os.Exit(1)
 			}
+			// Report the real command line so a test can assert what an SMS turn
+			// actually asks Claude Code for, rather than only what the argument
+			// builder returns in isolation.
+			if os.Getenv("FLIPAI_TEST_CLAUDE_ECHO_ARGS") == "1" {
+				b, _ := json.Marshal(map[string]any{"type": "result", "is_error": false, "result": strings.Join(os.Args[1:], " "), "session_id": "claude_session_test"})
+				fmt.Print(string(b))
+				os.Exit(0)
+			}
+			if os.Getenv("FLIPAI_TEST_CLAUDE_DENY_CHROME") == "1" {
+				b, _ := json.Marshal(map[string]any{"type": "result", "is_error": false,
+					"result":             "I do not have permission to control Chrome.",
+					"session_id":         "claude_session_test",
+					"permission_denials": []map[string]any{{"tool_use_id": "a", "tool_name": "chrome__tabs_context_mcp"}}})
+				fmt.Print(string(b))
+				os.Exit(0)
+			}
 			result := "Claude done."
 			if len(os.Args) > 2 && strings.Contains(os.Args[2], "FLIPAI_CLAUDE_OK") {
 				result = "FLIPAI_CLAUDE_OK"

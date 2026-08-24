@@ -60,7 +60,7 @@ The window has a sidebar with seven pages:
 | --- | --- |
 | **Home** | Live status of Gmail, both agents, the allowlist, and security; recent activity; **Pause FlipAi**, which leaves incoming texts unread in Gmail until you resume |
 | **Connections** | Gmail method and credentials, subject-phrase matching, and a message-flow test that checks the whole inbound path |
-| **Agents** | Codex and Claude executables, a working folder per agent, real background tests, default agent, turn timeout, and Claude permission mode |
+| **Agents** | Codex and Claude executables, a working folder per agent, real background tests, default agent, turn timeout, Claude permission mode, the Claude Chrome toggle, and the command that reopens the Claude SMS conversation |
 | **Phone** | Allowed numbers with labels, reply length and split limits, acknowledgement and progress texts, and the SMS security code |
 | **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took |
 | **Settings** | Updates, start with Windows, **start before sign-in**, close to tray, light/dark/system theme, compact layout, in-window error alerts, log export, and reset |
@@ -179,10 +179,39 @@ It verifies that Codex is using ChatGPT-managed authentication and refuses provi
 FlipAi invokes Claude Code in non-interactive mode:
 
 ```text
-claude -p "..." --output-format json
+claude -p "..." --output-format json --permission-mode bypassPermissions --name "FlipAi SMS" --chrome
 ```
 
-It strips Anthropic API-key environment variables and requires a signed-in subscription account. Dangerous permission bypass mode is not used.
+It strips Anthropic API-key environment variables and requires a signed-in subscription account.
+
+### Access level
+
+An SMS turn gives Claude the same reach FlipAi already gives Codex: the normal permissions of the signed-in Windows user, with no elevation.
+
+This matters because texting is unattended. Claude's narrower modes do not simply do less — they refuse. `acceptEdits` auto-approves **file edits and nothing else**, so Bash and every MCP tool still raise a permission prompt, and the Claude in Chrome tools are MCP tools. With nobody at the keyboard to answer that prompt, the call is refused and Claude reports, accurately, that it was not allowed to drive Chrome — even though the same account drives Chrome fine when you run `claude` yourself. Full user access is what makes a texted command behave like the same command typed at the desktop.
+
+You can still narrow it under **Agents → Behavior → Claude permission mode**. If a turn is blocked, the reply names the tool and the mode that blocked it rather than leaving you with Claude's bare refusal.
+
+> **Upgrading from 0.11.1 or earlier:** those builds rewrote this setting to `acceptEdits` on every load — an explicit `bypassPermissions` was overwritten too — so the stored value recorded what that rewrite produced rather than a choice. Upgrading moves it to full user access once. Change it on the Agents page if you want it narrower.
+
+Claude refuses full-access mode when it is started with administrator privileges. FlipAi never needs elevation, so run it as your normal Windows user.
+
+## Finding the Claude SMS conversation
+
+Codex and Claude persist conversations differently, and FlipAi cannot paper over the difference:
+
+- **Codex** — FlipAi starts durable (non-ephemeral) threads and hands each one back with `thread/unsubscribe` once its turn completes, so the same conversation opens in Codex Desktop.
+- **Claude** — Claude Code has no equivalent handoff. Sessions are stored per **working folder**, and `/resume` lists only the sessions belonging to the folder you started `claude` in.
+
+So the SMS conversation is a normal, resumable Claude Code session; it is just filed under Claude's working folder. FlipAi names it **FlipAi SMS** so it is identifiable in the `/resume` picker, and **Agents → Claude → Advanced** shows the exact command:
+
+```text
+claude --resume <session id>
+```
+
+Run it from the working folder shown on that card. If you run `claude` somewhere else, the picker will not list the SMS session — that is the folder scoping, not a lost conversation.
+
+Claude Desktop keeps its own history, separate from Claude Code, and will not show this conversation.
 
 ## Keeping Claude signed in
 
@@ -236,7 +265,7 @@ The uninstaller stops FlipAi, removes the Start Menu shortcut, removes the curre
 - Google OAuth tokens or Gmail App Passwords are protected with Windows DPAPI.
 - The SMS code is stored as a salted, iterated hash rather than plaintext.
 - Codex approval requests that reach the unattended bridge are declined.
-- Claude `--dangerously-skip-permissions` is never used.
+- Both agents act with the normal permissions of the signed-in Windows user and neither is sandboxed from your own files or tools — that is what the product does. The phone allowlist and SMS security code are the boundary, not an agent sandbox. See [Access level](#access-level).
 - No telemetry, packer, obfuscation, browser-password extraction, keylogging, process injection, or code injection.
 - No service, driver, HKLM startup entry, scheduled task, firewall rule, or administrator elevation is required.
 

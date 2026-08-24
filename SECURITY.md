@@ -18,7 +18,7 @@ AI SMS Bridge is a remote-control bridge. A valid SMS can cause an AI agent to a
 - Codex must use ChatGPT-managed auth; API/provider auth is rejected.
 - Anthropic API environment variables are removed before Claude Code is launched; API/Console auth is rejected by the setup test.
 - Unexpected Codex approval requests are declined rather than automatically approved.
-- Claude dangerous permission bypass is never enabled.
+- Both agents run an SMS turn with the same reach: the normal permissions of the signed-in Windows user, and no elevation. Codex turns use `approvalPolicy: never` with `danger-full-access`; Claude turns use the matching `--permission-mode bypassPermissions`. This is the point of the product — a text can drive the same tools the user drives at the desktop, including Chrome — and it is why the phone allowlist and SMS security code are the real boundary. Claude's permission mode can be narrowed on the Agents page; note that anything narrower refuses the browser and other MCP tools on an unattended turn.
 - State intentionally excludes prompt and result bodies.
 - No telemetry, obfuscation, packing, credential scraping, browser-password extraction, keylogging, process injection, remote-thread creation, or public webhooks.
 - Update checks contact only `api.github.com` for this repository's latest release. They send no identifier, no configuration, and no message data. Nothing installs on its own: FlipAi shows that a release exists and installs it only when you click Install, after checking the download against the checksum published with the release.

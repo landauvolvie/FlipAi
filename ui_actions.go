@@ -295,6 +295,9 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		if cfg.ClaudeCwd == cfg.Cwd {
 			cfg.ClaudeCwd = ""
 		}
+		if v, ok := formFlag(r, "claudeUseChrome"); ok {
+			cfg.Claude.UseChrome = v
+		}
 		if r.Form.Has("defaultAgent") {
 			if v := strings.ToUpper(strings.TrimSpace(r.FormValue("defaultAgent"))); v == "A" || v == "C" {
 				cfg.DefaultAgent = v
@@ -333,7 +336,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Form.Has("permissionMode") {
 			switch v := strings.TrimSpace(r.FormValue("permissionMode")); v {
-			case "acceptEdits", "plan", "default":
+			case "bypassPermissions", "acceptEdits", "dontAsk", "plan", "default":
 				cfg.Claude.PermissionMode = v
 			}
 		}

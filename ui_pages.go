@@ -472,6 +472,10 @@ const agentsHTML = `{{define "content"}}
           <p class="hint">{{if .S.ClaudeFound}}Resolves to {{.S.ClaudeResolved}}{{else}}Not found — leave blank to search the usual install locations.{{end}}</p>
         </div>
       </div>
+      <div class="toggle">
+        <div class="label">Let Claude control Chrome<span>Passes --chrome, so a text can use the browser exactly as Claude does at the desktop. Needs Claude permission mode set to full user access; a narrower mode refuses the browser tools.</span></div>
+        <label class="switch"><input type="hidden" name="claudeUseChrome" value="0"><input type="checkbox" name="claudeUseChrome" value="1"{{if .S.ClaudeUseChrome}} checked{{end}}><span class="slider"></span></label>
+      </div>
       <details class="disclosure">
         <summary>Advanced</summary>
         <div class="disclosure-body">
@@ -487,7 +491,11 @@ const agentsHTML = `{{define "content"}}
           </div>
           {{end}}
           <div class="rows">
-            <div class="row"><div class="label">Conversation</div><div class="value"><b>{{if .S.ClaudeSessionActive}}Session active{{else}}No session yet{{end}}</b></div></div>
+            <div class="row"><div class="label">Conversation</div><div class="value"><b>{{if .S.ClaudeSessionActive}}Session active{{else}}No session yet{{end}}</b>{{if .S.ClaudeSessionActive}}<span>Named "{{.S.ClaudeSessionName}}" in Claude Code's /resume picker.</span>{{end}}</div></div>
+            {{if .S.ClaudeSessionActive}}
+            <div class="row"><div class="label">Open it in Claude Code<span>Claude Code lists sessions per folder, so open it from Claude's working folder above. Claude Desktop keeps a separate history and will not show this conversation.</span></div><div class="value"><b>claude --resume {{.S.ClaudeSessionID}}</b><span>Run in {{.S.ClaudeCwd}}</span></div></div>
+            {{end}}
+            <div class="row"><div class="label">Access level<span>SMS turns run with this Windows user's normal permissions and no elevation, the same as Codex.</span></div><div class="value"><b>{{.S.PermissionModeLabel}}</b></div></div>
             <div class="row"><div class="label">Last test</div><div class="value"><b>{{if .S.ClaudeCheck.Known}}{{ago .S.ClaudeCheck.At}}{{else}}Never{{end}}</b>{{if .S.ClaudeCheck.Detail}}<span>{{.S.ClaudeCheck.Detail}}</span>{{end}}</div></div>
           </div>
         </div>
@@ -520,11 +528,13 @@ const agentsHTML = `{{define "content"}}
         <div class="field">
           <label for="permissionMode">Claude permission mode</label>
           <select id="permissionMode" name="permissionMode">
-            <option value="acceptEdits"{{if eq .S.PermissionMode "acceptEdits"}} selected{{end}}>Accept edits</option>
+            <option value="bypassPermissions"{{if eq .S.PermissionMode "bypassPermissions"}} selected{{end}}>Full user access (matches Codex)</option>
+            <option value="dontAsk"{{if eq .S.PermissionMode "dontAsk"}} selected{{end}}>Never prompt (your Claude rules decide)</option>
+            <option value="acceptEdits"{{if eq .S.PermissionMode "acceptEdits"}} selected{{end}}>Accept edits only (blocks Chrome)</option>
             <option value="plan"{{if eq .S.PermissionMode "plan"}} selected{{end}}>Plan only</option>
             <option value="default"{{if eq .S.PermissionMode "default"}} selected{{end}}>Ask (blocks unattended turns)</option>
           </select>
-          <p class="hint">Texting is unattended, so "Ask" will stall a turn that needs approval.</p>
+          <p class="hint">Texting is unattended, so anything that asks for approval is refused. "Accept edits only" approves file edits and nothing else, so Chrome and other tools are blocked. "Full user access" is what Codex SMS turns already use.</p>
         </div>
       </div>
       <div class="grid-3">

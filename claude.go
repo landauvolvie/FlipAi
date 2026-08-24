@@ -27,6 +27,27 @@ type ClaudeAuthStatus struct {
 // caught on the next attempt.
 const claudeAuthTTL = 10 * time.Minute
 
+// claudeFullAccess is the Claude Code permission mode that gives an SMS turn
+// the same reach FlipAi already gives Codex.
+//
+// Codex SMS turns run with approvalPolicy "never" and sandbox
+// "danger-full-access" (see applyCodexRequestDefaults). "acceptEdits" is not
+// the Claude equivalent of that: it auto-approves file edits and nothing else,
+// so Bash and every MCP tool — including the Claude in Chrome tools, which are
+// MCP tools — still go through the normal permission prompt. An unattended SMS
+// turn has nobody to answer that prompt, so the tool call is refused and Claude
+// truthfully reports that it was not allowed to drive Chrome, even though the
+// very same account drives Chrome fine in an interactive session. Matching the
+// access FlipAi already grants Codex is what makes the two agents behave alike.
+const claudeFullAccess = "bypassPermissions"
+
+// claudeSessionName labels the SMS conversation in Claude Code's own /resume
+// picker. Claude Code has no equivalent of Codex's thread/unsubscribe handoff —
+// a session is found by opening its project folder — so naming it is what keeps
+// the conversation identifiable instead of being one unlabelled row among the
+// user's other sessions.
+const claudeSessionName = "FlipAi SMS"
+
 type ClaudeClient struct {
 	path string
 	cwd  string
@@ -47,6 +68,89 @@ type claudeResult struct {
 	IsError   bool   `json:"is_error"`
 	Result    string `json:"result"`
 	SessionID string `json:"session_id"`
+
+	// PermissionDenials lists tool calls Claude attempted and was refused. A
+	// refusal is reported inside a successful run, so without reading this a
+	// blocked turn looks like a normal answer and the user is left with Claude
+	// saying it lacks permission and no way to see why.
+	PermissionDenials []claudeDenial `json:"permission_denials"`
+}
+
+type claudeDenial struct {
+	ToolName string `json:"tool_name"`
+}
+
+// deniedToolNames returns the distinct tools a turn was refused, in the order
+// they were first refused.
+func (r claudeResult) deniedToolNames() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range r.PermissionDenials {
+		name := strings.TrimSpace(d.ToolName)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// normalizeClaudePermissionMode maps a configured value onto a mode the Claude
+// Code CLI accepts. An empty, unknown, or retired value means full access, so a
+// Claude SMS turn is never quietly narrower than the Codex turn beside it.
+func normalizeClaudePermissionMode(v string) string {
+	switch strings.TrimSpace(v) {
+	case "plan":
+		return "plan"
+	case "acceptEdits":
+		return "acceptEdits"
+	case "dontAsk":
+		return "dontAsk"
+	case "default", "manual":
+		return "default"
+	default:
+		return claudeFullAccess
+	}
+}
+
+// claudePermissionModeLabel describes a mode in the same plain words the Codex
+// card uses for its own access level, so the two agents can be compared without
+// knowing what a Claude Code permission mode is.
+func claudePermissionModeLabel(mode string) string {
+	switch normalizeClaudePermissionMode(mode) {
+	case "acceptEdits":
+		return "File edits only — Chrome blocked"
+	case "plan":
+		return "Plan only — no tools"
+	case "dontAsk":
+		return "No prompts — allowlist only"
+	case "default":
+		return "Ask — unattended turns stall"
+	default:
+		return "Full user access"
+	}
+}
+
+// claudeTurnArgs builds the command line for one SMS turn. It is separate from
+// Run so the flags an SMS turn actually receives can be asserted in a test.
+func claudeTurnArgs(cfg ClaudeConfig, sessionID, prompt string) []string {
+	args := []string{"-p", prompt, "--output-format", "json"}
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+	}
+	args = append(args, "--permission-mode", normalizeClaudePermissionMode(cfg.PermissionMode))
+	// Name every turn, not just the first. --name is accepted alongside
+	// --resume, so a resumed conversation keeps its label even if the session
+	// was first created before FlipAi started naming them.
+	args = append(args, "--name", claudeSessionName)
+	// Claude keeps whatever capabilities it has at the desktop, browser
+	// included, so "check my sales in the browser" works by text too. FlipAi
+	// no longer probes `claude --help` for this: the flag is configuration.
+	if cfg.UseChrome {
+		args = append(args, "--chrome")
+	}
+	return args
 }
 
 func NewClaudeClient(path, cwd string, cfg ClaudeConfig) *ClaudeClient {
@@ -224,25 +328,14 @@ func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (resul
 	if err := validateClaudeSubscriptionPath(st); err != nil {
 		return "", sessionID, err
 	}
-	args := []string{"-p", prompt, "--output-format", "json"}
-	if sessionID != "" {
-		args = append(args, "--resume", sessionID)
-	}
-	pm := strings.TrimSpace(c.cfg.PermissionMode)
-	if pm == "" || pm == "auto" || pm == "bypassPermissions" {
-		pm = "acceptEdits"
-	}
-	args = append(args, "--permission-mode", pm)
-	// Claude keeps whatever capabilities it has at the desktop, browser
-	// included, so "check my sales in the browser" works by text too. FlipAi
-	// no longer probes `claude --help` for this: the flag is configuration.
-	if c.cfg.UseChrome {
-		args = append(args, "--chrome")
-	}
+	args := claudeTurnArgs(c.cfg, sessionID, prompt)
 	out, runErr := c.runPrint(ctx, args)
 	if runErr != nil {
 		// A failed run may mean the CLI was signed out since the last check.
 		c.invalidateAuthCache()
+		if elevErr := claudeElevationRefusal(string(out)); elevErr != nil {
+			return "", sessionID, elevErr
+		}
 		if !st.LoggedIn {
 			return "", sessionID, fmt.Errorf("Claude Code CLI is not usable from FlipAi yet: %v: %s. Claude Desktop sign-in is separate from Claude Code CLI sign-in; complete Claude Code /login once on this Windows account", runErr, truncate(c.redact(string(out)), 800))
 		}
@@ -258,5 +351,55 @@ func (c *ClaudeClient) Run(ctx context.Context, sessionID, prompt string) (resul
 	if r.SessionID == "" {
 		r.SessionID = sessionID
 	}
-	return strings.TrimSpace(r.Result), r.SessionID, nil
+	// A refused tool is reported inside a successful run. Say so in the reply:
+	// otherwise the only clue is Claude explaining that it lacks a permission
+	// the same account plainly has when the user runs Claude themselves.
+	answer := strings.TrimSpace(r.Result)
+	if note := claudeDenialNote(c.cfg.PermissionMode, r.deniedToolNames()); note != "" {
+		answer = strings.TrimSpace(answer + "\n\n" + note)
+	}
+	return answer, r.SessionID, nil
+}
+
+// claudeDenialNote is the one short line added to a reply whose tools were
+// refused. It stays terse because it shares a length-capped SMS with the actual
+// answer, and it only recommends widening the mode when widening is the fix —
+// under full access a denial comes from the user's own Claude settings instead.
+func claudeDenialNote(configured string, denied []string) string {
+	if len(denied) == 0 {
+		return ""
+	}
+	const maxNamed = 3
+	shown := denied
+	if len(shown) > maxNamed {
+		shown = shown[:maxNamed]
+	}
+	list := strings.Join(shown, ", ")
+	if len(denied) > maxNamed {
+		list += fmt.Sprintf(" +%d more", len(denied)-maxNamed)
+	}
+	mode := normalizeClaudePermissionMode(configured)
+	if mode == claudeFullAccess {
+		// Nothing FlipAi sets caused this, so point at what did.
+		return "[FlipAi: Claude blocked " + list + " — check your own Claude permission rules.]"
+	}
+	return "[FlipAi: mode " + mode + " blocked " + list + " — set Claude to full user access.]"
+}
+
+// claudeElevationRefusal recognises Claude Code refusing full-access mode
+// because the process is elevated. FlipAi never requests elevation, so this
+// only happens when the whole bridge was started as an administrator, and the
+// raw CLI text does not say which FlipAi setting caused it.
+func claudeElevationRefusal(out string) error {
+	low := strings.ToLower(out)
+	if !strings.Contains(low, "root/sudo") && !strings.Contains(low, "administrator privileges") {
+		return nil
+	}
+	// Require the permission flag by name too. "administrator" alone also
+	// appears in ordinary Windows access-denied text, which this must not
+	// misreport as a FlipAi setting problem.
+	if !strings.Contains(low, "skip-permissions") && !strings.Contains(low, "bypasspermissions") {
+		return nil
+	}
+	return errors.New("Claude refuses full-access mode when it is started with administrator privileges. Run FlipAi as your normal Windows user (FlipAi never needs elevation), or set Claude permission mode to Accept edits in Settings -> Agents")
 }

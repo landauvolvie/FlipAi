@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.11.1"
+const version = "0.12.0"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -122,8 +122,15 @@ type CodexConfig struct {
 }
 
 type ClaudeConfig struct {
+	// PermissionMode is passed to Claude Code as --permission-mode. It defaults
+	// to full user access so a Claude SMS turn reaches as far as the Codex one
+	// beside it; see claudeFullAccess for why a narrower mode silently breaks
+	// Chrome and other MCP tools on an unattended turn.
 	PermissionMode string `json:"permissionMode"`
-	UseChrome      bool   `json:"useChrome"`
+
+	// UseChrome passes --chrome so Claude can drive the browser it already
+	// drives at the desktop.
+	UseChrome bool `json:"useChrome"`
 }
 
 type SecurityConfig struct {
@@ -245,7 +252,7 @@ func defaultConfig(dataDir string) Config {
 			ProgressIntervalSeconds: 120,
 		},
 		Codex:    CodexConfig{ApprovalPolicy: "never"},
-		Claude:   ClaudeConfig{PermissionMode: "acceptEdits", UseChrome: true},
+		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true},
 		Security: SecurityConfig{RequireCode: true},
 		UI:       UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
 	}
@@ -347,9 +354,19 @@ func loadConfig(path, dataDir string) (Config, error) {
 			_ = setSecurityCode(&cfg, placeholder)
 		}
 	}
-	if cfg.Claude.PermissionMode == "" || cfg.Claude.PermissionMode == "auto" || cfg.Claude.PermissionMode == "bypassPermissions" {
-		cfg.Claude.PermissionMode = "acceptEdits"
+	// Claude SMS turns get the same reach as Codex SMS turns. Older FlipAi
+	// builds rewrote this field on every load — "", "auto", and even an
+	// explicit "bypassPermissions" all became "acceptEdits" — so the stored
+	// value records what that rewrite produced, not what the user chose: every
+	// install on disk reads "acceptEdits" whether or not anybody picked it.
+	// acceptEdits auto-approves file edits only, which left Chrome and every
+	// other MCP tool needing an approval no unattended SMS turn can give.
+	// Upgrading installs therefore move to full access once; the Agents page
+	// can narrow it again.
+	if strings.TrimSpace(cfg.Claude.PermissionMode) == "acceptEdits" {
+		cfg.Claude.PermissionMode = claudeFullAccess
 	}
+	cfg.Claude.PermissionMode = normalizeClaudePermissionMode(cfg.Claude.PermissionMode)
 	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
 		cfg.DefaultAgent = "C"
 	}

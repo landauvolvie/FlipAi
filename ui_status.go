@@ -42,6 +42,20 @@ type uiStatus struct {
 	HasClaudeToken bool
 	PermissionMode string
 
+	// PermissionModeLabel names the access level in the same plain words the
+	// Codex card uses, so the two agents can be compared at a glance.
+	PermissionModeLabel string
+
+	// ClaudeUseChrome reports whether SMS turns pass --chrome.
+	ClaudeUseChrome bool
+
+	// ClaudeSessionID and ClaudeSessionName are what the Agents page needs to
+	// tell the user how to reopen the SMS conversation in Claude Code, which
+	// lists sessions per working folder rather than handing them to a desktop
+	// app the way Codex does.
+	ClaudeSessionID   string
+	ClaudeSessionName string
+
 	CodexThreadActive   bool
 	ClaudeSessionActive bool
 	LastAgent           string
@@ -170,7 +184,10 @@ func (a *App) status() uiStatus {
 		CodexResolved:      resolveCodexExecutable(cfg.CodexPath),
 		ClaudeResolved:     resolveClaudeExecutable(cfg.ClaudePath),
 		HasClaudeToken:     hasClaudeToken(claudeTokenPath(a.dataDir)),
-		PermissionMode:     cfg.Claude.PermissionMode,
+		PermissionMode:     normalizeClaudePermissionMode(cfg.Claude.PermissionMode),
+		ClaudeUseChrome:    cfg.Claude.UseChrome,
+		ClaudeSessionID:    st.ClaudeSessionID,
+		ClaudeSessionName:  claudeSessionName,
 		LastAgent:          st.LastAgent,
 		LastRunAt:          st.LastRunAt,
 		Cwd:                cfg.Cwd,
@@ -207,6 +224,7 @@ func (a *App) status() uiStatus {
 	s.AllowedCount = len(s.AllowedNumbers)
 	s.CodexThreadActive = st.CodexThreadID != ""
 	s.ClaudeSessionActive = st.ClaudeSessionID != ""
+	s.PermissionModeLabel = claudePermissionModeLabel(s.PermissionMode)
 	s.DefaultAgentName = "Codex"
 	if cfg.DefaultAgent == "A" {
 		s.DefaultAgentName = "Claude"
