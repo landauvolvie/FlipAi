@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.9.0"
+const version = "0.10.0"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -127,6 +127,12 @@ type SecurityConfig struct {
 	RequireCode bool   `json:"requireCode"`
 	CodeSalt    string `json:"codeSalt,omitempty"`
 	CodeHash    string `json:"codeHash,omitempty"`
+
+	// MachineScopeSecrets records that stored credentials are protected for
+	// this PC rather than for the signed-in account. Starting before sign-in
+	// requires it, because a task that runs with no interactive logon has no
+	// account key to decrypt with.
+	MachineScopeSecrets bool `json:"machineScopeSecrets,omitempty"`
 }
 
 type State struct {
@@ -144,6 +150,10 @@ type State struct {
 	GmailCheck  Check `json:"gmailCheck,omitempty"`
 	CodexCheck  Check `json:"codexCheck,omitempty"`
 	ClaudeCheck Check `json:"claudeCheck,omitempty"`
+
+	// Update is the result of the last release check, so the window can offer
+	// an in-place update instead of the user re-running a full install.
+	Update ReleaseInfo `json:"update,omitempty"`
 }
 
 // Check is the result of one dependency test, kept so the desktop UI can show

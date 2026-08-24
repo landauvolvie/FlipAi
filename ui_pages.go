@@ -18,6 +18,7 @@ type pageView struct {
 // actually verified; Check draws the small confirmation mark in the corner.
 type tileView struct {
 	Icon      string
+	Brand     string
 	Brandish  bool
 	Title     string
 	Value     string
@@ -33,7 +34,7 @@ type tileView struct {
 const uiPartials = `
 {{define "tile"}}<div class="tile">
   <div class="tile-top">
-    <div class="tile-icon{{if .Brandish}} brandish{{end}}">{{icon .Icon}}</div>
+    {{if .Brand}}<span class="bmark {{.Brand}}">{{brand .Brand}}</span>{{else}}<div class="tile-icon{{if .Brandish}} brandish{{end}}">{{icon .Icon}}</div>{{end}}
     {{if .Check}}<span class="check {{.Check}}">{{if eq .Check "ok"}}{{icon "check"}}{{else}}{{icon "alert"}}{{end}}</span>{{end}}
   </div>
   <h3>{{.Title}}</h3>
@@ -148,9 +149,9 @@ func (a *App) homePage(w http.ResponseWriter, r *http.Request) {
 	}
 	view := homeView{pageView: pageView{Shell: a.shell(r, "home", "FlipAi"), S: s}}
 	view.Tiles = []tileView{
-		{Icon: "mail", Title: "Google Voice / Gmail", Value: gmailValue, Tone: gmailTone, Sub: gmailSub, Check: checkTone(s.GmailReady)},
-		{Icon: "terminal", Title: "Codex", Value: codexValue, Tone: codexTone, Sub: agentRole(s, "C"), Check: checkTone(s.CodexCheck.OK)},
-		{Icon: "agent", Title: "Claude", Value: claudeValue, Tone: claudeTone, Sub: agentRole(s, "A"), Check: checkTone(s.ClaudeCheck.OK)},
+		{Brand: "google", Title: "Google Voice / Gmail", Value: gmailValue, Tone: gmailTone, Sub: gmailSub, Check: checkTone(s.GmailReady)},
+		{Brand: "codex", Title: "Codex", Value: codexValue, Tone: codexTone, Sub: agentRole(s, "C"), Check: checkTone(s.CodexCheck.OK)},
+		{Brand: "claude", Title: "Claude", Value: claudeValue, Tone: claudeTone, Sub: agentRole(s, "A"), Check: checkTone(s.ClaudeCheck.OK)},
 		{Icon: "phone", Title: "Phone", Value: phoneValue, Tone: phoneTone, Sub: pausedSub(s), Check: checkTone(s.AllowedCount > 0)},
 		{Icon: "shield", Title: "Security", Value: securityValue, Tone: securityTone, Sub: securitySub, Check: "ok"},
 	}
@@ -224,7 +225,7 @@ const connectionsHTML = `{{define "content"}}
 <section class="card">
   <div class="card-head divided">
     <div class="card-title-row">
-      <span class="mark mail">{{icon "mail"}}</span>
+      <span class="bmark lg google">{{brand "google"}}</span>
       <div>
         <h2>Gmail / Google Voice <span class="pill {{if .S.GmailReady}}ok{{else}}warn{{end}}">{{if .S.GmailReady}}Connected{{else}}Not connected{{end}}</span></h2>
         <p>Send and receive SMS through Gmail and Google Voice.</p>
@@ -334,8 +335,8 @@ func (a *App) connectionsPage(w http.ResponseWriter, r *http.Request) {
 		filterValue, filterTone = "Active", "ok"
 	}
 	view.Tiles = []tileView{
-		{Icon: "mail", Title: "Gmail", Value: gmailValue, Tone: gmailTone, Sub: s.GmailMethodLabel, Check: checkTone(s.GmailReady)},
-		{Icon: "send", Title: "Voice reply", Value: replyValue, Tone: replyTone, Sub: "Replies go to the sender's Voice thread", Check: checkTone(s.GmailReady)},
+		{Brand: "google", Title: "Gmail", Value: gmailValue, Tone: gmailTone, Sub: s.GmailMethodLabel, Check: checkTone(s.GmailReady)},
+		{Brand: "voice", Title: "Voice reply", Value: replyValue, Tone: replyTone, Sub: "Replies go to the sender's Voice thread", Check: checkTone(s.GmailReady)},
 		{Icon: "shield", Title: "Sender filter", Value: filterValue, Tone: filterTone, Sub: plural(s.AllowedCount, "number") + " allowed", Check: checkTone(s.AllowedCount > 0)},
 		{Icon: "clock", Title: "Last sync", Value: view.LastSync, Tone: "", Sub: mailboxSub(s), Check: checkTone(s.LastPollErr == "" && !s.LastPollAt.IsZero())},
 	}
@@ -378,7 +379,7 @@ const agentsHTML = `{{define "content"}}
   <form method="post" action="/agents/save">
     <div class="card-head">
       <div class="card-title-row">
-        <span class="mark codex">&gt;_</span>
+        <span class="bmark lg codex">{{brand "codex"}}</span>
         <div>
           <h2>Codex
             <span class="pill {{if .S.CodexCheck.OK}}ok{{else}}warn{{end}}">{{if .S.CodexCheck.OK}}Ready{{else if .S.CodexCheck.Known}}Needs attention{{else}}Not tested{{end}}</span>
@@ -434,7 +435,7 @@ const agentsHTML = `{{define "content"}}
   <form method="post" action="/agents/save">
     <div class="card-head">
       <div class="card-title-row">
-        <span class="mark claude">A\</span>
+        <span class="bmark lg claude">{{brand "claude"}}</span>
         <div>
           <h2>Claude
             <span class="pill {{if .S.ClaudeCheck.OK}}ok{{else}}warn{{end}}">{{if .S.ClaudeCheck.OK}}Ready{{else if .S.ClaudeCheck.Known}}Needs attention{{else}}Not tested{{end}}</span>
@@ -546,9 +547,9 @@ func (a *App) agentsPage(w http.ResponseWriter, r *http.Request) {
 	claudeValue, claudeTone := checkLabel(s.ClaudeCheck, "Ready")
 	view := agentsView{pageView: pageView{Shell: a.shell(r, "agents", "Agents"), S: s}}
 	view.Tiles = []tileView{
-		{Icon: "terminal", Title: "Codex", Value: codexValue, Tone: codexTone, Sub: "Local Codex CLI",
+		{Brand: "codex", Title: "Codex", Value: codexValue, Tone: codexTone, Sub: "Local Codex CLI",
 			FootLabel: "Executable", FootValue: foundLabel(s.CodexFound), FootTone: codexTone},
-		{Icon: "agent", Title: "Claude", Value: claudeValue, Tone: claudeTone, Sub: "Claude Code CLI",
+		{Brand: "claude", Title: "Claude", Value: claudeValue, Tone: claudeTone, Sub: "Claude Code CLI",
 			FootLabel: "Executable", FootValue: foundLabel(s.ClaudeFound), FootTone: claudeTone},
 		{Icon: "cpu", Title: "Default agent", Value: s.DefaultAgentName, Tone: "brand", Sub: "Used without a C: or A: prefix",
 			FootLabel: "Turn timeout", FootValue: itoa(s.TurnTimeout) + " min"},
@@ -777,7 +778,7 @@ const activityPageHTML = `{{define "content"}}
 <div data-feed data-filterable data-per-page="10">
   <div class="tiles">
     <div class="tile">
-      <div class="tile-top"><div class="tile-icon">{{icon "mail"}}</div></div>
+      <div class="tile-top"><span class="bmark google">{{brand "google"}}</span></div>
       <h3>Gmail / Voice</h3><div class="val" data-summary="gmail">Waiting</div><div class="sub">Mailbox checks and message reads</div>
     </div>
     <div class="tile">
@@ -785,7 +786,7 @@ const activityPageHTML = `{{define "content"}}
       <h3>Agents</h3><div class="val" data-summary="agent">Waiting</div><div class="sub">Codex and Claude turns</div>
     </div>
     <div class="tile">
-      <div class="tile-top"><div class="tile-icon">{{icon "send"}}</div></div>
+      <div class="tile-top"><span class="bmark voice">{{brand "voice"}}</span></div>
       <h3>Reply</h3><div class="val" data-summary="reply">Waiting</div><div class="sub">Last reply <span data-summary="reply" data-summary-time>—</span></div>
     </div>
     <div class="tile">
@@ -858,6 +859,36 @@ const settingsHTML = `{{define "content"}}
 
 <div class="tiles">{{range .Tiles}}{{template "tile" .}}{{end}}</div>
 
+<section class="card">
+  <div class="card-head divided">
+    <div class="card-title-row">
+      <span class="mark shield">{{icon "download"}}</span>
+      <div><h2>Updates</h2><p>FlipAi installs over itself, keeping your settings and connections.</p></div>
+    </div>
+    <div class="head-actions">
+      <form method="post" action="/update/check"><button class="btn" type="submit">{{icon "refresh"}}Check for updates</button></form>
+      {{if .S.Update.Newer}}<form method="post" action="/update/install"><button class="btn primary" type="submit">{{icon "download"}}Install {{.S.Update.Version}}</button></form>{{end}}
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="rows">
+      <div class="row"><div class="label">Installed version</div><div class="value"><b>v{{.S.Version}}</b></div></div>
+      <div class="row">
+        <div class="label">Latest release</div>
+        <div class="value">
+          {{if .S.Update.Version}}<b>v{{.S.Update.Version}}</b>{{else}}<b>Not checked yet</b>{{end}}
+          {{if .S.Update.Newer}}<span class="pill warn">Update available</span>{{else if .S.Update.Version}}<span class="pill ok">Up to date</span>{{end}}
+        </div>
+      </div>
+      <div class="row"><div class="label">Last checked</div><div class="value"><b>{{if .S.Update.CheckedAt.IsZero}}Never{{else}}{{ago .S.Update.CheckedAt}}{{end}}</b>{{if .S.Update.Error}}<span class="pill bad">Check failed</span>{{end}}</div></div>
+      {{if .S.Update.Error}}<div class="row"><div class="label">Last error</div><div class="value">{{.S.Update.Error}}</div></div>{{end}}
+    </div>
+    {{if .S.Update.Newer}}
+    <p class="hint">Installing runs the signed-in-user installer for v{{.S.Update.Version}} in place. It keeps this install's folder, settings, allowed numbers, and Windows startup choice, and asks no setup questions.</p>
+    {{end}}
+  </div>
+</section>
+
 <div class="cards-2">
   <section class="card">
     <div class="card-head"><div class="card-title-row"><span class="mark shield">{{icon "power"}}</span><div><h2>Startup</h2><p>How FlipAi behaves when Windows starts and when you close the window.</p></div></div></div>
@@ -866,6 +897,14 @@ const settingsHTML = `{{define "content"}}
         <div class="toggle">
           <div class="label">Start FlipAi with Windows<span>Registers FlipAi for this user only. No administrator rights are used.</span></div>
           <label class="switch"><input type="hidden" name="startup" value="0"><input type="checkbox" name="startup" value="1" data-autosubmit{{if .S.StartupEnabled}} checked{{end}}><span class="slider"></span></label>
+        </div>
+      </form>
+      <form method="post" action="/settings/bootstartup" data-confirm="Windows will ask for administrator approval to create the startup task. Continue?">
+        <div class="toggle">
+          <div class="label">Start before sign-in
+            <span>Runs FlipAi when this PC powers on, without waiting for anyone to sign in. Windows asks for administrator approval once, here — never during installation. Saved credentials are re-protected for this PC so they can be read at boot.</span>
+          </div>
+          <label class="switch"><input type="hidden" name="bootStartup" value="0"><input type="checkbox" name="bootStartup" value="1" data-autosubmit{{if .S.BootStartupEnabled}} checked{{end}}><span class="slider"></span></label>
         </div>
       </form>
       <form method="post" action="/settings/save">
@@ -938,16 +977,32 @@ func (a *App) settingsPage(w http.ResponseWriter, r *http.Request) {
 	s := a.status()
 	view := settingsView{pageView: pageView{Shell: a.shell(r, "settings", "Settings"), S: s}}
 	startupValue, startupTone := "Disabled", ""
+	startupSub := "Starts with this Windows user"
 	if s.StartupEnabled {
-		startupValue, startupTone = "Enabled", "ok"
+		startupValue, startupTone = "At sign-in", "ok"
+	}
+	if s.BootStartupEnabled {
+		startupValue, startupTone = "At power-on", "ok"
+		startupSub = "Runs before anyone signs in"
 	}
 	view.Tiles = []tileView{
-		{Icon: "cpu", Title: "App version", Value: "v" + s.Version, Tone: "brand", Sub: "Local Windows build"},
-		{Icon: "power", Title: "Startup", Value: startupValue, Tone: startupTone, Sub: "Starts with this Windows user"},
+		{Icon: "cpu", Title: "App version", Value: "v" + s.Version, Tone: "brand", Sub: updateSub(s)},
+		{Icon: "power", Title: "Startup", Value: startupValue, Tone: startupTone, Sub: startupSub},
 		{Icon: "sliders", Title: "Theme", Value: themeLabel(s.Theme), Tone: "", Sub: compactLabel(s.Compact)},
 		{Icon: "folder", Title: "Data location", Value: shortPath(s.DataDir), Tone: "", Sub: "Settings, logs, and tokens"},
 	}
 	a.render(w, "settings", view)
+}
+
+func updateSub(s uiStatus) string {
+	switch {
+	case s.Update.Newer():
+		return "v" + s.Update.Version + " available"
+	case s.Update.Version != "":
+		return "Up to date"
+	default:
+		return "Local Windows build"
+	}
 }
 
 func themeLabel(theme string) string {

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -627,3 +628,160 @@ func (c *countingMailClient) Get(context.Context, string) (GmailMessage, error) 
 	return GmailMessage{}, nil
 }
 func (c *countingMailClient) SendText(context.Context, string, string) error { return nil }
+
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+func TestVersionOrderIsNumeric(t *testing.T) {
+	cases := []struct {
+		a, b string
+		less bool
+	}{
+		{"0.9.0", "0.10.0", true}, // string ordering gets this one wrong
+		{"0.10.0", "0.9.0", false},
+		{"0.9.0", "0.9.0", false},
+		{"0.9.0", "v0.9.1", true},
+		{"1.0.0", "0.99.9", false},
+		{"0.9.0", "0.9.0-rc1", false},
+	}
+	for _, c := range cases {
+		if got := versionLess(c.a, c.b); got != c.less {
+			t.Errorf("versionLess(%q,%q)=%v, want %v", c.a, c.b, got, c.less)
+		}
+	}
+}
+
+func TestUpdateCheckStoresPublishedRelease(t *testing.T) {
+	a := newTestApp(t)
+	next := bumpVersion(version)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"tag_name":"v` + next + `","html_url":"https://example.invalid/releases/v` + next + `",
+			"body":"notes","draft":false,"prerelease":false,
+			"assets":[
+				{"name":"FlipAi-Setup-v` + next + `.exe","browser_download_url":"https://example.invalid/FlipAi-Setup-v` + next + `.exe"},
+				{"name":"SHA256SUMS.txt","browser_download_url":"https://example.invalid/SHA256SUMS.txt"}
+			]}`))
+	}))
+	defer srv.Close()
+	old := updateAPIURL
+	updateAPIURL = srv.URL
+	defer func() { updateAPIURL = old }()
+
+	info := a.checkForUpdate(context.Background(), true)
+	if !info.Newer() || info.Version != next {
+		t.Fatalf("expected %s to be seen as newer: %#v", next, info)
+	}
+	if loadState(a.statePath).Update.Version != next {
+		t.Fatal("the release check was not stored in state")
+	}
+
+	// The banner must appear on an ordinary page, not only in Settings.
+	body := a.do(t, http.MethodGet, "/", nil).Body.String()
+	if !strings.Contains(body, "FlipAi "+next+" is available") || !strings.Contains(body, `action="/update/install"`) {
+		t.Fatal("the update banner is missing from the page")
+	}
+	if !strings.Contains(body, "not a fresh setup") {
+		t.Fatal("the banner should say an update keeps existing settings")
+	}
+}
+
+func TestUpdateCheckOnCurrentVersionSaysSo(t *testing.T) {
+	a := newTestApp(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v` + version + `","draft":false,"prerelease":false,
+			"assets":[{"name":"FlipAi-Setup-v` + version + `.exe","browser_download_url":"https://example.invalid/x.exe"}]}`))
+	}))
+	defer srv.Close()
+	old := updateAPIURL
+	updateAPIURL = srv.URL
+	defer func() { updateAPIURL = old }()
+
+	rr := a.do(t, http.MethodPost, "/update/check", nil)
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "update-current") {
+		t.Fatalf("check returned %d -> %q", rr.Code, rr.Header().Get("Location"))
+	}
+	if strings.Contains(a.do(t, http.MethodGet, "/", nil).Body.String(), "is available") {
+		t.Fatal("an up-to-date install must not show an update banner")
+	}
+}
+
+func bumpVersion(v string) string {
+	parts := versionParts(v)
+	for len(parts) < 3 {
+		parts = append(parts, 0)
+	}
+	parts[1]++
+	parts[2] = 0
+	return itoa(parts[0]) + "." + itoa(parts[1]) + "." + itoa(parts[2])
+}
+
+// ---------------------------------------------------------------------------
+// Start before sign-in
+// ---------------------------------------------------------------------------
+
+// Enabling the boot task is the only place FlipAi asks for administrator
+// rights. Where that is unavailable, the attempt must fail loudly and leave
+// credential protection exactly as it was.
+func TestBootStartupFailureLeavesSecretsAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this checks the non-Windows refusal path")
+	}
+	a := newTestApp(t)
+	if err := saveAppPasswordSecret(appPasswordPath(a.dataDir), "you@gmail.com", "abcd efgh ijkl mnop"); err != nil {
+		t.Fatal(err)
+	}
+	rr := a.do(t, http.MethodPost, "/settings/bootstartup", url.Values{"bootStartup": {"0", "1"}})
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected a clear failure, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if a.reloadConfig(t).Security.MachineScopeSecrets {
+		t.Fatal("a failed attempt must not record machine-scope credentials")
+	}
+	if secretScopeIsMachine() {
+		t.Fatal("the secret scope was left switched after a failed attempt")
+	}
+	if _, err := loadAppPasswordSecret(appPasswordPath(a.dataDir)); err != nil {
+		t.Fatalf("the stored App Password is no longer readable: %v", err)
+	}
+}
+
+// Re-protecting credentials must round-trip every stored secret.
+func TestSecretScopeRewriteKeepsCredentialsReadable(t *testing.T) {
+	a := newTestApp(t)
+	if err := saveAppPasswordSecret(appPasswordPath(a.dataDir), "you@gmail.com", "abcd efgh ijkl mnop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveClaudeToken(claudeTokenPath(a.dataDir), "sk-ant-oat01-"+strings.Repeat("x", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.applySecretScope(true); err != nil {
+		t.Fatalf("re-protect: %v", err)
+	}
+	defer func() { _ = a.applySecretScope(false) }()
+	secret, err := loadAppPasswordSecret(appPasswordPath(a.dataDir))
+	if err != nil || secret.Email != "you@gmail.com" {
+		t.Fatalf("App Password did not survive re-protection: %v %#v", err, secret)
+	}
+	if !hasClaudeToken(claudeTokenPath(a.dataDir)) {
+		t.Fatal("Claude token did not survive re-protection")
+	}
+}
+
+func TestSettingsOffersStartupChoices(t *testing.T) {
+	a := newTestApp(t)
+	body := a.do(t, http.MethodGet, "/settings", nil).Body.String()
+	for _, want := range []string{
+		"Start FlipAi with Windows",
+		"Start before sign-in",
+		"administrator approval once",
+		`action="/settings/bootstartup"`,
+		"Check for updates",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Settings is missing %q", want)
+		}
+	}
+}

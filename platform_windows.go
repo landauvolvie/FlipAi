@@ -98,6 +98,15 @@ func handleWindowClosed() {
 	}
 }
 
+// runUpdateInstaller launches the downloaded Setup EXE in silent mode. The
+// installer stops the running bridge, replaces the files in place, and starts
+// FlipAi again; no setup questions are asked on an update.
+func runUpdateInstaller(path string) error {
+	cmd := exec.Command(path, "/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES")
+	hideWindow(cmd)
+	return cmd.Start()
+}
+
 func hideWindow(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 }

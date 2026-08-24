@@ -40,6 +40,10 @@ func main() {
 		runTrayProcess(dataDir, cfgPath)
 	case "--quit":
 		requestQuit(dataDir, "command-line quit")
+	case "--boot-task":
+		// Elevated helper for the "start before sign-in" switch. It only ever
+		// creates or removes FlipAi's own scheduled task, then exits.
+		os.Exit(runBootTaskCommand(dataDir, os.Args))
 	case "--uninstall", "uninstall":
 		_ = uninstallAutostart()
 		_ = os.WriteFile(filepath.Join(dataDir, "quit.flag"), []byte("uninstall"), 0600)
@@ -314,6 +318,10 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 	activity := activityLogForStatePath(statePath)
 	activity.Add("info", "host", "FlipAi background host is starting", "", "", "")
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
+	// Decide how stored credentials are protected before anything reads them.
+	// When FlipAi is set to start before sign-in they are protected for the PC,
+	// because there is no signed-in account to unlock them at boot.
+	setSecretScope(cfg.Security.MachineScopeSecrets)
 	mailClient, oauthClient, ge := buildConfiguredMailClient(cfg.Gmail, dataDir, tokenPath)
 	if ge != nil {
 		log.Printf("Gmail not ready: %v", ge)
@@ -359,6 +367,10 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 			cancel()
 		}
 	}()
+	// Watch the release feed so an installed copy can offer its own update
+	// instead of leaving the user to find a download that looks like a first
+	// install.
+	go app.watchForUpdates(ctx)
 	go func() {
 		time.Sleep(800 * time.Millisecond)
 		app.startBridge(ctx)

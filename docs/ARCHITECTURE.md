@@ -32,3 +32,25 @@ GET; every state change is a POST. See [UI-DESIGN.md](UI-DESIGN.md) for the page
 structure. Pausing is handled inside the running bridge, so it takes effect on
 the next mailbox check without a restart; settings that change how Gmail or the
 agents are connected restart the host, which the watchdog brings straight back.
+
+## Startup modes
+
+Two independent options decide when FlipAi runs:
+
+1. **At sign-in** — an `HKCU\...\Run` value, written by the installer or the
+   Settings toggle. No administrator rights, no service, no scheduled task.
+2. **Before sign-in** — a Task Scheduler entry with a boot trigger, created by
+   an elevated `FlipAi.exe --boot-task install` helper that the Settings toggle
+   launches with the `runas` verb. This is the only administrator prompt in the
+   product, and it never appears during installation. The task runs as the same
+   account with S4U logon, so credentials are re-protected in DPAPI machine
+   scope while it is on (see the threat model).
+
+## Updates
+
+The host checks the GitHub release feed shortly after start and every 12 hours,
+storing the result in `state.json`. When a newer version exists the window shows
+a banner; installing downloads the published Setup EXE, verifies its SHA-256
+against the published checksum file, and runs it silently. The installer detects
+the existing install, skips every setup question, keeps the chosen startup
+entry, and starts the bridge again on the new version.

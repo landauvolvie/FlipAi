@@ -63,11 +63,46 @@ The window has a sidebar with seven pages:
 | **Agents** | Codex and Claude executables, a working folder per agent, real background tests, default agent, turn timeout, and Claude permission mode |
 | **Phone** | Allowed numbers with labels, reply length and split limits, acknowledgement and progress texts, and the SMS security code |
 | **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took |
-| **Settings** | Start with Windows, close to tray, light/dark/system theme, compact layout, in-window error alerts, log export, and reset |
+| **Settings** | Updates, start with Windows, **start before sign-in**, close to tray, light/dark/system theme, compact layout, in-window error alerts, log export, and reset |
 | **Advanced** | Executable paths with a live "found" check, loopback service state, health check, log tools, restart, and quit |
 
 Everything the UI reports is real state: an agent tile says **Ready** only
 because a test actually succeeded, and says **Not tested yet** otherwise.
+
+## Updating
+
+FlipAi checks its own GitHub releases and tells you when a newer version is
+published. **Settings → Updates → Install** downloads that release, verifies it
+against the checksum published beside it, and runs it in place:
+
+- the existing install is detected, so the wizard asks **no setup questions**;
+- your Gmail connection, allowed numbers, security code, agent paths, and
+  startup choice are kept;
+- the bridge stops for a few seconds and comes back on the new version.
+
+Downloading a release by hand and running it does the same thing — an installer
+that finds FlipAi already installed goes straight to updating it.
+
+## Starting before sign-in
+
+By default FlipAi starts when you sign in, because that is all a per-user
+startup entry can do. After a reboot, nothing runs until someone signs in.
+
+**Settings → Startup → Start before sign-in** changes that. Turning it on asks
+Windows for administrator approval once and registers a scheduled task with a
+power-on trigger, so FlipAi is already handling texts before anyone logs in.
+Installation never asks for administrator rights — this switch is the only place
+FlipAi does, and only when you turn it on.
+
+Two things to know:
+
+- The task runs as your Windows account without storing your password. Windows
+  gives that kind of task no account key, so FlipAi re-protects its saved
+  credentials for this PC instead of for your account while the option is on.
+  An administrator on this PC could then read them; turning the option off
+  re-protects them for your account again.
+- Codex and Claude must be signed in on this Windows account, exactly as they
+  are for normal use.
 
 
 ## SMS routing and allowed numbers

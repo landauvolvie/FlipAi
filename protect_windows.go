@@ -4,9 +4,24 @@ package main
 
 import (
 	"errors"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
+
+// Windows protects saved credentials with DPAPI. User scope is the default and
+// the safer choice: only this signed-in account can read them. Machine scope is
+// used only when FlipAi is set to start before sign-in, because a task that
+// runs without an interactive logon has no user key to decrypt with.
+const (
+	cryptProtectUIForbidden  = 0x1
+	cryptProtectLocalMachine = 0x4
+)
+
+var machineScopeSecrets atomic.Bool
+
+func setSecretScope(machine bool) { machineScopeSecrets.Store(machine) }
+func secretScopeIsMachine() bool  { return machineScopeSecrets.Load() }
 
 type dataBlob struct {
 	cbData uint32
@@ -37,7 +52,11 @@ func blobBytes(b dataBlob) []byte {
 func protect(in []byte) ([]byte, error) {
 	ib := blobFromBytes(in)
 	var ob dataBlob
-	r, _, e := cryptProtectData.Call(uintptr(unsafe.Pointer(&ib)), 0, 0, 0, 0, 0x1, uintptr(unsafe.Pointer(&ob)))
+	flags := uintptr(cryptProtectUIForbidden)
+	if secretScopeIsMachine() {
+		flags |= cryptProtectLocalMachine
+	}
+	r, _, e := cryptProtectData.Call(uintptr(unsafe.Pointer(&ib)), 0, 0, 0, 0, flags, uintptr(unsafe.Pointer(&ob)))
 	if r == 0 {
 		return nil, e
 	}
@@ -49,7 +68,8 @@ func unprotect(in []byte) ([]byte, error) {
 	}
 	ib := blobFromBytes(in)
 	var ob dataBlob
-	r, _, e := cryptUnprotectData.Call(uintptr(unsafe.Pointer(&ib)), 0, 0, 0, 0, 0x1, uintptr(unsafe.Pointer(&ob)))
+	// Unprotect does not need the scope: a DPAPI blob records its own.
+	r, _, e := cryptUnprotectData.Call(uintptr(unsafe.Pointer(&ib)), 0, 0, 0, 0, cryptProtectUIForbidden, uintptr(unsafe.Pointer(&ob)))
 	if r == 0 {
 		return nil, e
 	}

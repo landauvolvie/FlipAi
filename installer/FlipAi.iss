@@ -1,5 +1,5 @@
 #ifndef MyVersion
-  #define MyVersion "0.9.0"
+  #define MyVersion "0.10.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist"
@@ -51,6 +51,9 @@ Type: filesandordirs; Name: "{localappdata}\Programs\AISMSBridge"
 
 [Run]
 Filename: "{app}\FlipAi.exe"; Description: "Launch FlipAi and complete setup"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+; A silent run is how FlipAi updates itself from inside the app. Nothing is
+; shown to click, so the bridge is started again here instead.
+Filename: "{app}\FlipAi.exe"; Parameters: "--watchdog"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopFlipAi"
@@ -59,6 +62,15 @@ Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilte
 Type: filesandordirs; Name: "{localappdata}\AISMSBridge"
 
 [Code]
+const
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F6EC557-FA07-4E99-A06A-3D9F8C2F7D73}_is1';
+  RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+
+var
+  PriorVersion: String;
+  PriorStartup: String;
+  IsUpdate: Boolean;
+
 procedure SignalBridgeToQuit(const Reason: String);
 var
   DataDir: String;
@@ -70,17 +82,53 @@ begin
   SaveStringToFile(QuitFile, Reason, False);
 end;
 
+{ An existing install is an update, not a first run. Setup detects it up front
+  so the wizard can skip every question the user already answered. }
+function InitializeSetup(): Boolean;
+begin
+  IsUpdate := RegQueryStringValue(HKCU, UninstallKey, 'DisplayVersion', PriorVersion);
+  if not RegQueryStringValue(HKCU, RunKey, 'FlipAi', PriorStartup) then
+    PriorStartup := '';
+  Result := True;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := IsUpdate and
+    ((PageID = wpWelcome) or (PageID = wpSelectDir) or (PageID = wpSelectProgramGroup) or
+     (PageID = wpSelectTasks) or (PageID = wpReady));
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and IsUpdate then
+    WizardForm.FinishedLabel.Caption :=
+      'FlipAi was updated from ' + PriorVersion + ' to {#MyVersion}.' + #13#10#13#10 +
+      'Your Gmail connection, allowed phone numbers, security code, and agent settings were kept. Nothing had to be set up again.';
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { Stop old portable/background builds regardless of where their EXE was run. }
+  { Stop the running bridge, whichever build started it. }
   SignalBridgeToQuit('installer upgrade');
   Sleep(3000);
 
   { Remove both the old and new per-user startup values before writing the one
-    selected on this install. This prevents duplicate watchdogs on upgrades. }
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AISMSBridge');
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'FlipAi');
+    this install should have. PriorStartup remembers what was there so an
+    update never silently turns off a startup the user had enabled. }
+  RegDeleteValue(HKCU, RunKey, 'AISMSBridge');
+  RegDeleteValue(HKCU, RunKey, 'FlipAi');
   Result := '';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if (PriorStartup <> '') and not WizardIsTaskSelected('startup') then
+      RegWriteStringValue(HKCU, RunKey, 'FlipAi',
+        '"' + ExpandConstant('{app}\FlipAi.exe') + '" --watchdog');
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -89,7 +137,7 @@ begin
   begin
     SignalBridgeToQuit('uninstall');
     Sleep(1500);
-    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AISMSBridge');
-    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'FlipAi');
+    RegDeleteValue(HKCU, RunKey, 'AISMSBridge');
+    RegDeleteValue(HKCU, RunKey, 'FlipAi');
   end;
 end;

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"runtime"
@@ -24,6 +25,12 @@ func uninstallAutostart() error                      { return nil }
 // compiles and tests everywhere. Only the Windows implementations do real work;
 // sign-in startup is a Windows feature.
 func autostartEnabled() bool { return false }
+
+// The published installer is a Windows Setup EXE; there is nothing to run
+// elsewhere.
+func runUpdateInstaller(path string) error {
+	return errors.New("the FlipAi installer only runs on Windows")
+}
 func openFolder(path string) error {
 	if runtime.GOOS == "darwin" {
 		return exec.Command("open", path).Start()

@@ -20,7 +20,8 @@ AI SMS Bridge is a remote-control bridge. A valid SMS can cause an AI agent to a
 - Unexpected Codex approval requests are declined rather than automatically approved.
 - Claude dangerous permission bypass is never enabled.
 - State intentionally excludes prompt and result bodies.
-- No telemetry, auto-update code, obfuscation, packing, credential scraping, browser-password extraction, keylogging, process injection, remote-thread creation, or public webhooks.
+- No telemetry, obfuscation, packing, credential scraping, browser-password extraction, keylogging, process injection, remote-thread creation, or public webhooks.
+- Update checks contact only `api.github.com` for this repository's latest release. They send no identifier, no configuration, and no message data. Nothing installs on its own: FlipAi shows that a release exists and installs it only when you click Install, after checking the download against the checksum published with the release.
 
 ## Mail latency
 
@@ -30,7 +31,7 @@ AI SMS Bridge is a remote-control bridge. A valid SMS can cause an AI agent to a
 
 ## Antivirus-friendly design
 
-FlipAi is intentionally conventional Windows software: ordinary Go code, per-user HKCU startup, loopback HTTP for local settings, normal TLS network connections, and normal child processes for Codex/Claude. It does not inject code into other processes, install drivers/services, scrape browser credential stores, keylog, use packers/obfuscators, or silently download/execute updates. Windows URLs are opened through `explorer.exe`, not DLL-launch helpers.
+FlipAi is intentionally conventional Windows software: ordinary Go code, per-user HKCU startup, loopback HTTP for local settings, normal TLS network connections, and normal child processes for Codex/Claude. It does not inject code into other processes, install drivers or services, scrape browser credential stores, keylog, use packers/obfuscators, or install updates without being asked. Windows URLs are opened through `explorer.exe`, not DLL-launch helpers.
 
 The source test suite rejects known malware-style Windows API patterns. Public releases should also be Authenticode-signed when practical. An unsigned new executable can still receive SmartScreen reputation warnings or third-party antivirus false positives; no project can guarantee otherwise.
 

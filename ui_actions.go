@@ -538,6 +538,117 @@ func (a *App) resetSetup(w http.ResponseWriter, r *http.Request) {
 	go a.restartSoon()
 }
 
+// saveBootStartup turns the pre-sign-in startup task on or off. Enabling it is
+// the one place FlipAi asks Windows for administrator approval, and it happens
+// here — never during installation.
+func (a *App) saveBootStartup(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		renderResult(w, r, 400, false, "Could not read the startup setting", err.Error())
+		return
+	}
+	enable, ok := formFlag(r, "bootStartup")
+	if !ok {
+		redirectTo(w, r, "/settings", "")
+		return
+	}
+	if enable {
+		// The task runs without an interactive logon, so stored credentials
+		// have to be readable without one before the task is created.
+		if err := a.applySecretScope(true); err != nil {
+			_ = a.applySecretScope(false)
+			renderResult(w, r, 500, false, "Credentials could not be re-protected", err.Error()+
+				"\n\nFlipAi left them protected for your account and did not change startup.")
+			return
+		}
+		if err := enableBootStartup(a.dataDir); err != nil {
+			_ = a.applySecretScope(false)
+			renderResult(w, r, 500, false, "Start before sign-in was not enabled", err.Error())
+			return
+		}
+		if err := a.updateConfig(func(cfg *Config) error {
+			cfg.Security.MachineScopeSecrets = true
+			return nil
+		}); err != nil {
+			renderResult(w, r, 500, false, "Startup task created, but the setting was not saved", err.Error())
+			return
+		}
+		activityLogForStatePath(a.statePath).Add("success", "startup", "Start before sign-in enabled (scheduled task created)", "", "", "")
+		redirectTo(w, r, "/settings", "boot-on")
+		return
+	}
+	if err := disableBootStartup(a.dataDir); err != nil {
+		renderResult(w, r, 500, false, "Start before sign-in was not turned off", err.Error())
+		return
+	}
+	if err := a.applySecretScope(false); err != nil {
+		renderResult(w, r, 500, false, "Credentials could not be re-protected", err.Error())
+		return
+	}
+	if err := a.updateConfig(func(cfg *Config) error {
+		cfg.Security.MachineScopeSecrets = false
+		return nil
+	}); err != nil {
+		renderResult(w, r, 500, false, "Startup task removed, but the setting was not saved", err.Error())
+		return
+	}
+	activityLogForStatePath(a.statePath).Add("info", "startup", "Start before sign-in disabled", "", "", "")
+	redirectTo(w, r, "/settings", "boot-off")
+}
+
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	info := a.checkForUpdate(ctx, true)
+	if info.Error != "" {
+		renderResult(w, r, 200, false, "Could not check for updates", info.Error+
+			"\n\nFlipAi keeps working; it only needs a connection to github.com to see whether a newer release exists.")
+		return
+	}
+	if info.Newer() {
+		redirectTo(w, r, "/settings", "update-found")
+		return
+	}
+	redirectTo(w, r, "/settings", "update-current")
+}
+
+// updateInstall downloads the published installer, verifies it against the
+// checksum published with the release, and runs it in place. The installer
+// recognises the existing install and updates it without asking setup
+// questions again.
+func (a *App) updateInstall(w http.ResponseWriter, r *http.Request) {
+	st := loadState(a.statePath)
+	info := st.Update
+	if !info.Newer() {
+		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+		info = a.checkForUpdate(ctx, true)
+		cancel()
+	}
+	if !info.Newer() {
+		renderResult(w, r, 200, true, "FlipAi is up to date", "No newer release is published right now.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	path, err := downloadUpdate(ctx, info)
+	if err != nil {
+		activityLogForStatePath(a.statePath).Add("error", "host", "Update download failed: "+truncate(err.Error(), 200), "", "", "")
+		renderResult(w, r, 500, false, "Update could not be downloaded", err.Error())
+		return
+	}
+	if err := runUpdateInstaller(path); err != nil {
+		renderResult(w, r, 500, false, "Update could not be started", err.Error()+
+			"\n\nThe verified installer is saved at "+path+" if you want to run it yourself.")
+		return
+	}
+	activityLogForStatePath(a.statePath).Add("info", "host", "Installing FlipAi "+info.Version, "", "", "")
+	renderResult(w, r, 200, true, "Installing FlipAi "+info.Version,
+		"The verified installer is running now. FlipAi stops for a few seconds and starts again on the new version with your settings intact.")
+}
+
 // ---------------------------------------------------------------------------
 // Diagnostics
 // ---------------------------------------------------------------------------

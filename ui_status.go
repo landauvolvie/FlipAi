@@ -68,12 +68,18 @@ type uiStatus struct {
 	ReplyAck         bool
 	ProgressUpdates  bool
 
-	StartupEnabled bool
-	CloseToTray    bool
-	Theme          string
-	Compact        bool
-	Alerts         bool
-	AlertSound     bool
+	StartupEnabled     bool
+	BootStartupEnabled bool
+	MachineSecrets     bool
+	CloseToTray        bool
+	Theme              string
+	Compact            bool
+	Alerts             bool
+	AlertSound         bool
+
+	// Update is the last release check, so Settings and the update banner can
+	// report a newer build without hitting the network on every render.
+	Update ReleaseInfo
 }
 
 func (s uiStatus) SetupComplete() bool {
@@ -147,40 +153,43 @@ func (a *App) status() uiStatus {
 
 	s := uiStatus{
 		Version: version, Listen: cfg.Listen, DataDir: a.dataDir, Uptime: time.Since(hostStartedAt),
-		Paused:           cfg.Paused,
-		GmailReady:       mc != nil && mc.Authorized(),
-		GmailMethod:      cfg.Gmail.Method,
-		GmailMethodLabel: gmailMethodLabel(cfg.Gmail.Method),
-		GmailEmail:       cfg.Gmail.Email,
-		GmailCheck:       st.GmailCheck,
-		SubjectPhrase:    cfg.Gmail.SubjectPhrase,
-		CodexCheck:       st.CodexCheck,
-		ClaudeCheck:      st.ClaudeCheck,
-		CodexPath:        cfg.CodexPath,
-		ClaudePath:       cfg.ClaudePath,
-		CodexResolved:    resolveCodexExecutable(cfg.CodexPath),
-		ClaudeResolved:   resolveClaudeExecutable(cfg.ClaudePath),
-		HasClaudeToken:   hasClaudeToken(claudeTokenPath(a.dataDir)),
-		PermissionMode:   cfg.Claude.PermissionMode,
-		LastAgent:        st.LastAgent,
-		LastRunAt:        st.LastRunAt,
-		Cwd:              cfg.Cwd,
-		DefaultAgent:     cfg.DefaultAgent,
-		TurnTimeout:      cfg.TurnTimeoutMinutes,
-		AllowedNumbers:   cfg.GoogleVoice.AllowedNumbers,
-		RequireCode:      cfg.Security.RequireCode,
-		HasCode:          cfg.Security.CodeHash != "",
-		ReplyMaxChars:    cfg.GoogleVoice.ReplyMaxChars,
-		MaxReplyParts:    cfg.GoogleVoice.MaxReplyParts,
-		ProgressInterval: cfg.GoogleVoice.ProgressIntervalSeconds,
-		ReplyAck:         cfg.GoogleVoice.ReplyAck,
-		ProgressUpdates:  cfg.GoogleVoice.ProgressUpdates,
-		StartupEnabled:   autostartEnabled(),
-		CloseToTray:      cfg.UI.CloseToTray,
-		Theme:            normalizeTheme(cfg.UI.Theme),
-		Compact:          cfg.UI.Compact,
-		Alerts:           cfg.UI.Alerts,
-		AlertSound:       cfg.UI.AlertSound,
+		Paused:             cfg.Paused,
+		GmailReady:         mc != nil && mc.Authorized(),
+		GmailMethod:        cfg.Gmail.Method,
+		GmailMethodLabel:   gmailMethodLabel(cfg.Gmail.Method),
+		GmailEmail:         cfg.Gmail.Email,
+		GmailCheck:         st.GmailCheck,
+		SubjectPhrase:      cfg.Gmail.SubjectPhrase,
+		CodexCheck:         st.CodexCheck,
+		ClaudeCheck:        st.ClaudeCheck,
+		CodexPath:          cfg.CodexPath,
+		ClaudePath:         cfg.ClaudePath,
+		CodexResolved:      resolveCodexExecutable(cfg.CodexPath),
+		ClaudeResolved:     resolveClaudeExecutable(cfg.ClaudePath),
+		HasClaudeToken:     hasClaudeToken(claudeTokenPath(a.dataDir)),
+		PermissionMode:     cfg.Claude.PermissionMode,
+		LastAgent:          st.LastAgent,
+		LastRunAt:          st.LastRunAt,
+		Cwd:                cfg.Cwd,
+		DefaultAgent:       cfg.DefaultAgent,
+		TurnTimeout:        cfg.TurnTimeoutMinutes,
+		AllowedNumbers:     cfg.GoogleVoice.AllowedNumbers,
+		RequireCode:        cfg.Security.RequireCode,
+		HasCode:            cfg.Security.CodeHash != "",
+		ReplyMaxChars:      cfg.GoogleVoice.ReplyMaxChars,
+		MaxReplyParts:      cfg.GoogleVoice.MaxReplyParts,
+		ProgressInterval:   cfg.GoogleVoice.ProgressIntervalSeconds,
+		ReplyAck:           cfg.GoogleVoice.ReplyAck,
+		ProgressUpdates:    cfg.GoogleVoice.ProgressUpdates,
+		StartupEnabled:     autostartEnabled(),
+		BootStartupEnabled: bootStartupEnabled(),
+		MachineSecrets:     cfg.Security.MachineScopeSecrets,
+		CloseToTray:        cfg.UI.CloseToTray,
+		Theme:              normalizeTheme(cfg.UI.Theme),
+		Compact:            cfg.UI.Compact,
+		Alerts:             cfg.UI.Alerts,
+		AlertSound:         cfg.UI.AlertSound,
+		Update:             st.Update,
 	}
 	s.CodexFound = executableExists(s.CodexResolved)
 	s.ClaudeFound = executableExists(s.ClaudeResolved)

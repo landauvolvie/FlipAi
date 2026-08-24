@@ -27,6 +27,19 @@ The sidebar footer shows whether the bridge is running, paused, or idle, plus
 the installed version. Settings and Advanced sit below a divider because they
 are configuration rather than operation.
 
+## Product marks and event vocabulary
+
+Rows and tiles that refer to a real service carry that service's mark — Google
+for Gmail, Google Voice for the reply path, Codex, Claude — rather than a
+generic glyph. The activity table then reads as plain English: *Incoming SMS*
+(Received), *To Codex* (Delivered), *Codex command* (Completed), *Codex reply*
+(Sent), and *Failed* when a step did not work. Stage and message text are ink;
+only timestamps are muted.
+
+Every `<select>` is rendered as a matching listbox rather than the native
+Windows dropdown, which cannot be styled. The real `<select>` stays in the form,
+so a page still submits correctly if the script never runs.
+
 ## Visual language
 
 - Neutral surface, dark ink, violet accent, green healthy, amber attention, red
@@ -61,3 +74,11 @@ are configuration rather than operation.
 filters and pages on the client, so the log stays responsive without reloading.
 When the host restarts after a settings change, the window shows a
 "Reconnecting" notice and reloads itself once `/status.json` answers again.
+
+## Update prompt
+
+When the release check finds a newer version, every page shows one banner with
+an Install button, and Settings carries the full picture: installed version,
+latest release, when it was last checked, and what installing does. The banner
+says plainly that installing keeps existing settings, because the complaint it
+answers is an update that looked like a fresh install.
