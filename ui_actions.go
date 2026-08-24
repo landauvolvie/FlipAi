@@ -269,11 +269,16 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// tokenWithoutLogin marks a token saved on a machine that has no Claude Code
+	// sign-in behind it — the exact setup that used to leave Chrome silently off.
+	tokenWithoutLogin := false
 	if token := strings.TrimSpace(r.FormValue("claudeToken")); token != "" {
 		if err := saveClaudeToken(claudeTokenPath(a.dataDir), token); err != nil {
 			renderResult(w, r, 400, false, "Claude token is invalid", err.Error())
 			return
 		}
+		_, loginExists := a.claudeConnectClient().CachedLogin()
+		tokenWithoutLogin = !loginExists
 	}
 	err := a.updateConfig(func(cfg *Config) error {
 		for field, target := range map[string]*string{
@@ -365,7 +370,19 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		renderResult(w, r, 400, false, "Agent settings were not saved", err.Error())
 		return
 	}
-	redirectTo(w, r, "/agents", "saved-restart")
+	// Saying so here is what stops the old setup from coming back silently: the
+	// save succeeded, and the browser still will not work until Claude is
+	// connected properly.
+	flash := "saved-restart"
+	if tokenWithoutLogin {
+		a.mu.Lock()
+		wantsBrowser := a.cfg.Claude.UseChrome || normalizeClaudeSessionMode(a.cfg.Claude.SessionMode) == claudeSessionModeLive
+		a.mu.Unlock()
+		if wantsBrowser {
+			flash = "claude-token-only"
+		}
+	}
+	redirectTo(w, r, "/agents", flash)
 	go a.restartSoon()
 }
 

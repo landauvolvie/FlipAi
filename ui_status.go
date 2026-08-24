@@ -54,6 +54,16 @@ type uiStatus struct {
 	// Chrome off. Empty when there is nothing to warn about.
 	ChromeTokenNotice string
 
+	// ClaudeConn* describe which credential FlipAi is connected with, because
+	// that single fact decides whether a text can drive Chrome or reach
+	// claude.ai/code. ClaudeConnNeedsSignIn marks the states Connect Claude
+	// fixes, so the page can put the button where the problem is.
+	ClaudeConnKind        string
+	ClaudeConnLabel       string
+	ClaudeConnDetail      string
+	ClaudeConnChromeReady bool
+	ClaudeConnNeedsSignIn bool
+
 	// ClaudeSessionMode is the configured mode, and ClaudeSessionModeLabel names
 	// it in the same plain words the access level uses.
 	// ClaudeProgressInterval and CodexProgressInterval are the per-agent
@@ -278,6 +288,9 @@ func (a *App) status() uiStatus {
 		// Reads a cached probe; it never starts a subprocess from a page render.
 		s.ChromeTokenNotice = claude.CachedChromeTokenConflict()
 	}
+	conn := a.cachedClaudeConnection()
+	s.ClaudeConnKind, s.ClaudeConnLabel, s.ClaudeConnDetail = conn.Kind, conn.Label, conn.Detail
+	s.ClaudeConnChromeReady, s.ClaudeConnNeedsSignIn = conn.ChromeReady, conn.NeedsSignIn
 	s.LiveActive = live != nil
 	s.LiveRemoteControl = s.LiveActive && support.RemoteControl
 	if s.ClaudeSessionMode == claudeSessionModeLive {

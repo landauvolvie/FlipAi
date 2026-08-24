@@ -115,9 +115,11 @@ type ClaudeClient struct {
 	authValid  bool
 
 	// loginChecked/loginExists cache whether this account has a real
-	// `claude /login` session, probed with the stored token removed.
+	// `claude /login` session, probed with the stored token removed, and
+	// loginAt is when that answer was taken.
 	loginChecked bool
 	loginExists  bool
+	loginAt      time.Time
 }
 
 type claudeResult struct {
@@ -349,15 +351,22 @@ func (c *ClaudeClient) envWithToken() []string {
 	return env
 }
 
+// claudeLoginTTL is how long the interactive-login probe is reused.
+//
+// It used to be cached for the life of the client, which meant a user who
+// completed `claude /login` to get Chrome working had to restart FlipAi before
+// anything noticed — the one step nothing on screen asked for. A short TTL
+// costs at most one extra `claude auth status` subprocess every couple of
+// minutes, and only on machines that have a token stored, because that is the
+// only case where the answer changes which credential a turn uses.
+const claudeLoginTTL = 2 * time.Minute
+
 // interactiveLoginExists reports whether this Windows account has a real
 // `claude /login` session, checked with the stored token deliberately removed
 // so the answer is about the machine rather than about the token.
-//
-// The result is cached for the life of the client: a sign-in does not appear
-// mid-turn, and this costs a subprocess.
 func (c *ClaudeClient) interactiveLoginExists(ctx context.Context) bool {
 	c.mu.Lock()
-	if c.loginChecked {
+	if c.loginChecked && time.Since(c.loginAt) < claudeLoginTTL {
 		exists := c.loginExists
 		c.mu.Unlock()
 		return exists
@@ -368,9 +377,44 @@ func (c *ClaudeClient) interactiveLoginExists(ctx context.Context) bool {
 	exists := err == nil && st.LoggedIn && validateClaudeSubscriptionPath(st) == nil
 
 	c.mu.Lock()
-	c.loginChecked, c.loginExists = true, exists
+	c.loginChecked, c.loginExists, c.loginAt = true, exists, time.Now()
 	c.mu.Unlock()
 	return exists
+}
+
+// invalidateLoginCache forces the next probe to ask the machine again. Connect
+// and Disconnect call it so a sign-in the user has just completed is picked up
+// on the spot rather than whenever the TTL happens to expire.
+func (c *ClaudeClient) invalidateLoginCache() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.loginChecked, c.loginExists, c.loginAt = false, false, time.Time{}
+	c.authValid = false
+	c.mu.Unlock()
+}
+
+// RefreshLogin re-probes the machine and reports the fresh answer. It is what
+// the Connect flow calls, so the answer the user is shown is the one the next
+// SMS turn will act on.
+func (c *ClaudeClient) RefreshLogin(ctx context.Context) bool {
+	if c == nil {
+		return false
+	}
+	c.invalidateLoginCache()
+	return c.interactiveLoginExists(ctx)
+}
+
+// CachedLogin reports the last probe result without starting a subprocess, for
+// page renders. checked is false when nothing has probed yet.
+func (c *ClaudeClient) CachedLogin() (checked, exists bool) {
+	if c == nil {
+		return false, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.loginChecked, c.loginExists
 }
 
 // childEnv builds the environment for a Claude Code subprocess.
@@ -438,8 +482,8 @@ func (c *ClaudeClient) CachedChromeTokenConflict() string {
 const chromeTokenConflictText = "Claude cannot control Chrome while the stored token is the only sign-in on this account. " +
 	"Claude Code turns Chrome off for a `claude setup-token` session even with the Chrome switch on, " +
 	"because the browser extension cannot authenticate with that credential. " +
-	"Run `claude /login` once on this Windows account and FlipAi will use that session for Chrome turns, " +
-	"keeping the token only as the fallback."
+	"Press Connect Claude under Authentication & session to complete `claude /login` on this Windows account; " +
+	"FlipAi then uses that sign-in for Chrome turns and keeps the token only as the fallback."
 
 // ChromeTokenConflict describes, for the Agents page, a machine where Chrome is
 // switched on but the only credential available cannot drive it. Empty means

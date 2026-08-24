@@ -37,6 +37,22 @@ func openFolder(path string) error {
 	}
 	return exec.Command("xdg-open", path).Start()
 }
+
+// startClaudeSignIn opens the interactive Claude Code sign-in in a terminal.
+// Only the Windows implementation is the supported one; this keeps the connect
+// flow buildable and testable everywhere, and is genuinely useful when FlipAi
+// is run from a developer machine.
+func startClaudeSignIn(exe, dir string) error {
+	cmd := exec.Command(exe, "/login")
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func copySelfInstall() (string, error) { return os.Executable() }
 func resolveCodexExecutable(configured string) string {
 	return resolvePathExecutable(configured, "codex")

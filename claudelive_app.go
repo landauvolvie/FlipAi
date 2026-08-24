@@ -97,9 +97,20 @@ func (a *App) newClaudeLiveClient(ctx context.Context, cfg Config) (*ClaudeLiveC
 		return nil, support
 	}
 
-	support = evaluateClaudeLiveSupport(version, strings.TrimSpace(token) != "", st)
+	// The token-free probe decides which credential the session runs on, the
+	// same way a print turn decides it. Without this the live session was
+	// started with the token whenever one was stored, which turned Remote
+	// Control (and Chrome) off on a machine that had a perfectly good sign-in.
+	lctx, lcancel := context.WithTimeout(ctx, 30*time.Second)
+	loginExists := probe.interactiveLoginExists(lctx)
+	lcancel()
+
+	support = evaluateClaudeLiveSupport(version, strings.TrimSpace(token) != "", loginExists, st)
 	if !support.OK {
 		return nil, support
+	}
+	if loginExists {
+		token = ""
 	}
 
 	exe, err := os.Executable()

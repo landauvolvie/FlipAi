@@ -200,6 +200,54 @@ var autostartProbe = newCachedBool(20*time.Second, func() bool {
 
 func autostartEnabled() bool { return autostartProbe.get() }
 
+// startClaudeSignIn opens a console window running the Claude Code sign-in on
+// the user's desktop.
+//
+// ShellExecuteW rather than a plain exec: FlipAi is a GUI process with no
+// console of its own, so a child started normally would have nowhere to draw
+// the interactive flow. The shell gives it a real window the user can see and
+// type into, which is the whole point — the credential Claude Code writes at the
+// end is the one the Chrome extension authenticates against.
+func startClaudeSignIn(exe, dir string) error {
+	if capture := os.Getenv("FLIPAI_BROWSER_TEST_CAPTURE"); capture != "" {
+		return os.WriteFile(capture, []byte(claudeSignInArgs(exe)), 0600)
+	}
+	shell := strings.TrimSpace(os.Getenv("COMSPEC"))
+	if shell == "" {
+		shell = "cmd.exe"
+	}
+	verb, err := syscall.UTF16PtrFromString("open")
+	if err != nil {
+		return err
+	}
+	file, err := syscall.UTF16PtrFromString(shell)
+	if err != nil {
+		return err
+	}
+	params, err := syscall.UTF16PtrFromString(claudeSignInArgs(exe))
+	if err != nil {
+		return err
+	}
+	var workdir *uint16
+	if strings.TrimSpace(dir) != "" && existingDir(dir) {
+		if workdir, err = syscall.UTF16PtrFromString(dir); err != nil {
+			return err
+		}
+	}
+	r, _, callErr := procPlatformShellOpen.Call(
+		0,
+		uintptr(unsafe.Pointer(verb)),
+		uintptr(unsafe.Pointer(file)),
+		uintptr(unsafe.Pointer(params)),
+		uintptr(unsafe.Pointer(workdir)),
+		1, // SW_SHOWNORMAL
+	)
+	if r <= 32 {
+		return fmt.Errorf("open a sign-in console with %s failed (ShellExecuteW=%d): %v", shell, r, callErr)
+	}
+	return nil
+}
+
 // openFolder shows a local folder in File Explorer. It is used only for the
 // FlipAi data and log folders the user already owns.
 func openFolder(path string) error {

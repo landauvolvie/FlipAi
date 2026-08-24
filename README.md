@@ -250,10 +250,13 @@ Requirements, each reported on the Agents page when it is not met:
 - **Claude Code 2.1.234 or newer** on Windows. Below that a session binds no
   inbox, so live mode cannot deliver a text at all and FlipAi stays in
   per-message mode.
-- **A full `claude auth login`** for the browser view. This is the important one:
-  Remote Control **refuses a `claude setup-token`** — those tokens can only make
-  model requests. With a token stored, live mode still runs and SMS still stays
-  in one session, but the session will not appear at claude.ai/code. The Agents
+- **A completed Claude Code sign-in** for the browser view. This is the important
+  one: Remote Control **refuses a `claude setup-token`** — those tokens can only
+  make model requests. Press **Connect Claude** on the Agents page to sign in.
+  A stored token does not cost you the browser view when a sign-in exists;
+  FlipAi runs the session on the sign-in and keeps the token as the fallback.
+  With a token and *no* sign-in, live mode still runs and SMS still stays in one
+  session, but the session will not appear at claude.ai/code, and the Agents
   page says so rather than implying a view that will never show up.
 - **A first-party Claude subscription**, the same billing path FlipAi requires
   everywhere else.
@@ -310,21 +313,34 @@ Previous Claude conversation was unavailable, so a new one was started.
 
 Earlier builds returned the failure instead and kept the dead id, so every later Claude text failed the same way until you sent the new-session command. Codex has recovered from a missing rollout this way for some time; Claude now matches it.
 
-## Keeping Claude signed in
+## Connecting Claude
 
-Claude Code CLI keeps its own sign-in, separate from the Claude desktop app. Being signed into Claude Desktop does **not** sign in the CLI, and the CLI's browser session eventually expires with `OAuth session expired and could not be refreshed`, which strands an unattended bridge.
+Claude Code CLI keeps its own sign-in, separate from the Claude desktop app. Being signed into Claude Desktop does **not** sign in the CLI.
 
-To avoid that, run this once in PowerShell and paste the value into **Agents → Claude → Advanced → Long-lived token**:
+There are two possible credentials, and only one of them can do everything:
+
+| | Answers texts | Controls Chrome | Opens claude.ai/code | Expires |
+|---|---|---|---|---|
+| **`claude /login` session** | yes | yes | yes | on its own, eventually |
+| **`claude setup-token` value** | yes | **no** | **no** | months |
+
+The browser extension authenticates against the *sign-in*, so Claude Code turns Chrome off for a token session even when `--chrome` is passed. A machine holding only a token answers texts perfectly while quietly refusing every browser request — which is exactly what FlipAi's connect flow exists to prevent.
+
+**Agents → Claude → Authentication & session** shows which credential you are on:
+
+- **Connect Claude** opens a console window running the Claude Code sign-in on this Windows account. Complete it, then press **Check connection**.
+- **Check connection** re-probes the machine and reports what FlipAi will actually use on the next text. No restart needed.
+- **Disconnect** removes FlipAi's stored token. Your own Claude Code sign-in is left alone — that belongs to the Windows account, not to FlipAi.
+
+### The long-lived token, as the fallback
+
+A CLI browser session eventually expires with `OAuth session expired and could not be refreshed`, which strands an unattended bridge. To survive that, run this once in PowerShell and paste the value into the **Long-lived token** field:
 
 ```powershell
 claude setup-token
 ```
 
-Note the one trade: a stored token cannot open **Remote Control**, so live
-conversation mode runs without its browser view while a token is saved. Clear the
-token to get the view back.
-
-FlipAi stores it with Windows DPAPI and passes it to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`. The token is **optional**: with the field empty, FlipAi uses the normal `claude /login` session exactly as before. It is also not permanent — Claude reports lifetimes up to a year and can ask for a fresh one — but it turns a session that lapses in hours or days into one measured in months.
+FlipAi stores it with Windows DPAPI and passes it to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN` — but **only when it has to**. With a `claude /login` session on the account, the token is withheld from every turn so Chrome and Remote Control keep working; it is used when that sign-in is gone, where the choice is between a bridge that answers without the browser and one that does not answer at all. The token is optional, and it is not permanent — Claude reports lifetimes up to a year and can ask for a fresh one.
 
 ## Replies
 

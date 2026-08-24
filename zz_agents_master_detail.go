@@ -175,8 +175,15 @@ const masterDetailAgentsHTML = `{{define "content"}}
         </div></div>
 
         <div class="agent-section"><div class="agent-section-head"><span class="agent-section-icon">{{icon "key"}}</span>Authentication &amp; session</div><div class="agent-section-body">
-          <div class="agent-session-row"><div class="agent-stat"><label>Authentication</label><b>{{if .S.HasClaudeToken}}Claude token{{else}}Claude Code (local){{end}}</b></div><div class="agent-stat"><label>Current session</label>{{if .S.ClaudeSessionActive}}<span class="pill ok">Active</span>{{else}}<span class="pill">None</span>{{end}}</div><div class="agent-stat"><label>Session ID</label>{{if .S.ClaudeSessionID}}<div class="agent-session-id">{{.S.ClaudeSessionID}}</div>{{else}}<span class="agent-empty-id">No session yet</span>{{end}}</div></div>
-          <div class="field" style="margin-top:14px"><label for="mdClaudeToken">Long-lived token</label><input id="mdClaudeToken" type="password" name="claudeToken" autocomplete="off" placeholder="{{if .S.HasClaudeToken}}Saved — leave blank to keep{{else}}Optional{{end}}"></div>
+          <div class="agent-session-row"><div class="agent-stat"><label>Connection</label><b>{{.S.ClaudeConnLabel}}</b></div><div class="agent-stat"><label>Chrome &amp; browser view</label>{{if .S.ClaudeConnChromeReady}}<span class="pill ok">Available</span>{{else if .S.ClaudeConnNeedsSignIn}}<span class="pill warn">Not available</span>{{else}}<span class="pill">Checking</span>{{end}}</div><div class="agent-stat"><label>Current session</label>{{if .S.ClaudeSessionActive}}<span class="pill ok">Active</span>{{else}}<span class="pill">None</span>{{end}}</div></div>
+          <div class="agent-note" style="margin-top:12px">{{.S.ClaudeConnDetail}}</div>
+          <div class="agent-actions" style="justify-content:flex-start;margin-top:12px">
+            <button class="btn{{if .S.ClaudeConnNeedsSignIn}} primary{{end}}" type="submit" formaction="/claude/connect" formnovalidate>{{icon "key"}}Connect Claude</button>
+            <button class="btn" type="submit" formaction="/claude/connect/verify" formnovalidate>{{icon "refresh"}}Check connection</button>
+            <button class="btn danger" type="submit" formaction="/claude/disconnect" formnovalidate data-confirm="Disconnect Claude from FlipAi? Your own Claude Code sign-in on this PC is left alone.">Disconnect</button>
+          </div>
+          <div class="field" style="margin-top:16px"><label for="mdClaudeToken">Long-lived token — fallback only</label><input id="mdClaudeToken" type="password" name="claudeToken" autocomplete="off" placeholder="{{if .S.HasClaudeToken}}Saved — leave blank to keep{{else}}Optional{{end}}"><div class="agent-note">Optional. FlipAi runs on the sign-in above so Chrome and claude.ai/code work, and uses a saved <code>claude setup-token</code> value only if that sign-in lapses. A token on its own cannot drive the browser.</div></div>
+          <div class="agent-stat" style="margin-top:14px"><label>Session ID</label>{{if .S.ClaudeSessionID}}<div class="agent-session-id">{{.S.ClaudeSessionID}}</div>{{else}}<span class="agent-empty-id">No session yet</span>{{end}}</div>
         </div></div>
       </form>
     </section>

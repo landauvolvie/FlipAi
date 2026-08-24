@@ -55,7 +55,7 @@ func TestEvaluateClaudeLiveSupport(t *testing.T) {
 	ok := ClaudeAuthStatus{LoggedIn: true, AuthMethod: "claude.ai", ApiProvider: "firstParty"}
 
 	t.Run("version too old blocks live mode entirely", func(t *testing.T) {
-		s := evaluateClaudeLiveSupport("2.1.100 (Claude Code)", false, ok)
+		s := evaluateClaudeLiveSupport("2.1.100 (Claude Code)", false, true, ok)
 		if s.OK {
 			t.Fatal("live mode must be refused below the minimum version")
 		}
@@ -65,21 +65,31 @@ func TestEvaluateClaudeLiveSupport(t *testing.T) {
 	})
 
 	t.Run("unknown version is treated as too old", func(t *testing.T) {
-		if evaluateClaudeLiveSupport("", false, ok).OK {
+		if evaluateClaudeLiveSupport("", false, true, ok).OK {
 			t.Fatal("an unreadable version must not enable live mode")
 		}
 	})
 
 	t.Run("API billing is refused", func(t *testing.T) {
 		st := ClaudeAuthStatus{LoggedIn: true, AuthMethod: "apiKey", ApiProvider: "firstParty"}
-		s := evaluateClaudeLiveSupport("2.1.241", false, st)
+		s := evaluateClaudeLiveSupport("2.1.241", false, true, st)
 		if s.OK {
 			t.Fatal("API/Console billing must be refused in live mode as elsewhere")
 		}
 	})
 
-	t.Run("stored token runs live but without Remote Control", func(t *testing.T) {
-		s := evaluateClaudeLiveSupport("2.1.241", true, ok)
+	// A token stored on a machine that also has a real sign-in used to cost the
+	// browser view for no reason: FlipAi now runs the session on the sign-in and
+	// keeps the token as the fallback, exactly as a Chrome turn does.
+	t.Run("a stored token does not block Remote Control when a login exists", func(t *testing.T) {
+		s := evaluateClaudeLiveSupport("2.1.241", true, true, ok)
+		if !s.OK || !s.RemoteControl {
+			t.Fatalf("want OK and Remote Control, got OK=%v RC=%v (%s)", s.OK, s.RemoteControl, s.Reason)
+		}
+	})
+
+	t.Run("a token with no login runs live but without Remote Control", func(t *testing.T) {
+		s := evaluateClaudeLiveSupport("2.1.241", true, false, ok)
 		if !s.OK {
 			t.Fatal("a stored token must not disable live mode; it only blocks the browser view")
 		}
@@ -93,14 +103,14 @@ func TestEvaluateClaudeLiveSupport(t *testing.T) {
 
 	t.Run("signed out runs live but without Remote Control", func(t *testing.T) {
 		st := ClaudeAuthStatus{LoggedIn: false, ApiProvider: "firstParty"}
-		s := evaluateClaudeLiveSupport("2.1.241", false, st)
+		s := evaluateClaudeLiveSupport("2.1.241", false, false, st)
 		if !s.OK || s.RemoteControl {
 			t.Fatalf("want live without Remote Control, got OK=%v RC=%v", s.OK, s.RemoteControl)
 		}
 	})
 
 	t.Run("full-scope login gets everything", func(t *testing.T) {
-		s := evaluateClaudeLiveSupport("2.1.241 (Claude Code)", false, ok)
+		s := evaluateClaudeLiveSupport("2.1.241 (Claude Code)", false, true, ok)
 		if !s.OK || !s.RemoteControl {
 			t.Fatalf("want OK and Remote Control, got OK=%v RC=%v (%s)", s.OK, s.RemoteControl, s.Reason)
 		}

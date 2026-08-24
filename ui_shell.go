@@ -165,21 +165,22 @@ func (s shellData) DotClass() string {
 // shown at the top of a page. Only known keys render, so nothing a URL carries
 // can be echoed into the page.
 var uiFlashes = map[string][2]string{
-	"saved":          {"ok", "Settings saved."},
-	"saved-restart":  {"ok", "Settings saved. The background bridge is restarting with the new configuration."},
-	"paused":         {"warn", "FlipAi is paused. Incoming texts stay unread in Gmail until you resume."},
-	"resumed":        {"ok", "FlipAi resumed. New texts are being processed again."},
-	"number-added":   {"ok", "Phone number added to the allowlist."},
-	"number-removed": {"ok", "Phone number removed from the allowlist."},
-	"logs-cleared":   {"ok", "Activity log cleared."},
-	"restarting":     {"ok", "The background bridge is restarting."},
-	"startup-on":     {"ok", "FlipAi will now start when this Windows user signs in."},
-	"startup-off":    {"ok", "FlipAi will no longer start automatically at sign-in."},
-	"reset":          {"warn", "FlipAi setup was reset. Reconnect Gmail to start again."},
-	"boot-on":        {"ok", "FlipAi will now start when this PC powers on, before anyone signs in."},
-	"boot-off":       {"ok", "FlipAi will start at sign-in only."},
-	"update-current": {"ok", "FlipAi is up to date."},
-	"update-found":   {"warn", "A newer FlipAi release is available."},
+	"saved":             {"ok", "Settings saved."},
+	"saved-restart":     {"ok", "Settings saved. The background bridge is restarting with the new configuration."},
+	"claude-token-only": {"warn", "Saved. The token keeps Claude answering texts, but it cannot control Chrome or open claude.ai/code — press Connect Claude under Authentication & session to sign in properly."},
+	"paused":            {"warn", "FlipAi is paused. Incoming texts stay unread in Gmail until you resume."},
+	"resumed":           {"ok", "FlipAi resumed. New texts are being processed again."},
+	"number-added":      {"ok", "Phone number added to the allowlist."},
+	"number-removed":    {"ok", "Phone number removed from the allowlist."},
+	"logs-cleared":      {"ok", "Activity log cleared."},
+	"restarting":        {"ok", "The background bridge is restarting."},
+	"startup-on":        {"ok", "FlipAi will now start when this Windows user signs in."},
+	"startup-off":       {"ok", "FlipAi will no longer start automatically at sign-in."},
+	"reset":             {"warn", "FlipAi setup was reset. Reconnect Gmail to start again."},
+	"boot-on":           {"ok", "FlipAi will now start when this PC powers on, before anyone signs in."},
+	"boot-off":          {"ok", "FlipAi will start at sign-in only."},
+	"update-current":    {"ok", "FlipAi is up to date."},
+	"update-found":      {"warn", "A newer FlipAi release is available."},
 }
 
 func (a *App) shell(r *http.Request, nav, title string) shellData {

@@ -280,27 +280,30 @@ func (a *App) handler() http.Handler {
 
 	// Actions.
 	for path, action := range map[string]http.HandlerFunc{
-		"/bridge/pause":         a.pauseBridge,
-		"/bridge/resume":        a.resumeBridge,
-		"/bridge/restart":       a.restartBridge,
-		"/connections/save":     a.saveConnections,
-		"/connections/flowtest": a.flowTest,
-		"/agents/save":          a.saveAgents,
-		"/agents/reset":         a.resetAgentConversation,
-		"/phone/save":           a.savePhone,
-		"/phone/security":       a.savePhoneSecurity,
-		"/phone/numbers/add":    a.addPhoneNumber,
-		"/phone/numbers/remove": a.removePhoneNumber,
-		"/settings/save":        a.saveSettings,
-		"/settings/startup":     a.saveStartup,
-		"/settings/updates":     a.saveUpdates,
-		"/settings/bootstartup": a.saveBootStartup,
-		"/update/check":         a.updateCheck,
-		"/update/install":       a.updateInstall,
-		"/settings/reset":       a.resetSetup,
-		"/activity/clear":       a.activityClear,
-		"/health/check":         a.healthCheck,
-		"/quit":                 a.quit,
+		"/bridge/pause":          a.pauseBridge,
+		"/bridge/resume":         a.resumeBridge,
+		"/bridge/restart":        a.restartBridge,
+		"/connections/save":      a.saveConnections,
+		"/connections/flowtest":  a.flowTest,
+		"/agents/save":           a.saveAgents,
+		"/agents/reset":          a.resetAgentConversation,
+		"/claude/connect":        a.claudeConnect,
+		"/claude/connect/verify": a.claudeConnectVerify,
+		"/claude/disconnect":     a.claudeDisconnect,
+		"/phone/save":            a.savePhone,
+		"/phone/security":        a.savePhoneSecurity,
+		"/phone/numbers/add":     a.addPhoneNumber,
+		"/phone/numbers/remove":  a.removePhoneNumber,
+		"/settings/save":         a.saveSettings,
+		"/settings/startup":      a.saveStartup,
+		"/settings/updates":      a.saveUpdates,
+		"/settings/bootstartup":  a.saveBootStartup,
+		"/update/check":          a.updateCheck,
+		"/update/install":        a.updateInstall,
+		"/settings/reset":        a.resetSetup,
+		"/activity/clear":        a.activityClear,
+		"/health/check":          a.healthCheck,
+		"/quit":                  a.quit,
 	} {
 		m.HandleFunc(path, a.requireAuth(requirePost(action)))
 	}
@@ -401,6 +404,11 @@ func (a *App) startBridge(ctx context.Context) {
 	})
 	go b.Run(ctx)
 	go a.runAgentHealthProbe(ctx)
+	// Establish which Claude credential this machine is on before the first text
+	// arrives, so the Agents page describes the real connection and a
+	// browser-less one is named in the Activity log rather than only in whatever
+	// Claude ends up texting back.
+	go a.warmClaudeConnection(ctx, cfg, b, claude)
 	if cfg.Gmail.Method == GmailMethodAppPassword {
 		log.Printf("Gmail monitoring active via App Password with IMAP IDLE")
 	} else {

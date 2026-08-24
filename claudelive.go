@@ -123,7 +123,13 @@ func claudeVersionAtLeast(have, min string) bool {
 // The checks run worst-first: a missing pipe means live mode cannot deliver an
 // SMS at all, while a token only costs the browser view, so the message the
 // user sees names the blocking problem rather than the first one found.
-func evaluateClaudeLiveSupport(version string, hasToken bool, st ClaudeAuthStatus) claudeLiveSupport {
+//
+// loginExists is the token-free probe: when this account has a real
+// `claude /login` session, FlipAi withholds the stored token from the live
+// session exactly as it does for a Chrome turn, so Remote Control works and the
+// token stays available as the fallback. A stored token only costs the browser
+// view when it is the *only* credential on the machine.
+func evaluateClaudeLiveSupport(version string, hasToken, loginExists bool, st ClaudeAuthStatus) claudeLiveSupport {
 	s := claudeLiveSupport{Version: strings.TrimSpace(version)}
 
 	if !claudeVersionAtLeast(version, claudeLiveMinVersion) {
@@ -148,19 +154,26 @@ func evaluateClaudeLiveSupport(version string, hasToken bool, st ClaudeAuthStatu
 	// is left decides whether Remote Control comes with it.
 	s.OK = true
 
+	// A real sign-in wins over the token, so the token no longer costs the
+	// browser view on a machine that has both.
+	if loginExists {
+		s.RemoteControl = true
+		return s
+	}
 	if hasToken {
 		// This is the one that catches most FlipAi installs, because the stored
 		// token is exactly what makes an unattended bridge survive. Say plainly
 		// that the trade is real rather than implying the token is a mistake.
 		s.Reason = "Remote Control cannot use the stored Claude token: a `claude setup-token` value can only make model requests, " +
 			"so it cannot open a session at claude.ai/code. SMS still stays in one live session. " +
-			"To get the browser view, clear the token on this page and sign in with `claude auth login` instead — " +
-			"that login expires on its own, which is what the token was added to avoid."
+			"Press Connect Claude under Authentication & session to add a `claude /login` sign-in — FlipAi will use it for " +
+			"the live session and keep the token as the fallback."
 		return s
 	}
 	if !st.LoggedIn {
-		s.Reason = "Remote Control needs a completed `claude auth login` on this Windows account. " +
-			"SMS still stays in one live session until then, but it will not appear at claude.ai/code."
+		s.Reason = "Remote Control needs a completed Claude Code sign-in on this Windows account. " +
+			"Press Connect Claude under Authentication & session. SMS still stays in one live session until then, " +
+			"but it will not appear at claude.ai/code."
 		return s
 	}
 

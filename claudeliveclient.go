@@ -97,20 +97,24 @@ func (c *ClaudeLiveClient) Running() bool {
 }
 
 // childEnv mirrors ClaudeClient.childEnv so a live session is billed and
-// authenticated exactly like a print one. The stored token is still passed when
-// present: it cannot open Remote Control, but it does keep the session signed
-// in, which is the difference between a bridge that survives a lapsed browser
-// login and one that does not.
+// authenticated exactly like a print one.
+//
+// The caller decides whether a token is passed at all: it withholds the stored
+// one when this account has a real sign-in, because that sign-in is the only
+// credential Remote Control and the Chrome extension can use. An inherited
+// CLAUDE_CODE_OAUTH_TOKEN is always stripped first, or a withheld token would
+// walk straight back in through the environment and turn the browser off again.
 func (c *ClaudeLiveClient) childEnv() []string {
 	env := scrubAnthropicEnv(os.Environ())
-	if tok := strings.TrimSpace(c.token); tok != "" {
-		out := env[:0]
-		for _, e := range env {
-			if !strings.HasPrefix(strings.ToUpper(e), "CLAUDE_CODE_OAUTH_TOKEN=") {
-				out = append(out, e)
-			}
+	out := env[:0]
+	for _, e := range env {
+		if !strings.HasPrefix(strings.ToUpper(e), "CLAUDE_CODE_OAUTH_TOKEN=") {
+			out = append(out, e)
 		}
-		env = append(out, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+	}
+	env = out
+	if tok := strings.TrimSpace(c.token); tok != "" {
+		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
 	}
 	return env
 }
