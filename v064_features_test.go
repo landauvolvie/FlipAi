@@ -72,8 +72,8 @@ func TestCodexFullAccessAndThreadHandoffEndToEnd(t *testing.T) {
     if err != nil { t.Fatal(err) }
     var started struct { Thread struct { ID string `json:"id"` } `json:"thread"` }
     if json.Unmarshal(raw, &started) != nil || started.Thread.ID == "" { t.Fatal("missing test thread id") }
-    if c.threadSubscribed(started.Thread.ID) {
-        t.Fatal("FlipAi kept a newly created persisted thread subscribed instead of handing it back to Desktop")
+    if !c.threadSubscribed(started.Thread.ID) {
+        t.Fatal("FlipAi released a newly created persisted thread before its first turn created a resumable rollout")
     }
 
     raw, err = c.Request(ctx, "turn/start", map[string]any{
