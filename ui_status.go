@@ -189,7 +189,7 @@ func (a *App) status() uiStatus {
 		Compact:            cfg.UI.Compact,
 		Alerts:             cfg.UI.Alerts,
 		AlertSound:         cfg.UI.AlertSound,
-		Update:             st.Update,
+		Update:             loadUpdateState(a.statePath),
 	}
 	s.CodexFound = executableExists(s.CodexResolved)
 	s.ClaudeFound = executableExists(s.ClaudeResolved)

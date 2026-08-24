@@ -674,7 +674,7 @@ func TestUpdateCheckStoresPublishedRelease(t *testing.T) {
 	if !info.Newer() || info.Version != next {
 		t.Fatalf("expected %s to be seen as newer: %#v", next, info)
 	}
-	if loadState(a.statePath).Update.Version != next {
+	if loadUpdateState(a.statePath).Version != next {
 		t.Fatal("the release check was not stored in state")
 	}
 

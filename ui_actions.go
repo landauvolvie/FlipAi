@@ -620,8 +620,7 @@ func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {
 // recognises the existing install and updates it without asking setup
 // questions again.
 func (a *App) updateInstall(w http.ResponseWriter, r *http.Request) {
-	st := loadState(a.statePath)
-	info := st.Update
+	info := loadUpdateState(a.statePath)
 	if !info.Newer() {
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		info = a.checkForUpdate(ctx, true)

@@ -32,8 +32,10 @@ var (
 )
 
 // bootStartupEnabled reports whether the boot task exists and is enabled. The
-// task itself is the source of truth, so the UI cannot drift from Windows.
-func bootStartupEnabled() bool {
+// task itself is the source of truth, so the UI cannot drift from Windows. The
+// query is cached because the status snapshot is rebuilt constantly, and it is
+// invalidated whenever FlipAi changes the task.
+var bootTaskProbe = newCachedBool(20*time.Second, func() bool {
 	cmd := exec.Command("schtasks.exe", "/Query", "/TN", bootTaskName)
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
@@ -42,7 +44,9 @@ func bootStartupEnabled() bool {
 	}
 	text := string(out)
 	return strings.Contains(text, bootTaskName) && !strings.Contains(strings.ToLower(text), "disabled")
-}
+})
+
+func bootStartupEnabled() bool { return bootTaskProbe.get() }
 
 // enableBootStartup and disableBootStartup re-enter FlipAi elevated. Creating a
 // task that runs before sign-in needs administrator rights; nothing else in
@@ -51,6 +55,7 @@ func enableBootStartup(dataDir string) error  { return runBootHelper(dataDir, "i
 func disableBootStartup(dataDir string) error { return runBootHelper(dataDir, "remove") }
 
 func runBootHelper(dataDir, action string) error {
+	defer bootTaskProbe.invalidate()
 	exe, err := os.Executable()
 	if err != nil {
 		return err

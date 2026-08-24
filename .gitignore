@@ -11,6 +11,7 @@
 # log containing phone numbers.
 bridge.json
 state.json
+update.json
 bridge.log
 activity.jsonl
 quit.flag

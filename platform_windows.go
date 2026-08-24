@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -121,6 +122,7 @@ func spawnDetached(exe string, args ...string) error {
 func installAutostart(exe string) error {
 	// Remove the pre-v0.6.1 value so upgrades cannot start two copies.
 	_ = uninstallAutostartNamed("AISMSBridge")
+	defer autostartProbe.invalidate()
 	return installAutostartNamed("FlipAi", exe)
 }
 func installAutostartNamed(name, exe string) error {
@@ -135,6 +137,7 @@ func installAutostartNamed(name, exe string) error {
 }
 func uninstallAutostart() error {
 	_ = uninstallAutostartNamed("AISMSBridge")
+	defer autostartProbe.invalidate()
 	return uninstallAutostartNamed("FlipAi")
 }
 func uninstallAutostartNamed(name string) error {
@@ -146,12 +149,16 @@ func uninstallAutostartNamed(name string) error {
 
 // autostartEnabled reports whether this Windows user's Run key still holds the
 // FlipAi entry, so Settings shows the real state instead of a remembered one.
-func autostartEnabled() bool {
+// The registry read is cached: the status snapshot behind it is rebuilt on
+// every page render and every status poll.
+var autostartProbe = newCachedBool(20*time.Second, func() bool {
 	cmd := exec.Command("reg.exe", "QUERY", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "FlipAi")
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.Contains(string(out), "FlipAi")
-}
+})
+
+func autostartEnabled() bool { return autostartProbe.get() }
 
 // openFolder shows a local folder in File Explorer. It is used only for the
 // FlipAi data and log folders the user already owns.

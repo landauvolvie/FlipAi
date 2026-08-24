@@ -150,10 +150,6 @@ type State struct {
 	GmailCheck  Check `json:"gmailCheck,omitempty"`
 	CodexCheck  Check `json:"codexCheck,omitempty"`
 	ClaudeCheck Check `json:"claudeCheck,omitempty"`
-
-	// Update is the result of the last release check, so the window can offer
-	// an in-place update instead of the user re-running a full install.
-	Update ReleaseInfo `json:"update,omitempty"`
 }
 
 // Check is the result of one dependency test, kept so the desktop UI can show

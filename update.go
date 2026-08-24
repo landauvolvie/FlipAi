@@ -144,22 +144,42 @@ func fetchLatestRelease(ctx context.Context) (ReleaseInfo, error) {
 	return info, nil
 }
 
+// The release check lives in its own file rather than in state.json, which the
+// bridge rewrites after every turn: two writers doing read-modify-write on the
+// same file could drop a message checkpoint.
+func updateStatePath(statePath string) string {
+	return filepath.Join(filepath.Dir(statePath), "update.json")
+}
+
+func loadUpdateState(statePath string) ReleaseInfo {
+	var info ReleaseInfo
+	if raw, err := os.ReadFile(updateStatePath(statePath)); err == nil {
+		_ = json.Unmarshal(raw, &info)
+	}
+	return info
+}
+
+func saveUpdateState(statePath string, info ReleaseInfo) {
+	if raw, err := json.MarshalIndent(info, "", "  "); err == nil {
+		_ = os.WriteFile(updateStatePath(statePath), raw, 0o600)
+	}
+}
+
 // checkForUpdate refreshes the stored release info. force skips the interval
 // that keeps the background check quiet.
 func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
-	st := loadState(a.statePath)
-	if !force && time.Since(st.Update.CheckedAt) < updateCheckInterval {
-		return st.Update
+	current := loadUpdateState(a.statePath)
+	if !force && time.Since(current.CheckedAt) < updateCheckInterval {
+		return current
 	}
 	info, err := fetchLatestRelease(ctx)
 	if err != nil {
-		st.Update.CheckedAt = time.Now()
-		st.Update.Error = truncate(err.Error(), 200)
-		_ = saveState(a.statePath, st)
-		return st.Update
+		current.CheckedAt = time.Now()
+		current.Error = truncate(err.Error(), 200)
+		saveUpdateState(a.statePath, current)
+		return current
 	}
-	st.Update = info
-	_ = saveState(a.statePath, st)
+	saveUpdateState(a.statePath, info)
 	return info
 }
 

@@ -204,9 +204,9 @@ func (a *App) shell(r *http.Request, nav, title string) shellData {
 	default:
 		s.StatusLabel, s.StatusTone = "Setup needed", "warn"
 	}
-	if st := loadState(a.statePath); st.Update.Newer() {
-		s.UpdateVersion = st.Update.Version
-		s.UpdateNotes = st.Update.PageURL
+	if info := loadUpdateState(a.statePath); info.Newer() {
+		s.UpdateVersion = info.Version
+		s.UpdateNotes = info.PageURL
 	}
 	if key := r.URL.Query().Get("ok"); key != "" {
 		if f, known := uiFlashes[key]; known {
