@@ -267,6 +267,7 @@ func (a *App) handler() http.Handler {
 		"/connections/save":     a.saveConnections,
 		"/connections/flowtest": a.flowTest,
 		"/agents/save":          a.saveAgents,
+		"/agents/reset":         a.resetAgentConversation,
 		"/phone/save":           a.savePhone,
 		"/phone/security":       a.savePhoneSecurity,
 		"/phone/numbers/add":    a.addPhoneNumber,
