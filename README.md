@@ -60,7 +60,7 @@ The window has a sidebar with seven pages:
 | --- | --- |
 | **Home** | Live status of Gmail, both agents, the allowlist, and security; recent activity; **Pause FlipAi**, which leaves incoming texts unread in Gmail until you resume |
 | **Connections** | Gmail method and credentials, subject-phrase matching, and a message-flow test that checks the whole inbound path |
-| **Agents** | Codex and Claude executables, a working folder per agent, real background tests, default agent, turn timeout, Claude permission mode, the Claude Chrome toggle, and the command that reopens the Claude SMS conversation |
+| **Agents** | Codex and Claude executables, a working folder per agent, real background tests, default agent, turn timeout, Claude permission mode, the Claude Chrome toggle, the Claude conversation mode, and the command that reopens the Claude SMS conversation |
 | **Phone** | Allowed numbers with labels, reply length and split limits, acknowledgement and progress texts, and the SMS security code |
 | **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took |
 | **Settings** | Updates, start with Windows, **start before sign-in**, close to tray, light/dark/system theme, compact layout, in-window error alerts, log export, and reset |
@@ -220,6 +220,57 @@ You can still narrow it under **Agents → Behavior → Claude permission mode**
 
 Claude refuses full-access mode when it is started with administrator privileges. FlipAi never needs elevation, so run it as your normal Windows user.
 
+## Claude conversation mode
+
+**Agents → Claude → Conversation mode** offers two ways for SMS to reach Claude.
+
+### Per-message (default)
+
+Each text is one `claude -p` request that resumes the stored session id. Nothing
+runs in the background between texts, it works with the long-lived token below,
+and it is what FlipAi falls back to whenever live mode cannot run. Leave this
+selected unless you specifically want the browser view.
+
+### Live session with Remote Control
+
+FlipAi keeps **one** Claude Code session running for the whole conversation and
+delivers each text into it, so the same session can be opened at
+[claude.ai/code](https://claude.ai/code) and continued from a phone or browser.
+SMS replies and anything typed in the browser share one transcript.
+
+How it works: FlipAi starts `claude remote-control --spawn session` and delivers
+each text into that session's **cross-session messaging inbox**, which is a named
+pipe on Windows. Claude Code exports the pipe's address and token only into the
+environment of the session's own hook processes, so FlipAi registers a small hook
+that runs `FlipAi.exe --claude-hook` and posts back to FlipAi's loopback server —
+first to report the inbox, then to hand back each finished answer.
+
+Requirements, each reported on the Agents page when it is not met:
+
+- **Claude Code 2.1.234 or newer** on Windows. Below that a session binds no
+  inbox, so live mode cannot deliver a text at all and FlipAi stays in
+  per-message mode.
+- **A full `claude auth login`** for the browser view. This is the important one:
+  Remote Control **refuses a `claude setup-token`** — those tokens can only make
+  model requests. With a token stored, live mode still runs and SMS still stays
+  in one session, but the session will not appear at claude.ai/code. The Agents
+  page says so rather than implying a view that will never show up.
+- **A first-party Claude subscription**, the same billing path FlipAi requires
+  everywhere else.
+
+Two behaviours worth knowing:
+
+- **A text is never lost to live mode.** If the session cannot start, cannot be
+  reached, or does not answer, FlipAi runs that text through per-message mode
+  instead and records the reason in Activity.
+- **Browser turns are not texted to you.** A live session has two writers, so
+  FlipAi tags each injected prompt and only texts back the answer to a turn it
+  started. Anything you type at claude.ai/code is logged in Activity and left
+  alone.
+
+The new-session command ends the running session and starts a fresh one, so a
+new conversation really is new.
+
 ## Finding the Claude SMS conversation
 
 Codex and Claude persist conversations differently, and FlipAi cannot paper over the difference:
@@ -268,6 +319,10 @@ To avoid that, run this once in PowerShell and paste the value into **Agents →
 ```powershell
 claude setup-token
 ```
+
+Note the one trade: a stored token cannot open **Remote Control**, so live
+conversation mode runs without its browser view while a token is saved. Clear the
+token to get the view back.
 
 FlipAi stores it with Windows DPAPI and passes it to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`. The token is **optional**: with the field empty, FlipAi uses the normal `claude /login` session exactly as before. It is also not permanent — Claude reports lifetimes up to a year and can ask for a fresh one — but it turns a session that lapses in hours or days into one measured in months.
 

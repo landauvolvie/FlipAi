@@ -15,6 +15,7 @@ AI SMS Bridge is a remote-control bridge. A valid SMS can cause an AI agent to a
 - App Password mode uses direct TLS connections to Gmail IMAP (`993`) and SMTP (`465`); OAuth mode uses Google's Gmail HTTPS API.
 - Gmail reply fallback can send only to the exact `txt.voice.google.com` Reply-To domain parsed from the authenticated incoming message.
 - Local setup UI is loopback-only and authenticated with an HttpOnly SameSite cookie seeded by a random local token.
+- The live-session hook endpoint (`/claude/hook`, used only by Claude conversation mode) is loopback-only and authenticated with a separate secret minted per host run and held in memory. It is never written to disk, and a request without it is refused, so another local process cannot post a fabricated Claude reply for FlipAi to text out.
 - Codex must use ChatGPT-managed auth; API/provider auth is rejected.
 - Anthropic API environment variables are removed before Claude Code is launched; API/Console auth is rejected by the setup test.
 - Unexpected Codex approval requests are declined rather than automatically approved.

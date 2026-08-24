@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.15.0"
+const version = "0.16.0"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -132,6 +132,19 @@ type ClaudeConfig struct {
 	// UseChrome passes --chrome so Claude can drive the browser it already
 	// drives at the desktop.
 	UseChrome bool `json:"useChrome"`
+
+	// SessionMode selects how FlipAi drives Claude Code.
+	//
+	// "print" is the original behaviour and stays the default: every SMS turn
+	// is one `claude -p` subprocess that resumes the stored session id. It
+	// needs no long-lived process, works with a `claude setup-token`, and is
+	// the mode FlipAi falls back to whenever live mode cannot run.
+	//
+	// "live" keeps one Claude Code session running for the whole conversation
+	// and delivers each SMS into it, so the same session can be opened in
+	// Remote Control at claude.ai/code. It costs a supervised child process and
+	// refuses a stored token; see claudelive.go for the full set of conditions.
+	SessionMode string `json:"sessionMode,omitempty"`
 }
 
 // UpdateConfig controls how FlipAi keeps itself current. The check runs in the
@@ -183,6 +196,14 @@ type State struct {
 	// the same name, and so the Agents page can show a resume handle that stays
 	// unambiguous across however many new-session commands have been sent.
 	ClaudeSessionName string `json:"claudeSessionName,omitempty"`
+
+	// ClaudeLiveSessionID is the session id of the supervised live-mode session,
+	// kept apart from ClaudeSessionID on purpose. The print path resumes its id
+	// with `claude --resume`, which is not something to point at a session that
+	// is currently open; keeping the two separate means a live turn that falls
+	// back to per-message mode resumes the per-message conversation rather than
+	// fighting the running one for the same transcript.
+	ClaudeLiveSessionID string `json:"claudeLiveSessionId,omitempty"`
 
 	GmailBaselineUnix   int64     `json:"gmailBaselineUnix,omitempty"`
 	ProcessedMessageIDs []string  `json:"processedMessageIds,omitempty"`
@@ -289,7 +310,7 @@ func defaultConfig(dataDir string) Config {
 		},
 		Updates:  UpdateConfig{CheckHours: updateCheckHoursDefault, Automatic: true},
 		Codex:    CodexConfig{ApprovalPolicy: "never"},
-		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true},
+		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
 		Security: SecurityConfig{RequireCode: true},
 		UI:       UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
 	}
