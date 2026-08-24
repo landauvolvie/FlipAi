@@ -19,18 +19,28 @@ func TestAgentsPageOwnsAgentSpecificSettings(t *testing.T) {
 	body := a.do(t, http.MethodGet, "/agents", nil).Body.String()
 
 	for _, want := range []string{
-		"Routing &amp; workspace",
-		"Conversation &amp; new chat",
-		"Access &amp; installation",
+		"agent-rail",
+		"Shortcuts &amp; session",
+		"Workspace &amp; paths",
+		"Access &amp; tools",
+		"Authentication &amp; session",
 		`name="codexPrefix"`,
 		`name="claudePrefix"`,
+		`name="newSessionCommand"`,
 		`name="permissionMode"`,
 		`formaction="/agents/reset"`,
-		"Shared Behavior defaults",
+		"Shared defaults",
+		"Save changes",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Agents page is missing %q", want)
 		}
+	}
+
+	// The mockup showed a plus button, but FlipAi has no generic agent registry.
+	// Do not ship a control that pretends arbitrary agent types can be added.
+	if strings.Contains(body, `agent-add`) || strings.Contains(body, `aria-label="Add agent"`) {
+		t.Fatal("Agents page exposes an Add agent control without backend support")
 	}
 
 	advanced := a.do(t, http.MethodGet, "/advanced", nil).Body.String()
