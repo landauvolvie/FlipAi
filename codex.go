@@ -413,15 +413,17 @@ func (c *CodexClient) releaseThreadWithRetry(threadID string) {
 
 // Request wraps the raw JSON-RPC request with two FlipAi invariants:
 //  1. Codex gets full access available to this normal Windows user (never UAC).
-//  2. Persisted threads are released whenever FlipAi is not actively running a
-//     turn, so Codex Desktop can open the same history and continue it normally.
+//  2. A thread stays subscribed until a turn has completed, then it is released
+//     so Codex Desktop can open the same persisted history. A brand-new durable
+//     thread has no resumable rollout yet, so releasing it before its first turn
+//     makes the next resume fail with "no rollout found".
 func (c *CodexClient) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	params = applyCodexRequestDefaults(method, params)
 	if method == "turn/start" {
 		tid := stringParam(params, "threadId")
 		// An ephemeral thread has no rollout on disk and is never released, so it
-		// is still subscribed and must not be resumed. Resuming one always fails
-		// with "no rollout found", which is what broke the Codex test button.
+		// is still subscribed and must not be resumed. Durable threads are resumed
+		// only after a completed turn has handed them back to Codex Desktop.
 		if tid != "" && !c.threadSubscribed(tid) && !c.threadIsEphemeral(tid) {
 			resume := applyCodexRequestDefaults("thread/resume", map[string]any{"threadId": tid})
 			if _, err := c.requestRaw(ctx, "thread/resume", resume); err != nil {
@@ -439,23 +441,16 @@ func (c *CodexClient) Request(ctx context.Context, method string, params any) (j
 	case "thread/start":
 		if tid := startedThreadID(raw); tid != "" {
 			c.setThreadSubscribed(tid, true)
-			// Record this before any release attempt: releaseThread exempts
-			// ephemeral threads, and only durable ones go to Codex Desktop.
 			c.markEphemeralThread(tid, boolParam(params, "ephemeral"))
-			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if e := c.releaseThread(releaseCtx, tid); e != nil {
-				log.Printf("Codex thread/start handoff %s: %v", tid, e)
-			}
-			cancel()
+			// Do not hand a fresh durable thread back yet. Codex does not write a
+			// resumable rollout until the thread has content. turn/completed will
+			// release it after the first real turn, preserving desktop parity without
+			// poisoning C NEW or automatic stale-session recovery.
 		}
 	case "thread/resume":
-		tid := stringParam(params, "threadId")
-		c.setThreadSubscribed(tid, true)
-		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if e := c.releaseThread(releaseCtx, tid); e != nil {
-			log.Printf("Codex thread/resume handoff %s: %v", tid, e)
-		}
-		cancel()
+		// A direct resume is preparation for a turn. Keep it subscribed until that
+		// turn completes; releasing here would force an unnecessary second resume.
+		c.setThreadSubscribed(stringParam(params, "threadId"), true)
 	case "turn/start":
 		c.rememberTurnThread(startedTurnID(raw), stringParam(params, "threadId"))
 	case "thread/unsubscribe":

@@ -53,11 +53,13 @@ func TestMain(m *testing.M) {
 func mockCodexServer() {
 	sc := bufio.NewScanner(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
-	// Real Codex writes a rollout only for durable threads. Resuming an
-	// ephemeral one fails, and the mock must model that: without it, the mock
-	// happily resumed ephemeral threads and hid a bug that broke the Codex test
-	// button for every user.
+	// Model the two Codex persistence rules that matter here:
+	//   1. ephemeral threads never get a rollout and can never be resumed;
+	//   2. a new durable thread does not have a resumable rollout until its first
+	//      turn gives it content. Releasing an empty durable thread and then
+	//      resuming it is the exact C NEW failure this mock must catch.
 	ephemeral := map[string]bool{}
+	hasRollout := map[string]bool{}
 	for sc.Scan() {
 		var m map[string]any
 		if json.Unmarshal(sc.Bytes(), &m) != nil {
@@ -88,12 +90,13 @@ func mockCodexServer() {
 				p, _ := m["params"].(map[string]any)
 				isEph, _ := p["ephemeral"].(bool)
 				ephemeral["thr_test"] = isEph
+				hasRollout["thr_test"] = false
 			}
 			_ = enc.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thr_test", "ephemeral": true, "modelProvider": "openai"}, "modelProvider": "openai"}})
 		case "thread/resume":
 			p, _ := m["params"].(map[string]any)
 			tid, _ := p["threadId"].(string)
-			if ephemeral[tid] {
+			if ephemeral[tid] || !hasRollout[tid] {
 				_ = enc.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32600, "message": "no rollout found for thread id " + tid}})
 				continue
 			}
@@ -106,6 +109,11 @@ func mockCodexServer() {
 					_ = enc.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32002, "message": "missing full user access turn settings"}})
 					continue
 				}
+			}
+			p, _ := m["params"].(map[string]any)
+			tid, _ := p["threadId"].(string)
+			if tid != "" && !ephemeral[tid] {
+				hasRollout[tid] = true
 			}
 			_ = enc.Encode(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn_test", "status": "inProgress"}}})
 			params, _ := json.Marshal(m["params"])
@@ -259,10 +267,8 @@ func TestAuthEnvironmentScrubbing(t *testing.T) {
 	}
 }
 
-// The Codex test button broke because every newly started thread was released
-// for desktop handoff and then resumed before its turn — including ephemeral
-// threads, which Codex never persists a rollout for. Durable threads must keep
-// the handoff; ephemeral ones must skip it entirely.
+// Ephemeral threads never persist a rollout, so they must remain subscribed for
+// their whole lifetime and must never be resumed.
 func TestEphemeralThreadIsNeitherReleasedNorResumed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -287,7 +293,7 @@ func TestEphemeralThreadIsNeitherReleasedNorResumed(t *testing.T) {
 	}
 }
 
-func TestDurableThreadStillHandsOffAndResumes(t *testing.T) {
+func TestFreshDurableThreadWaitsForFirstTurnBeforeHandoff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	c := NewCodexClient(os.Args[0], "")
@@ -302,15 +308,26 @@ func TestDurableThreadStillHandsOffAndResumes(t *testing.T) {
 	if c.threadIsEphemeral("thr_test") {
 		t.Fatal("durable thread was misclassified as ephemeral")
 	}
-	// v0.6.4 handoff: released so Codex Desktop can open the same history.
-	if c.threadSubscribed("thr_test") {
-		t.Fatal("durable thread was not released for desktop handoff")
-	}
-	// And re-resumed transparently for the next turn.
-	if _, err := c.Request(ctx, "turn/start", map[string]any{"threadId": "thr_test", "input": []map[string]any{{"type": "text", "text": "hi"}}}); err != nil {
-		t.Fatalf("durable thread turn should resume cleanly: %v", err)
-	}
+	// A brand-new durable thread has no rollout yet. It must stay subscribed
+	// until its first turn instead of being handed off and immediately resumed.
 	if !c.threadSubscribed("thr_test") {
-		t.Fatal("durable thread should be subscribed again after its resume")
+		t.Fatal("fresh durable thread was released before its first turn")
+	}
+	if _, err := c.Request(ctx, "turn/start", map[string]any{"threadId": "thr_test", "input": []map[string]any{{"type": "text", "text": "hi"}}}); err != nil {
+		t.Fatalf("first durable thread turn should run without a resume: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for c.threadSubscribed("thr_test") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c.threadSubscribed("thr_test") {
+		t.Fatal("durable thread was not handed off after its first completed turn")
+	}
+
+	// After the first turn created a rollout and the thread was handed off,
+	// the next turn should transparently resume the persisted conversation.
+	if _, err := c.Request(ctx, "turn/start", map[string]any{"threadId": "thr_test", "input": []map[string]any{{"type": "text", "text": "again"}}}); err != nil {
+		t.Fatalf("persisted durable thread should resume cleanly: %v", err)
 	}
 }
