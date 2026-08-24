@@ -29,7 +29,14 @@ type Bridge struct {
 	// live is the supervised Claude Code session used by live mode. It is nil
 	// in per-message mode, which is both the default and the fallback, so every
 	// use is guarded rather than assumed.
-	live     *ClaudeLiveClient
+	live *ClaudeLiveClient
+
+	// onAgentResult records the outcome of a real agent turn as that agent's
+	// health check. Without it the Agents page reports the last time someone
+	// pressed Test and nothing else, so a working bridge reads as disconnected
+	// for as long as nobody presses it again.
+	onAgentResult func(agent string, ok bool, detail string)
+
 	activity *ActivityLog
 	mu       sync.Mutex
 	runMu    sync.Mutex
@@ -708,6 +715,16 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	} else {
 		b.timedEvent("success", "agent", "Agent completed successfully", rc.Sender, rc.Agent, m.ID, time.Since(startedAt))
 	}
+	// A real turn is the most authoritative health signal there is, better than
+	// any probe: it is the exact work the Agents page claims to describe. Status
+	// and new-conversation commands never reach an agent, so they say nothing.
+	if !rc.Status && !rc.New {
+		if err != nil {
+			b.recordAgentResult(rc.Agent, false, friendlyAgentError(err))
+		} else {
+			b.recordAgentResult(rc.Agent, true, "answered an SMS turn")
+		}
+	}
 
 	// Delivery is unconditional and happens here, in Go. The agent is never
 	// asked to send anything itself, so nothing in its output can change where
@@ -721,10 +738,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 // heartbeat texts a periodic "still working" line during a long turn, naming
 // the agent's current step when one is known.
 func (b *Bridge) heartbeat(ctx context.Context, stop <-chan struct{}, m GmailMessage, rc remoteCommand) {
-	every := time.Duration(b.cfg.GoogleVoice.ProgressIntervalSeconds) * time.Second
-	if every < 30*time.Second {
-		every = 120 * time.Second
-	}
+	// Each agent can set its own cadence; progressIntervalFor falls back to the
+	// shared Phone setting and applies the same floor.
+	every := b.cfg.progressIntervalFor(rc.Agent)
 	t := time.NewTicker(every)
 	defer t.Stop()
 	agentName := "Codex"
@@ -787,6 +803,34 @@ func (b *Bridge) Busy() bool {
 // to be abandoned, so a silently emptied context is never mistaken for the
 // agent forgetting what it was told.
 const claudeSessionLost = "Previous Claude conversation was unavailable, so a new one was started. "
+
+// SetAgentResultSink installs the health-check recorder. It is separate from
+// the constructor because the recorder belongs to the App, which owns
+// state.json, while the turn that produces the result happens here.
+func (b *Bridge) SetAgentResultSink(fn func(agent string, ok bool, detail string)) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.onAgentResult = fn
+	b.mu.Unlock()
+}
+
+// recordAgentResult reports a finished turn as that agent's live health.
+func (b *Bridge) recordAgentResult(agent string, ok bool, detail string) {
+	b.mu.Lock()
+	fn := b.onAgentResult
+	b.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	switch agent {
+	case "A":
+		fn("claude", ok, detail)
+	case "C":
+		fn("codex", ok, detail)
+	}
+}
 
 // SetLiveClaude attaches (or detaches, with nil) the supervised live session.
 // Switching modes in Settings restarts the host, so this is set once at

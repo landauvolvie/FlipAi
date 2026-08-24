@@ -120,6 +120,12 @@ type GoogleVoiceConfig struct {
 
 type CodexConfig struct {
 	ApprovalPolicy string `json:"approvalPolicy"`
+
+	// ProgressIntervalSeconds overrides how often this agent texts a "still
+	// working" line during a long turn. Zero means follow the shared setting
+	// on the Phone page, which is how every install behaved before agents could
+	// differ. See Config.progressInterval.
+	ProgressIntervalSeconds int `json:"progressIntervalSeconds,omitempty"`
 }
 
 type ClaudeConfig struct {
@@ -132,6 +138,10 @@ type ClaudeConfig struct {
 	// UseChrome passes --chrome so Claude can drive the browser it already
 	// drives at the desktop.
 	UseChrome bool `json:"useChrome"`
+
+	// ProgressIntervalSeconds overrides how often this agent texts a "still
+	// working" line during a long turn. Zero means follow the shared setting.
+	ProgressIntervalSeconds int `json:"progressIntervalSeconds,omitempty"`
 
 	// SessionMode selects how FlipAi drives Claude Code.
 	//
@@ -371,6 +381,31 @@ func (c Config) codexWorkingDir() string {
 		return v
 	}
 	return c.Cwd
+}
+
+// progressIntervalFor resolves the heartbeat cadence for one agent: its own
+// override when set, otherwise the shared value. A task that runs fifteen
+// minutes should be able to report differently from one that runs one, and the
+// two agents are used for different work.
+//
+// The same 30-second floor the shared setting has applies to an override, so a
+// per-agent value cannot turn a long turn into a stream of texts.
+func (c Config) progressIntervalFor(agent string) time.Duration {
+	seconds := c.GoogleVoice.ProgressIntervalSeconds
+	switch agent {
+	case "A":
+		if v := c.Claude.ProgressIntervalSeconds; v > 0 {
+			seconds = v
+		}
+	case "C":
+		if v := c.Codex.ProgressIntervalSeconds; v > 0 {
+			seconds = v
+		}
+	}
+	if seconds < 30 {
+		seconds = 120
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (c Config) claudeWorkingDir() string {

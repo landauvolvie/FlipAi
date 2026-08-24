@@ -113,6 +113,11 @@ type ClaudeClient struct {
 	authCached ClaudeAuthStatus
 	authAt     time.Time
 	authValid  bool
+
+	// loginChecked/loginExists cache whether this account has a real
+	// `claude /login` session, probed with the stored token removed.
+	loginChecked bool
+	loginExists  bool
 }
 
 type claudeResult struct {
@@ -283,12 +288,18 @@ func (c *ClaudeClient) invalidateAuthCache() {
 // Treating the exit code as the status was the reason FlipAi stopped before it
 // could try the actual background request.
 func (c *ClaudeClient) authStatus(ctx context.Context) (ClaudeAuthStatus, error) {
+	return c.authStatusWithEnv(ctx, c.childEnv())
+}
+
+// authStatusWithEnv is authStatus against a chosen environment, so the login
+// probe can ask about the machine's own session rather than the token's.
+func (c *ClaudeClient) authStatusWithEnv(ctx context.Context, env []string) (ClaudeAuthStatus, error) {
 	var st ClaudeAuthStatus
 	if strings.TrimSpace(c.path) == "" {
 		return st, errors.New("Claude Code path is empty")
 	}
 	cmd := exec.CommandContext(ctx, c.path, "auth", "status")
-	cmd.Env = c.childEnv()
+	cmd.Env = env
 	hideWindow(cmd)
 	out, runErr := cmd.CombinedOutput()
 	trimmed := bytes.TrimSpace(out)
@@ -313,23 +324,134 @@ func validateClaudeSubscriptionPath(st ClaudeAuthStatus) error {
 	return nil
 }
 
-// childEnv builds the environment for a Claude Code subprocess: the scrubbed
-// parent environment, plus the long-lived token when one is stored.
+// baseEnv is the scrubbed parent environment with any Claude token removed,
+// inherited or stored. It is what a subprocess gets when it must authenticate
+// as the machine's own `claude /login` session rather than as a token.
+func (c *ClaudeClient) baseEnv() []string {
+	env := scrubAnthropicEnv(os.Environ())
+	out := env[:0]
+	for _, e := range env {
+		if !strings.HasPrefix(strings.ToUpper(e), "CLAUDE_CODE_OAUTH_TOKEN=") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// envWithToken is baseEnv plus the stored long-lived token.
 // scrubAnthropicEnv deliberately preserves CLAUDE_CODE_OAUTH_TOKEN, so setting
 // it here is the supported way to keep an unattended bridge signed in.
-func (c *ClaudeClient) childEnv() []string {
-	env := scrubAnthropicEnv(os.Environ())
+func (c *ClaudeClient) envWithToken() []string {
+	env := c.baseEnv()
 	if tok := strings.TrimSpace(c.token); tok != "" {
-		// Drop any inherited value first so the stored token always wins.
-		out := env[:0]
-		for _, e := range env {
-			if !strings.HasPrefix(strings.ToUpper(e), "CLAUDE_CODE_OAUTH_TOKEN=") {
-				out = append(out, e)
-			}
-		}
-		env = append(out, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
 	}
 	return env
+}
+
+// interactiveLoginExists reports whether this Windows account has a real
+// `claude /login` session, checked with the stored token deliberately removed
+// so the answer is about the machine rather than about the token.
+//
+// The result is cached for the life of the client: a sign-in does not appear
+// mid-turn, and this costs a subprocess.
+func (c *ClaudeClient) interactiveLoginExists(ctx context.Context) bool {
+	c.mu.Lock()
+	if c.loginChecked {
+		exists := c.loginExists
+		c.mu.Unlock()
+		return exists
+	}
+	c.mu.Unlock()
+
+	st, err := c.authStatusWithEnv(ctx, c.baseEnv())
+	exists := err == nil && st.LoggedIn && validateClaudeSubscriptionPath(st) == nil
+
+	c.mu.Lock()
+	c.loginChecked, c.loginExists = true, exists
+	c.mu.Unlock()
+	return exists
+}
+
+// childEnv builds the environment for a Claude Code subprocess.
+//
+// The stored token is withheld when Chrome is enabled and the machine has a
+// real login to fall back on. Claude Code keeps Chrome integration off for a
+// `claude setup-token` session even when --chrome is passed, because the
+// browser extension cannot authenticate with that credential. Injecting the
+// token therefore silently disabled the browser for every SMS turn, while the
+// same account driving Chrome fine when the user ran `claude` themselves — the
+// exact difference FlipAi exists to erase.
+//
+// The token is still used whenever it is the only thing that works: with Chrome
+// off it costs nothing, and with no interactive login it is the difference
+// between a bridge that answers and one that is stranded. In that case Chrome
+// genuinely cannot work, and the Agents page says so rather than letting Claude
+// report a permission problem the user cannot find.
+func (c *ClaudeClient) childEnv() []string {
+	if c.tokenBlocksChrome() {
+		return c.baseEnv()
+	}
+	return c.envWithToken()
+}
+
+// tokenBlocksChrome reports whether the stored token is being withheld because
+// it would turn Chrome off. It reads the cached probe only, so it never starts a
+// subprocess from inside another subprocess's setup.
+func (c *ClaudeClient) tokenBlocksChrome() bool {
+	if strings.TrimSpace(c.token) == "" || !c.cfg.UseChrome {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.loginChecked && c.loginExists
+}
+
+// resolveTokenPolicy runs the interactive-login probe once, when its answer can
+// change which credential a turn uses. With Chrome off, or with no token
+// stored, the token is used unconditionally and there is nothing to probe.
+func (c *ClaudeClient) resolveTokenPolicy(ctx context.Context) {
+	if strings.TrimSpace(c.token) == "" || !c.cfg.UseChrome {
+		return
+	}
+	c.interactiveLoginExists(ctx)
+}
+
+// CachedChromeTokenConflict is the render-safe form of ChromeTokenConflict. A
+// page render must never start a subprocess, so this reports the conflict only
+// once a turn or a test has already run the probe.
+func (c *ClaudeClient) CachedChromeTokenConflict() string {
+	if c == nil || strings.TrimSpace(c.token) == "" || !c.cfg.UseChrome {
+		return ""
+	}
+	c.mu.Lock()
+	checked, exists := c.loginChecked, c.loginExists
+	c.mu.Unlock()
+	if !checked || exists {
+		return ""
+	}
+	return chromeTokenConflictText
+}
+
+// chromeTokenConflictText is shared by both forms so the page and any log say
+// the same thing.
+const chromeTokenConflictText = "Claude cannot control Chrome while the stored token is the only sign-in on this account. " +
+	"Claude Code turns Chrome off for a `claude setup-token` session even with the Chrome switch on, " +
+	"because the browser extension cannot authenticate with that credential. " +
+	"Run `claude /login` once on this Windows account and FlipAi will use that session for Chrome turns, " +
+	"keeping the token only as the fallback."
+
+// ChromeTokenConflict describes, for the Agents page, a machine where Chrome is
+// switched on but the only credential available cannot drive it. Empty means
+// there is nothing to warn about.
+func (c *ClaudeClient) ChromeTokenConflict(ctx context.Context) string {
+	if strings.TrimSpace(c.token) == "" || !c.cfg.UseChrome {
+		return ""
+	}
+	if c.interactiveLoginExists(ctx) {
+		return ""
+	}
+	return chromeTokenConflictText
 }
 
 // Version reports the installed Claude Code version, empty when it cannot be
@@ -366,6 +488,7 @@ func (c *ClaudeClient) runPrint(ctx context.Context, args []string) ([]byte, err
 // builds can report loggedIn:false while another first-party OAuth path still
 // lets `claude -p` work. The real request is the authoritative test.
 func (c *ClaudeClient) Test(ctx context.Context) error {
+	c.resolveTokenPolicy(ctx)
 	st, err := c.authStatus(ctx)
 	if err != nil {
 		return err
@@ -395,6 +518,11 @@ func (c *ClaudeClient) Test(ctx context.Context) error {
 }
 
 func (c *ClaudeClient) Run(ctx context.Context, sessionID, sessionName, prompt string) (result, newSession string, err error) {
+	// Resolve the Chrome/token question before anything builds an environment.
+	// childEnv only reads the cached answer, so without this the first turn
+	// after a restart would still inject the token and lose Chrome.
+	c.resolveTokenPolicy(ctx)
+
 	st, err := c.cachedAuthStatus(ctx)
 	if err != nil {
 		return "", sessionID, err

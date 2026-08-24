@@ -334,6 +334,20 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		} else if ok {
 			cfg.TurnTimeoutMinutes = n
 		}
+		// 0 clears the override and returns the agent to the shared setting.
+		for field, target := range map[string]*int{
+			"claudeProgressInterval": &cfg.Claude.ProgressIntervalSeconds,
+			"codexProgressInterval":  &cfg.Codex.ProgressIntervalSeconds,
+		} {
+			if n, ok, err := formInt(r, field, 0, 3600); err != nil {
+				return fmt.Errorf("progress interval: %w", err)
+			} else if ok {
+				if n != 0 && n < 30 {
+					return fmt.Errorf("progress interval: use 0 to follow the shared setting, or at least 30 seconds")
+				}
+				*target = n
+			}
+		}
 		if r.Form.Has("claudeSessionMode") {
 			// Anything unrecognised normalises to per-message, so a stale form
 			// post can never leave the bridge in a mode it does not implement.
