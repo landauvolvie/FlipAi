@@ -64,13 +64,9 @@ func TestRunClaudeLiveReportsFallback(t *testing.T) {
 	})
 
 	t.Run("unreachable inbox", func(t *testing.T) {
-		live := NewClaudeLiveClient("claude", "", ClaudeConfig{}, "", "hook")
-		live.cmd = &exec.Cmd{}
-		ready := make(chan struct{})
-		close(ready)
-		live.ready = ready
-		live.socket = filepath.Join(t.TempDir(), "missing.sock")
-		live.msgToken = "tok"
+		// An injected failing transport rather than a dead path, so the test
+		// asserts the fallback rather than the platform's dial timeout.
+		live := newFailingLiveClient(t)
 		b.SetLiveClaude(live)
 
 		if _, ok := b.runClaudeLive(context.Background(), "p", "s", "n"); ok {

@@ -3,9 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"net"
+	"errors"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -258,44 +257,41 @@ func TestIsClaudeLiveUnavailable(t *testing.T) {
 }
 
 // newTestLiveClient returns a client that believes it already has a running
-// session listening on addr, without spawning Claude Code.
-func newTestLiveClient(t *testing.T, addr, token string) *ClaudeLiveClient {
+// session, with the transport replaced by a capture channel.
+//
+// Substituting the transport is what keeps these tests meaningful on Windows.
+// The real writer there is a named pipe, which a Unix-socket fake cannot stand
+// in for, and Go on Windows will happily create that socket rather than skip —
+// so a socket-based fake fails on the platform FlipAi actually ships on. The
+// delivery and correlation logic under test is platform-independent, so the
+// transport is the only part that needs to be.
+func newTestLiveClient(t *testing.T, token string) (*ClaudeLiveClient, chan string) {
 	t.Helper()
 	c := NewClaudeLiveClient("claude", "", ClaudeConfig{}, "", "hook")
 	ready := make(chan struct{})
 	close(ready)
 	c.cmd = &exec.Cmd{}
 	c.ready = ready
-	c.socket = addr
+	c.socket = "inbox-under-test"
 	c.msgToken = token
 	c.sessionID = "session-under-test"
-	return c
+
+	frames := make(chan string, 4)
+	c.writeInbox = func(addr string, frame []byte) error {
+		frames <- string(frame)
+		return nil
+	}
+	return c, frames
 }
 
-// fakeInbox stands in for a live session's inbox: it accepts one connection and
-// hands the frame back so the test can assert what was actually delivered.
-func fakeInbox(t *testing.T) (addr string, frames chan string) {
+// newFailingLiveClient stands in for a session whose inbox cannot be reached.
+func newFailingLiveClient(t *testing.T) *ClaudeLiveClient {
 	t.Helper()
-	addr = filepath.Join(t.TempDir(), "inbox.sock")
-	ln, err := net.Listen("unix", addr)
-	if err != nil {
-		t.Skipf("unix sockets unavailable here: %v", err)
+	c, _ := newTestLiveClient(t, "tok")
+	c.writeInbox = func(addr string, frame []byte) error {
+		return errors.New("inbox is gone")
 	}
-	t.Cleanup(func() { _ = ln.Close() })
-	frames = make(chan string, 4)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			buf := make([]byte, 64<<10)
-			n, _ := conn.Read(buf)
-			frames <- string(buf[:n])
-			_ = conn.Close()
-		}
-	}()
-	return addr, frames
+	return c
 }
 
 // inboxMessageText decodes the message line of a delivered frame. The frame is
@@ -320,8 +316,7 @@ func inboxMessageText(t *testing.T, frame string) string {
 // Code reports the prompt id through UserPromptSubmit, and the Stop hook
 // carries the answer back to the waiting turn.
 func TestLiveClientRunDeliversAndCorrelates(t *testing.T) {
-	addr, frames := fakeInbox(t)
-	c := newTestLiveClient(t, addr, "inbox-token")
+	c, frames := newTestLiveClient(t, "inbox-token")
 
 	type result struct {
 		reply string
@@ -371,8 +366,7 @@ func TestLiveClientRunDeliversAndCorrelates(t *testing.T) {
 // A turn typed at claude.ai/code must not be texted to the user's phone. This
 // is the reason the correlation marker exists at all.
 func TestLiveClientIgnoresBrowserTypedTurns(t *testing.T) {
-	addr, frames := fakeInbox(t)
-	c := newTestLiveClient(t, addr, "inbox-token")
+	c, frames := newTestLiveClient(t, "inbox-token")
 
 	done := make(chan error, 1)
 	go func() {
@@ -402,7 +396,7 @@ func TestLiveClientIgnoresBrowserTypedTurns(t *testing.T) {
 }
 
 func TestLiveClientRunFallsBackWhenInboxIsUnreachable(t *testing.T) {
-	c := newTestLiveClient(t, filepath.Join(t.TempDir(), "missing.sock"), "tok")
+	c := newFailingLiveClient(t)
 	_, err := c.Run(context.Background(), "n", "s", "prompt")
 	if err == nil {
 		t.Fatal("delivering into a dead inbox must fail")
@@ -415,8 +409,7 @@ func TestLiveClientRunFallsBackWhenInboxIsUnreachable(t *testing.T) {
 }
 
 func TestLiveClientStopReleasesWaitingTurns(t *testing.T) {
-	addr, frames := fakeInbox(t)
-	c := newTestLiveClient(t, addr, "tok")
+	c, frames := newTestLiveClient(t, "tok")
 	done := make(chan error, 1)
 	go func() {
 		_, err := c.Run(context.Background(), "n", "s", "prompt")

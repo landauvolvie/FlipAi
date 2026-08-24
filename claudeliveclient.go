@@ -37,6 +37,14 @@ type ClaudeLiveClient struct {
 	token       string
 	hookCommand string
 
+	// writeInbox is the transport that delivers a frame to the session. It is a
+	// field rather than a direct call because the real one is platform-specific
+	// — a named pipe on Windows, a Unix socket elsewhere — and the delivery and
+	// correlation logic above it is not. Tests substitute it so that logic is
+	// exercised on every platform rather than only where the fake transport
+	// happens to be constructible.
+	writeInbox func(addr string, frame []byte) error
+
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	cancel    context.CancelFunc
@@ -61,6 +69,7 @@ func NewClaudeLiveClient(path, cwd string, cfg ClaudeConfig, token, hookCommand 
 		cfg:         cfg,
 		token:       strings.TrimSpace(token),
 		hookCommand: hookCommand,
+		writeInbox:  writeClaudeInbox,
 		pending:     map[string]*liveTurn{},
 		byPrompt:    map[string]string{},
 	}
@@ -302,7 +311,11 @@ func (c *ClaudeLiveClient) Run(ctx context.Context, sessionName, sender, prompt 
 	if err != nil {
 		return "", liveUnavailable("the SMS could not be prepared for the live session: %v", err)
 	}
-	if err := writeClaudeInbox(socket, frame); err != nil {
+	write := c.writeInbox
+	if write == nil {
+		write = writeClaudeInbox
+	}
+	if err := write(socket, frame); err != nil {
 		return "", liveUnavailable("the SMS could not be delivered into the live Claude session: %v", err)
 	}
 
