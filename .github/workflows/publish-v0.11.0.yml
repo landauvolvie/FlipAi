@@ -1,0 +1,47 @@
+name: Publish FlipAi v0.11.0
+
+on:
+  push:
+    paths:
+      - .github/workflows/publish-v0.11.0.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump version and remove publisher
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cfg = Path('config.go')
+          text = cfg.read_text(encoding='utf-8')
+          old = 'const version = "0.10.0"'
+          new = 'const version = "0.11.0"'
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected exactly one {old!r} in config.go')
+          cfg.write_text(text.replace(old, new), encoding='utf-8')
+          Path('VERSION').write_text('0.11.0\n', encoding='utf-8')
+          Path('.github/workflows/publish-v0.11.0.yml').unlink()
+          PY
+
+          git config user.name "FlipAi Release Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Release FlipAi v0.11.0"
+          git push origin HEAD:main
+
+      - name: Launch tested release pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref main
