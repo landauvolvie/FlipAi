@@ -102,7 +102,9 @@ func handleWindowClosed() {
 // installer stops the running bridge, replaces the files in place, and starts
 // FlipAi again; no setup questions are asked on an update.
 func runUpdateInstaller(path string) error {
-	cmd := exec.Command(path, "/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES")
+	// /restartapp=1 is FlipAi's own flag: it tells the installer to start the
+	// bridge again afterwards, which only makes sense for an in-app update.
+	cmd := exec.Command(path, "/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES", "/restartapp=1")
 	hideWindow(cmd)
 	return cmd.Start()
 }

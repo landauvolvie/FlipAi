@@ -51,9 +51,11 @@ Type: filesandordirs; Name: "{localappdata}\Programs\AISMSBridge"
 
 [Run]
 Filename: "{app}\FlipAi.exe"; Description: "Launch FlipAi and complete setup"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
-; A silent run is how FlipAi updates itself from inside the app. Nothing is
-; shown to click, so the bridge is started again here instead.
-Filename: "{app}\FlipAi.exe"; Parameters: "--watchdog"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: WizardSilent
+; A silent run is how FlipAi updates itself from inside the app: there is no
+; finish page to click, so the bridge has to be started again here. Only the
+; app asks for that, with /restartapp=1, so a plain silent install (packaging
+; tests, scripted deployment) still leaves nothing running.
+Filename: "{app}\FlipAi.exe"; Parameters: "--watchdog"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartRequested
 
 [UninstallRun]
 Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopFlipAi"
@@ -90,6 +92,12 @@ begin
   if not RegQueryStringValue(HKCU, RunKey, 'FlipAi', PriorStartup) then
     PriorStartup := '';
   Result := True;
+end;
+
+{ True only when FlipAi itself launched this installer to update in place. }
+function RestartRequested(): Boolean;
+begin
+  Result := ExpandConstant('{param:restartapp|0}') = '1';
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
