@@ -9,6 +9,13 @@ import (
 
 func TestAgentsPageOwnsAgentSpecificSettings(t *testing.T) {
 	a := newTestApp(t)
+	if err := saveState(a.statePath, State{
+		CodexThreadID:     "codex-thread",
+		ClaudeSessionID:   "claude-session",
+		ClaudeSessionName: "FlipAi-SMS-123",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	body := a.do(t, http.MethodGet, "/agents", nil).Body.String()
 
 	for _, want := range []string{
