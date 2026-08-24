@@ -920,13 +920,15 @@ const settingsHTML = `{{define "content"}}
         <label class="switch"><input type="hidden" name="autoUpdate" value="0"><input type="checkbox" name="autoUpdate" value="1" data-autosubmit{{if .S.AutoUpdate}} checked{{end}}><span class="slider"></span></label>
       </div>
       <div class="field">
-        <label for="updateCheckHours">Check for updates every</label>
-        <select id="updateCheckHours" name="updateCheckHours" data-autosubmit>
-          <option value="1"{{if eq .S.UpdateCheckHours 1}} selected{{end}}>Hour</option>
-          <option value="6"{{if eq .S.UpdateCheckHours 6}} selected{{end}}>6 hours</option>
-          <option value="12"{{if eq .S.UpdateCheckHours 12}} selected{{end}}>12 hours</option>
-          <option value="24"{{if eq .S.UpdateCheckHours 24}} selected{{end}}>Day</option>
-          <option value="168"{{if eq .S.UpdateCheckHours 168}} selected{{end}}>Week</option>
+        <label for="updateCheckMinutes">Check for updates every</label>
+        <select id="updateCheckMinutes" name="updateCheckMinutes" data-autosubmit>
+          <option value="5"{{if eq .S.UpdateCheckMinutes 5}} selected{{end}}>Every 5 minutes</option>
+          <option value="10"{{if eq .S.UpdateCheckMinutes 10}} selected{{end}}>Every 10 minutes</option>
+          <option value="30"{{if eq .S.UpdateCheckMinutes 30}} selected{{end}}>Every 30 minutes</option>
+          <option value="60"{{if eq .S.UpdateCheckMinutes 60}} selected{{end}}>Hourly</option>
+          <option value="360"{{if eq .S.UpdateCheckMinutes 360}} selected{{end}}>Every 6 hours</option>
+          <option value="1440"{{if eq .S.UpdateCheckMinutes 1440}} selected{{end}}>Daily</option>
+          <option value="10080"{{if eq .S.UpdateCheckMinutes 10080}} selected{{end}}>Weekly</option>
         </select>
         <p class="hint">FlipAi checks on this schedule in the background, so you never have to open this page to find out. A new release also shows next to the version in the sidebar.</p>
       </div>

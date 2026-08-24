@@ -27,7 +27,6 @@ const masterDetailAgentsHTML = `{{define "content"}}
 .agent-item-copy span{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .agent-mini-status{display:inline-flex!important;margin:0!important;padding:2px 7px;border-radius:999px;font-size:10px!important;font-weight:650;background:var(--ok-soft);color:var(--ok)!important}
 .agent-mini-status.warn{background:var(--warn-soft);color:var(--warn)!important}
-.agent-more{color:var(--muted);font-weight:700;letter-spacing:2px}
 #agent-codex:checked~.agents-studio .agent-item[for="agent-codex"],#agent-claude:checked~.agents-studio .agent-item[for="agent-claude"],#agent-shared:checked~.agents-studio .agent-item[for="agent-shared"]{background:var(--brand-soft);box-shadow:inset 0 0 0 1px var(--brand);}
 .agent-workspace{padding:26px 32px 44px;min-width:0;overflow:auto}
 .agent-pane{display:none;max-width:980px;margin:0 auto}
@@ -65,7 +64,7 @@ const masterDetailAgentsHTML = `{{define "content"}}
 .agent-shared-title{font-size:23px!important}
 .agent-shared-sub{color:var(--muted);font-size:12.5px;margin-top:3px}
 @media(max-width:1050px){.agents-studio{grid-template-columns:245px minmax(0,1fr)}.agent-workspace{padding:22px 22px 40px}.agent-fields-3{grid-template-columns:1fr 1fr}.agent-session-row{grid-template-columns:1fr 1fr}.agent-session-row .agent-stat:last-child{grid-column:1/-1}.agent-shared-grid{grid-template-columns:1fr 1fr}}
-@media(max-width:760px){.agents-studio{display:block}.agent-rail{border-right:0;border-bottom:1px solid var(--line);padding:18px}.agent-list{display:grid;grid-template-columns:repeat(3,1fr)}.agent-item{border-top:0;border-left:1px solid var(--line-soft)}.agent-item:first-child{border-left:0}.agent-item-copy span,.agent-more{display:none}.agent-workspace{padding:20px 16px}.agent-header{align-items:flex-start;flex-direction:column}.agent-actions{width:100%;justify-content:flex-start}.agent-fields-3,.agent-fields-2,.agent-session-row,.agent-shared-grid{grid-template-columns:1fr}.agent-session-row .agent-stat:last-child{grid-column:auto}}
+@media(max-width:760px){.agents-studio{display:block}.agent-rail{border-right:0;border-bottom:1px solid var(--line);padding:18px}.agent-list{display:grid;grid-template-columns:repeat(3,1fr)}.agent-item{border-top:0;border-left:1px solid var(--line-soft)}.agent-item:first-child{border-left:0}.agent-item-copy span{display:none}.agent-workspace{padding:20px 16px}.agent-header{align-items:flex-start;flex-direction:column}.agent-actions{width:100%;justify-content:flex-start}.agent-fields-3,.agent-fields-2,.agent-session-row,.agent-shared-grid{grid-template-columns:1fr}.agent-session-row .agent-stat:last-child{grid-column:auto}}
 </style>
 
 <input class="agent-switch" type="radio" name="agent-view" id="agent-codex">
@@ -79,15 +78,15 @@ const masterDetailAgentsHTML = `{{define "content"}}
     <div class="agent-list" id="agent-list">
       <label class="agent-item" for="agent-codex" data-agent-name="codex">
         <span class="bmark codex">{{brand "codex"}}</span>
-        <span class="agent-item-copy"><b>Codex <span class="agent-mini-status {{if not .S.CodexCheck.OK}}warn{{end}}">{{if .S.CodexCheck.OK}}Ready{{else if .S.CodexCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Local Codex CLI</span></span><span class="agent-more">⋮</span>
+        <span class="agent-item-copy"><b>Codex <span class="agent-mini-status {{if not .S.CodexCheck.OK}}warn{{end}}">{{if .S.CodexCheck.OK}}Ready{{else if .S.CodexCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Local Codex CLI</span></span>
       </label>
       <label class="agent-item" for="agent-claude" data-agent-name="claude">
         <span class="bmark claude">{{brand "claude"}}</span>
-        <span class="agent-item-copy"><b>Claude <span class="agent-mini-status {{if not .S.ClaudeCheck.OK}}warn{{end}}">{{if .S.ClaudeCheck.OK}}Ready{{else if .S.ClaudeCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Claude Code CLI</span></span><span class="agent-more">⋮</span>
+        <span class="agent-item-copy"><b>Claude <span class="agent-mini-status {{if not .S.ClaudeCheck.OK}}warn{{end}}">{{if .S.ClaudeCheck.OK}}Ready{{else if .S.ClaudeCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Claude Code CLI</span></span>
       </label>
       <label class="agent-item" for="agent-shared" data-agent-name="shared defaults">
         <span class="mark shield" style="width:34px;height:34px;border-radius:9px">{{icon "sliders"}}</span>
-        <span class="agent-item-copy"><b>Shared defaults</b><span>Applied to all agents</span></span><span class="agent-more">⋮</span>
+        <span class="agent-item-copy"><b>Shared defaults</b><span>Applied to all agents</span></span>
       </label>
     </div>
   </aside>

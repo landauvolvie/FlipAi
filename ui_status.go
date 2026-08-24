@@ -70,9 +70,9 @@ type uiStatus struct {
 	// per-message conversation id so the page can show each for what it is.
 	ClaudeLiveSessionID string
 
-	// AutoUpdate and UpdateCheckHours drive the Updates card on Settings.
-	AutoUpdate       bool
-	UpdateCheckHours int
+	// AutoUpdate and UpdateCheckMinutes drive the Updates card on Settings.
+	AutoUpdate         bool
+	UpdateCheckMinutes int
 
 	// ClaudeSessionID and ClaudeSessionName are what the Agents page needs to
 	// tell the user how to reopen the SMS conversation in Claude Code, which
@@ -215,7 +215,7 @@ func (a *App) status() uiStatus {
 		ClaudeSessionModeLabel: claudeSessionModeLabel(cfg.Claude.SessionMode),
 		ClaudeLiveSessionID:    st.ClaudeLiveSessionID,
 		AutoUpdate:             cfg.Updates.Automatic,
-		UpdateCheckHours:       int(cfg.Updates.checkInterval() / time.Hour),
+		UpdateCheckMinutes:     cfg.Updates.normalizedCheckMinutes(),
 		ClaudeSessionID:        st.ClaudeSessionID,
 		ClaudeSessionName:      st.ClaudeSessionName,
 		LastAgent:              st.LastAgent,

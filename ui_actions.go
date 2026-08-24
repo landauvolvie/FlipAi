@@ -518,10 +518,13 @@ func (a *App) saveUpdates(w http.ResponseWriter, r *http.Request) {
 		if v, ok := formFlag(r, "autoUpdate"); ok {
 			cfg.Updates.Automatic = v
 		}
-		if n, ok, err := formInt(r, "updateCheckHours", updateCheckHoursMin, updateCheckHoursMax); err != nil {
+		if n, ok, err := formInt(r, "updateCheckMinutes", updateCheckMinutesMin, updateCheckMinutesMax); err != nil {
 			return fmt.Errorf("update check interval: %w", err)
 		} else if ok {
-			cfg.Updates.CheckHours = n
+			cfg.Updates.CheckMinutes = n
+			// Clear the retired value so the migration cannot later override
+			// the cadence the user just chose.
+			cfg.Updates.CheckHours = 0
 		}
 		return nil
 	})

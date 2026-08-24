@@ -87,6 +87,14 @@ func (c *CodexClient) Start(ctx context.Context) error {
 	}
 	exe := resolveCodexExecutable(c.path)
 	c.cmd = exec.CommandContext(ctx, exe, "app-server", "--listen", "stdio://")
+	// Without this the Codex app-server gets its own console, which flashes a
+	// black command window on the user's desktop every time FlipAi starts it —
+	// on launch, on a settings restart, and on every "Test Codex". FlipAi is a
+	// background bridge; nothing it runs should be visible. Every other
+	// subprocess FlipAi starts already goes through hideWindow; this one was
+	// missed, and it is the one users actually see because it is started from
+	// a button.
+	hideWindow(c.cmd)
 	c.cmd.Env = augmentCodexEnv(exe, scrubOpenAIEnv(os.Environ()))
 	if c.cwd != "" {
 		c.cmd.Dir = c.cwd

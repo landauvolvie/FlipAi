@@ -150,9 +150,17 @@ type ClaudeConfig struct {
 // UpdateConfig controls how FlipAi keeps itself current. The check runs in the
 // background host, so a new release is noticed without anyone opening Settings.
 type UpdateConfig struct {
-	// CheckHours is how often the background check runs. Clamped to a sane
-	// range on load so a hand-edited config cannot poll GitHub in a tight loop.
-	CheckHours int `json:"checkHours"`
+	// CheckHours is the retired hours-only setting. It is still read so an
+	// existing install keeps the cadence its owner chose, and it is migrated to
+	// CheckMinutes on load; nothing writes it any more.
+	CheckHours int `json:"checkHours,omitempty"`
+
+	// CheckMinutes is how often the background check runs. Minutes rather than
+	// hours because an hour was the smallest cadence the old setting could
+	// express, which made a published fix take up to an hour to reach anyone.
+	// Clamped on load so a hand-edited config cannot poll GitHub in a tight
+	// loop.
+	CheckMinutes int `json:"checkMinutes,omitempty"`
 
 	// Automatic installs a verified update without waiting to be asked. FlipAi
 	// still refuses to run an installer whose checksum does not match, and it
@@ -161,19 +169,47 @@ type UpdateConfig struct {
 }
 
 const (
-	updateCheckHoursMin     = 1
-	updateCheckHoursMax     = 168
-	updateCheckHoursDefault = 6
+	// Ten minutes is the default: frequent enough that a published fix reaches
+	// an unattended bridge the same morning, and far below what GitHub's
+	// unauthenticated release endpoint objects to. The floor is five minutes so
+	// a hand-edited config cannot turn the check into a hot loop.
+	updateCheckMinutesMin     = 5
+	updateCheckMinutesMax     = 7 * 24 * 60
+	updateCheckMinutesDefault = 10
 )
 
 // checkInterval is the validated background check period.
 func (u UpdateConfig) checkInterval() time.Duration {
-	h := u.CheckHours
-	if h < updateCheckHoursMin || h > updateCheckHoursMax {
-		h = updateCheckHoursDefault
-	}
-	return time.Duration(h) * time.Hour
+	m := u.normalizedCheckMinutes()
+	return time.Duration(m) * time.Minute
 }
+
+// normalizedCheckMinutes resolves the effective cadence, migrating an install
+// that still only has the retired hours value.
+//
+// The migration is deliberately one-way and lossy in one direction: an install
+// that never changed the old default of 6 hours is moved onto the new 10-minute
+// default rather than kept at 6 hours, because that default was a limitation
+// rather than a preference. A cadence the user actually chose is preserved.
+func (u UpdateConfig) normalizedCheckMinutes() int {
+	m := u.CheckMinutes
+	if m == 0 && u.CheckHours > 0 {
+		if u.CheckHours == retiredUpdateCheckHoursDefault {
+			m = updateCheckMinutesDefault
+		} else {
+			m = u.CheckHours * 60
+		}
+	}
+	if m < updateCheckMinutesMin || m > updateCheckMinutesMax {
+		m = updateCheckMinutesDefault
+	}
+	return m
+}
+
+// retiredUpdateCheckHoursDefault is the value the hours-only setting shipped
+// with. It is kept only so the migration can tell "never changed it" apart from
+// "chose six hours".
+const retiredUpdateCheckHoursDefault = 6
 
 type SecurityConfig struct {
 	RequireCode bool   `json:"requireCode"`
@@ -308,7 +344,12 @@ func defaultConfig(dataDir string) Config {
 			ProgressUpdates:         true,
 			ProgressIntervalSeconds: 120,
 		},
-		Updates:  UpdateConfig{CheckHours: updateCheckHoursDefault, Automatic: true},
+		// CheckMinutes is deliberately left unset. loadConfig seeds these
+		// defaults and then unmarshals the file over them, so a value here
+		// would look like an explicit choice and suppress the migration for an
+		// install whose file still only carries the retired checkHours.
+		// normalizedCheckMinutes supplies the default for an unset value.
+		Updates:  UpdateConfig{Automatic: true},
 		Codex:    CodexConfig{ApprovalPolicy: "never"},
 		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
 		Security: SecurityConfig{RequireCode: true},
@@ -425,9 +466,6 @@ func loadConfig(path, dataDir string) (Config, error) {
 		cfg.Claude.PermissionMode = claudeFullAccess
 	}
 	cfg.Claude.PermissionMode = normalizeClaudePermissionMode(cfg.Claude.PermissionMode)
-	if cfg.Updates.CheckHours < updateCheckHoursMin || cfg.Updates.CheckHours > updateCheckHoursMax {
-		cfg.Updates.CheckHours = updateCheckHoursDefault
-	}
 	// Installs made before automatic updates existed have no updates block, so
 	// decoding leaves Automatic false. Probe for the block so an absent one
 	// takes the default and an explicit one keeps the user's choice.
@@ -437,6 +475,11 @@ func loadConfig(path, dataDir string) (Config, error) {
 	if json.Unmarshal(b, &updProbe) == nil && updProbe.Updates == nil {
 		cfg.Updates = defaultConfig(dataDir).Updates
 	}
+	// Resolve the cadence last, after the absent-block probe above may have
+	// replaced the whole Updates struct. Running it before that probe would
+	// have the default overwrite the migrated value.
+	cfg.Updates.CheckMinutes = cfg.Updates.normalizedCheckMinutes()
+	cfg.Updates.CheckHours = 0
 	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
 		cfg.DefaultAgent = "C"
 	}

@@ -13,14 +13,38 @@ import (
 // The background check has to be configurable, and a hand-edited config must
 // not be able to make FlipAi poll GitHub in a tight loop.
 func TestUpdateCheckIntervalIsConfiguredAndClamped(t *testing.T) {
-	if got := (UpdateConfig{CheckHours: 24}).checkInterval(); got != 24*time.Hour {
+	if got := (UpdateConfig{CheckMinutes: 30}).checkInterval(); got != 30*time.Minute {
 		t.Errorf("a configured interval must be used, got %v", got)
 	}
-	for _, bad := range []int{0, -5, 100000} {
-		got := (UpdateConfig{CheckHours: bad}).checkInterval()
-		if got != updateCheckHoursDefault*time.Hour {
-			t.Errorf("CheckHours %d must fall back to the default, got %v", bad, got)
+	for _, bad := range []int{0, -5, 100000000} {
+		got := (UpdateConfig{CheckMinutes: bad}).checkInterval()
+		if got != updateCheckMinutesDefault*time.Minute {
+			t.Errorf("CheckMinutes %d must fall back to the default, got %v", bad, got)
 		}
+	}
+	// A minute-level cadence is the point of the setting, but it still must not
+	// be able to become a hot loop.
+	if got := (UpdateConfig{CheckMinutes: 1}).checkInterval(); got != updateCheckMinutesDefault*time.Minute {
+		t.Errorf("below the floor must fall back to the default, got %v", got)
+	}
+	if got := (UpdateConfig{CheckMinutes: updateCheckMinutesMin}).checkInterval(); got != updateCheckMinutesMin*time.Minute {
+		t.Errorf("the floor itself must be usable, got %v", got)
+	}
+}
+
+// An install created before the cadence moved to minutes keeps a cadence its
+// owner deliberately chose, but is moved off the old default, which was a limit
+// rather than a preference.
+func TestRetiredHoursSettingMigrates(t *testing.T) {
+	if got := (UpdateConfig{CheckHours: 24}).checkInterval(); got != 24*time.Hour {
+		t.Errorf("a chosen 24-hour cadence must survive, got %v", got)
+	}
+	if got := (UpdateConfig{CheckHours: retiredUpdateCheckHoursDefault}).checkInterval(); got != updateCheckMinutesDefault*time.Minute {
+		t.Errorf("the old default must move to the new default, got %v", got)
+	}
+	// An explicit new-style value always wins over the retired one.
+	if got := (UpdateConfig{CheckHours: 24, CheckMinutes: 15}).checkInterval(); got != 15*time.Minute {
+		t.Errorf("CheckMinutes must take precedence, got %v", got)
 	}
 }
 
@@ -40,8 +64,8 @@ func TestOlderConfigGetsUpdateDefaults(t *testing.T) {
 	if !cfg.Updates.Automatic {
 		t.Error("an upgraded install should get automatic updates, not silence")
 	}
-	if cfg.Updates.CheckHours != updateCheckHoursDefault {
-		t.Errorf("check interval = %d, want %d", cfg.Updates.CheckHours, updateCheckHoursDefault)
+	if cfg.Updates.CheckMinutes != updateCheckMinutesDefault {
+		t.Errorf("check interval = %d, want %d", cfg.Updates.CheckMinutes, updateCheckMinutesDefault)
 	}
 
 	// An explicit block must be respected, including turning automation off.
@@ -55,8 +79,8 @@ func TestOlderConfigGetsUpdateDefaults(t *testing.T) {
 	if cfg.Updates.Automatic {
 		t.Error("an explicit automatic:false must be honoured")
 	}
-	if cfg.Updates.CheckHours != 24 {
-		t.Errorf("an explicit interval must be honoured, got %d", cfg.Updates.CheckHours)
+	if cfg.Updates.CheckMinutes != 24*60 {
+		t.Errorf("an explicit interval must be honoured, got %d", cfg.Updates.CheckMinutes)
 	}
 }
 
@@ -64,8 +88,8 @@ func TestOlderConfigGetsUpdateDefaults(t *testing.T) {
 func TestUpdateSettingsSaveRoundTrip(t *testing.T) {
 	a := newTestApp(t)
 	rr := a.do(t, http.MethodPost, "/settings/updates", url.Values{
-		"autoUpdate":       {"0"},
-		"updateCheckHours": {"24"},
+		"autoUpdate":         {"0"},
+		"updateCheckMinutes": {"10"},
 	})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("save returned %d", rr.Code)
@@ -77,12 +101,12 @@ func TestUpdateSettingsSaveRoundTrip(t *testing.T) {
 	if cfg.Updates.Automatic {
 		t.Error("turning automatic updates off did not stick")
 	}
-	if cfg.Updates.CheckHours != 24 {
-		t.Errorf("interval = %d, want 24", cfg.Updates.CheckHours)
+	if cfg.Updates.CheckMinutes != 10 {
+		t.Errorf("interval = %d, want 10", cfg.Updates.CheckMinutes)
 	}
 
 	// And an out-of-range interval is rejected rather than stored.
-	if rr := a.do(t, http.MethodPost, "/settings/updates", url.Values{"updateCheckHours": {"999999"}}); rr.Code != 400 {
+	if rr := a.do(t, http.MethodPost, "/settings/updates", url.Values{"updateCheckMinutes": {"999999999"}}); rr.Code != 400 {
 		t.Errorf("an out-of-range interval should be refused, got %d", rr.Code)
 	}
 }
