@@ -148,6 +148,18 @@ const masterDetailAgentsHTML = `{{define "content"}}
           <div style="margin-top:12px"><span class="agent-note" style="margin-right:8px">Effective access</span><span class="pill brand">{{.S.PermissionModeLabel}}</span></div>
         </div></div>
 
+        <div class="agent-section"><div class="agent-section-head"><span class="agent-section-icon">{{icon "refresh"}}</span>Conversation mode</div><div class="agent-section-body">
+          <div class="agent-fields-2">
+            <div class="field"><label for="mdClaudeSessionMode">How SMS reaches Claude</label><select id="mdClaudeSessionMode" name="claudeSessionMode">
+              <option value="print"{{if eq .S.ClaudeSessionMode "print"}} selected{{end}}>Per-message (recommended)</option>
+              <option value="live"{{if eq .S.ClaudeSessionMode "live"}} selected{{end}}>Live session with Remote Control</option>
+            </select><div class="agent-note">Per-message runs one request per text and needs nothing running in the background. Live keeps one Claude session open for the whole conversation so you can also open it at claude.ai/code.</div></div>
+            <div class="agent-stat"><label>Running now</label>{{if .S.LiveActive}}<span class="pill ok">Live session</span>{{else}}<span class="pill">Per-message</span>{{end}}{{if .S.LiveRemoteControl}}<span class="pill brand" style="margin-left:6px">Remote Control</span>{{end}}</div>
+          </div>
+          {{if .S.LiveNotice}}<div class="agent-note" style="margin-top:12px"><b>Heads up:</b> {{.S.LiveNotice}}</div>{{end}}
+          {{if .S.ClaudeLiveSessionID}}<div class="field" style="margin-top:12px"><label>Live session ID</label><input value="{{.S.ClaudeLiveSessionID}}" readonly></div>{{end}}
+        </div></div>
+
         <div class="agent-section"><div class="agent-section-head"><span class="agent-section-icon">{{icon "key"}}</span>Authentication &amp; session</div><div class="agent-section-body">
           <div class="agent-session-row"><div class="agent-stat"><label>Authentication</label><b>{{if .S.HasClaudeToken}}Claude token{{else}}Claude Code (local){{end}}</b></div><div class="agent-stat"><label>Current session</label>{{if .S.ClaudeSessionActive}}<span class="pill ok">Active</span>{{else}}<span class="pill">None</span>{{end}}</div><div class="agent-stat"><label>Session ID</label>{{if .S.ClaudeSessionID}}<div class="agent-session-id">{{.S.ClaudeSessionID}}</div>{{else}}<span class="agent-empty-id">No session yet</span>{{end}}</div></div>
           <div class="field" style="margin-top:14px"><label for="mdClaudeToken">Long-lived token</label><input id="mdClaudeToken" type="password" name="claudeToken" autocomplete="off" placeholder="{{if .S.HasClaudeToken}}Saved — leave blank to keep{{else}}Optional{{end}}"></div>

@@ -332,6 +332,24 @@ func (c *ClaudeClient) childEnv() []string {
 	return env
 }
 
+// Version reports the installed Claude Code version, empty when it cannot be
+// determined. Live mode needs it to decide whether the running session will
+// even have an inbox to deliver an SMS into, so a failure here is answered with
+// an empty string and treated as "too old" rather than as a hard error.
+func (c *ClaudeClient) Version(ctx context.Context) string {
+	if strings.TrimSpace(c.path) == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, c.path, "--version")
+	cmd.Env = c.childEnv()
+	hideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func (c *ClaudeClient) runPrint(ctx context.Context, args []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	if c.cwd != "" {

@@ -23,8 +23,19 @@ type App struct {
 	codex                                     *CodexClient
 	claude                                    *ClaudeClient
 	bridge                                    *Bridge
-	oauth                                     *GoogleOAuthAttempt
-	stop                                      func()
+
+	// liveClaude is the supervised Claude Code session when live mode is on,
+	// nil otherwise. liveSupport records why it is nil so the Agents page can
+	// explain the fallback instead of just showing the wrong mode.
+	liveClaude  *ClaudeLiveClient
+	liveSupport claudeLiveSupport
+
+	// hookToken authenticates the live session's hook helper to the loopback
+	// endpoint. It is minted per host run and never written to disk.
+	hookToken string
+
+	oauth *GoogleOAuthAttempt
+	stop  func()
 }
 
 // resultHTML is the confirmation/failure page shown after an action. It uses
@@ -149,6 +160,10 @@ func (a *App) resetMailCheckpoint() {
 
 func (a *App) restartSoon() {
 	time.Sleep(1400 * time.Millisecond)
+	// End the supervised Claude session first. A settings change that switches
+	// modes would otherwise leave the old session running against the working
+	// folder with nothing left to talk to it.
+	a.stopClaudeLive()
 	if a.stop != nil {
 		a.stop()
 	}
@@ -240,6 +255,10 @@ func (a *App) handler() http.Handler {
 	})
 	m.HandleFunc("/assets/", a.serveAsset)
 	m.HandleFunc("/oauth/google/callback", a.oauthCallback)
+	// The live-session hook helper posts here. It authenticates with its own
+	// per-run secret rather than the page token, because its caller is a child
+	// process rather than the desktop window.
+	m.HandleFunc(claudeLiveHookPath, a.claudeHookEndpoint)
 
 	// Pages.
 	m.HandleFunc("/", a.enter)
@@ -371,6 +390,10 @@ func (a *App) startBridge(ctx context.Context) {
 	a.mu.Lock()
 	a.codex, a.claude, a.bridge = codex, claude, b
 	a.mu.Unlock()
+	// Live mode is attached after the bridge exists so its preflight can log
+	// through the same Activity log the user reads, and so a refusal leaves a
+	// working per-message bridge rather than no bridge at all.
+	a.startClaudeLive(ctx, cfg, b)
 	go b.Run(ctx)
 	if cfg.Gmail.Method == GmailMethodAppPassword {
 		log.Printf("Gmail monitoring active via App Password with IMAP IDLE")

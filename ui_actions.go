@@ -334,6 +334,11 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		} else if ok {
 			cfg.TurnTimeoutMinutes = n
 		}
+		if r.Form.Has("claudeSessionMode") {
+			// Anything unrecognised normalises to per-message, so a stale form
+			// post can never leave the bridge in a mode it does not implement.
+			cfg.Claude.SessionMode = normalizeClaudeSessionMode(r.FormValue("claudeSessionMode"))
+		}
 		if r.Form.Has("permissionMode") {
 			switch v := strings.TrimSpace(r.FormValue("permissionMode")); v {
 			case "bypassPermissions", "acceptEdits", "dontAsk", "plan", "default":

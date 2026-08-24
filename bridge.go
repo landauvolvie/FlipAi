@@ -25,12 +25,17 @@ type Bridge struct {
 	gmail     MailClient
 	codex     *CodexClient
 	claude    *ClaudeClient
-	activity  *ActivityLog
-	mu        sync.Mutex
-	runMu     sync.Mutex
-	state     State
-	busy      bool
-	runCtx    context.Context
+
+	// live is the supervised Claude Code session used by live mode. It is nil
+	// in per-message mode, which is both the default and the fallback, so every
+	// use is guarded rather than assumed.
+	live     *ClaudeLiveClient
+	activity *ActivityLog
+	mu       sync.Mutex
+	runMu    sync.Mutex
+	state    State
+	busy     bool
+	runCtx   context.Context
 
 	// queue decouples reading the mailbox from running an agent turn. Turns can
 	// last many minutes, and previously the single poll loop sat blocked inside
@@ -783,12 +788,81 @@ func (b *Bridge) Busy() bool {
 // agent forgetting what it was told.
 const claudeSessionLost = "Previous Claude conversation was unavailable, so a new one was started. "
 
+// SetLiveClaude attaches (or detaches, with nil) the supervised live session.
+// Switching modes in Settings restarts the host, so this is set once at
+// construction rather than swapped under a running turn.
+func (b *Bridge) SetLiveClaude(c *ClaudeLiveClient) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.live = c
+	b.mu.Unlock()
+}
+
+func (b *Bridge) liveClaude() *ClaudeLiveClient {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.live
+}
+
+// rememberClaudeLiveSession persists the live session id so the Agents page can
+// show which session the browser view is looking at.
+func (b *Bridge) rememberClaudeLiveSession(id string) {
+	b.mu.Lock()
+	if b.state.ClaudeLiveSessionID == id {
+		b.mu.Unlock()
+		return
+	}
+	b.state.ClaudeLiveSessionID = id
+	s := b.state
+	b.mu.Unlock()
+	_ = saveState(b.statePath, s)
+}
+
+// runClaudeLive tries the live session and reports whether the caller should
+// fall back. A fallback is never silent: the reason reaches the Activity log,
+// because a user who chose live mode needs to know the text they just sent did
+// not land in the session they are watching in the browser.
+func (b *Bridge) runClaudeLive(ctx context.Context, prompt, sender, name string) (string, bool) {
+	live := b.liveClaude()
+	if live == nil {
+		return "", false
+	}
+	res, err := live.Run(ctx, name, sender, prompt)
+	if err == nil {
+		if id := live.SessionID(); id != "" {
+			b.rememberClaudeLiveSession(id)
+		}
+		b.event("success", "agent", "Claude answered in the live session", sender, "A", "")
+		return res, true
+	}
+	if !isClaudeLiveUnavailable(err) {
+		// A real Claude failure. Returning it as a fallback would run the same
+		// failing work twice and bill the user for both.
+		b.event("error", "agent", "Live Claude turn failed: "+truncate(err.Error(), 200), sender, "A", "")
+		return "", false
+	}
+	b.event("warn", "agent", "Live Claude session unavailable, using per-message mode: "+truncate(err.Error(), 200), sender, "A", "")
+	return "", false
+}
+
 func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
 	if b.claude == nil {
 		return "", errors.New("Claude Code unavailable")
 	}
 	prompt := b.composePrompt(command)
 	sid, name := b.claudeSession()
+
+	// Live mode first when it is configured. Anything that stops it short of a
+	// genuine Claude error falls through to the per-message path below, so the
+	// text still gets an answer.
+	if live := b.liveClaude(); live != nil {
+		if res, ok := b.runClaudeLive(ctx, prompt, sender, name); ok {
+			return res, nil
+		}
+	}
+
 	res, nsid, err := b.claude.Run(ctx, sid, name, prompt)
 
 	// The stored conversation is gone — transcript deleted, corrupted, or aged
@@ -798,7 +872,7 @@ func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string,
 	recovered := false
 	if err != nil && sid != "" && claudeSessionIsGone(err) {
 		b.event("warn", "agent", "Stored Claude conversation is gone; starting a new one", sender, "A", "")
-		name = b.startNewClaudeSession()
+		name = b.resetPrintClaudeSession()
 		recovered = true
 		res, nsid, err = b.claude.Run(ctx, "", name, prompt)
 	}
@@ -827,10 +901,11 @@ func (b *Bridge) claudeSession() (id, name string) {
 	return id, name
 }
 
-// startNewClaudeSession clears the stored conversation and returns the name the
-// next turn should create. Clearing is persisted immediately so a crash between
-// here and the next turn cannot leave the dead id behind.
-func (b *Bridge) startNewClaudeSession() string {
+// resetPrintClaudeSession clears the per-message conversation only, for the case
+// where its transcript vanished. It deliberately leaves a live session running:
+// the two conversations are independent, and a missing per-message transcript
+// says nothing about the session the user may be watching in the browser.
+func (b *Bridge) resetPrintClaudeSession() string {
 	name := newClaudeSessionName(time.Now())
 	b.mu.Lock()
 	b.state.ClaudeSessionID = ""
@@ -838,6 +913,28 @@ func (b *Bridge) startNewClaudeSession() string {
 	s := b.state
 	b.mu.Unlock()
 	_ = saveState(b.statePath, s)
+	return name
+}
+
+// startNewClaudeSession clears the stored conversation and returns the name the
+// next turn should create. Clearing is persisted immediately so a crash between
+// here and the next turn cannot leave the dead id behind.
+func (b *Bridge) startNewClaudeSession() string {
+	name := newClaudeSessionName(time.Now())
+	b.mu.Lock()
+	b.state.ClaudeSessionID = ""
+	b.state.ClaudeLiveSessionID = ""
+	b.state.ClaudeSessionName = name
+	s := b.state
+	live := b.live
+	b.mu.Unlock()
+	_ = saveState(b.statePath, s)
+	// In live mode the conversation is a running process, so a new conversation
+	// means ending that process. Without this the next text would be delivered
+	// into the old session and the "new conversation" would be a fiction.
+	if live != nil {
+		live.Stop()
+	}
 	return name
 }
 

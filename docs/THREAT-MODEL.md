@@ -58,4 +58,12 @@
 
 ## Residual risk
 
+Live conversation mode adds one long-running Claude Code child process and one
+loopback endpoint, both described in SECURITY.md. It also means the SMS session
+has a second writer — anyone with the user's claude.ai account, through Remote
+Control. FlipAi still composes and sends every SMS reply itself in Go, and only
+for turns it started, so agent output cannot redirect a reply; but a session
+shared with a browser is a larger surface than a per-message subprocess, which is
+why per-message remains the default.
+
 Remote autonomous agents remain high-impact software. Prompt injection in content an agent reads, compromise of the Windows/Google/ChatGPT/Claude account, model/tool mistakes, browser vulnerabilities, or theft of both the Google Voice/SMS path and SMS code can still cause unwanted actions. Use least privilege and test on a non-critical account first.

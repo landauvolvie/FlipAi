@@ -49,6 +49,27 @@ type uiStatus struct {
 	// ClaudeUseChrome reports whether SMS turns pass --chrome.
 	ClaudeUseChrome bool
 
+	// ClaudeSessionMode is the configured mode, and ClaudeSessionModeLabel names
+	// it in the same plain words the access level uses.
+	ClaudeSessionMode      string
+	ClaudeSessionModeLabel string
+
+	// LiveActive reports whether live mode is not merely selected but actually
+	// running. The two differ whenever a preflight refused it, and the page has
+	// to show the mode that is really in use rather than the one chosen.
+	LiveActive bool
+
+	// LiveRemoteControl reports whether the live session reaches claude.ai/code.
+	// LiveNotice explains whatever is missing — a refused mode, or a live
+	// session running without the browser view — and is empty when live mode is
+	// off or fully working.
+	LiveRemoteControl bool
+	LiveNotice        string
+
+	// ClaudeLiveSessionID is the live session's own id, kept apart from the
+	// per-message conversation id so the page can show each for what it is.
+	ClaudeLiveSessionID string
+
 	// AutoUpdate and UpdateCheckHours drive the Updates card on Settings.
 	AutoUpdate       bool
 	UpdateCheckHours int
@@ -174,51 +195,54 @@ func (a *App) status() uiStatus {
 
 	s := uiStatus{
 		Version: version, Listen: cfg.Listen, DataDir: a.dataDir, Uptime: time.Since(hostStartedAt),
-		Paused:             cfg.Paused,
-		GmailReady:         mc != nil && mc.Authorized(),
-		GmailMethod:        cfg.Gmail.Method,
-		GmailMethodLabel:   gmailMethodLabel(cfg.Gmail.Method),
-		GmailEmail:         cfg.Gmail.Email,
-		GmailCheck:         st.GmailCheck,
-		SubjectPhrase:      cfg.Gmail.SubjectPhrase,
-		CodexCheck:         st.CodexCheck,
-		ClaudeCheck:        st.ClaudeCheck,
-		CodexPath:          cfg.CodexPath,
-		ClaudePath:         cfg.ClaudePath,
-		CodexResolved:      resolveCodexExecutable(cfg.CodexPath),
-		ClaudeResolved:     resolveClaudeExecutable(cfg.ClaudePath),
-		HasClaudeToken:     hasClaudeToken(claudeTokenPath(a.dataDir)),
-		PermissionMode:     normalizeClaudePermissionMode(cfg.Claude.PermissionMode),
-		ClaudeUseChrome:    cfg.Claude.UseChrome,
-		AutoUpdate:         cfg.Updates.Automatic,
-		UpdateCheckHours:   int(cfg.Updates.checkInterval() / time.Hour),
-		ClaudeSessionID:    st.ClaudeSessionID,
-		ClaudeSessionName:  st.ClaudeSessionName,
-		LastAgent:          st.LastAgent,
-		LastRunAt:          st.LastRunAt,
-		Cwd:                cfg.Cwd,
-		DefaultAgent:       cfg.DefaultAgent,
-		CodexPrefix:        configuredCodexPrefix(cfg),
-		ClaudePrefix:       configuredClaudePrefix(cfg),
-		NewSessionCommand:  configuredNewSessionCommand(cfg),
-		TurnTimeout:        cfg.TurnTimeoutMinutes,
-		AllowedNumbers:     cfg.GoogleVoice.AllowedNumbers,
-		RequireCode:        cfg.Security.RequireCode,
-		HasCode:            cfg.Security.CodeHash != "",
-		ReplyMaxChars:      cfg.GoogleVoice.ReplyMaxChars,
-		MaxReplyParts:      cfg.GoogleVoice.MaxReplyParts,
-		ProgressInterval:   cfg.GoogleVoice.ProgressIntervalSeconds,
-		ReplyAck:           cfg.GoogleVoice.ReplyAck,
-		ProgressUpdates:    cfg.GoogleVoice.ProgressUpdates,
-		StartupEnabled:     autostartEnabled(),
-		BootStartupEnabled: bootStartupEnabled(),
-		MachineSecrets:     cfg.Security.MachineScopeSecrets,
-		CloseToTray:        cfg.UI.CloseToTray,
-		Theme:              normalizeTheme(cfg.UI.Theme),
-		Compact:            cfg.UI.Compact,
-		Alerts:             cfg.UI.Alerts,
-		AlertSound:         cfg.UI.AlertSound,
-		Update:             loadUpdateState(a.statePath),
+		Paused:                 cfg.Paused,
+		GmailReady:             mc != nil && mc.Authorized(),
+		GmailMethod:            cfg.Gmail.Method,
+		GmailMethodLabel:       gmailMethodLabel(cfg.Gmail.Method),
+		GmailEmail:             cfg.Gmail.Email,
+		GmailCheck:             st.GmailCheck,
+		SubjectPhrase:          cfg.Gmail.SubjectPhrase,
+		CodexCheck:             st.CodexCheck,
+		ClaudeCheck:            st.ClaudeCheck,
+		CodexPath:              cfg.CodexPath,
+		ClaudePath:             cfg.ClaudePath,
+		CodexResolved:          resolveCodexExecutable(cfg.CodexPath),
+		ClaudeResolved:         resolveClaudeExecutable(cfg.ClaudePath),
+		HasClaudeToken:         hasClaudeToken(claudeTokenPath(a.dataDir)),
+		PermissionMode:         normalizeClaudePermissionMode(cfg.Claude.PermissionMode),
+		ClaudeUseChrome:        cfg.Claude.UseChrome,
+		ClaudeSessionMode:      normalizeClaudeSessionMode(cfg.Claude.SessionMode),
+		ClaudeSessionModeLabel: claudeSessionModeLabel(cfg.Claude.SessionMode),
+		ClaudeLiveSessionID:    st.ClaudeLiveSessionID,
+		AutoUpdate:             cfg.Updates.Automatic,
+		UpdateCheckHours:       int(cfg.Updates.checkInterval() / time.Hour),
+		ClaudeSessionID:        st.ClaudeSessionID,
+		ClaudeSessionName:      st.ClaudeSessionName,
+		LastAgent:              st.LastAgent,
+		LastRunAt:              st.LastRunAt,
+		Cwd:                    cfg.Cwd,
+		DefaultAgent:           cfg.DefaultAgent,
+		CodexPrefix:            configuredCodexPrefix(cfg),
+		ClaudePrefix:           configuredClaudePrefix(cfg),
+		NewSessionCommand:      configuredNewSessionCommand(cfg),
+		TurnTimeout:            cfg.TurnTimeoutMinutes,
+		AllowedNumbers:         cfg.GoogleVoice.AllowedNumbers,
+		RequireCode:            cfg.Security.RequireCode,
+		HasCode:                cfg.Security.CodeHash != "",
+		ReplyMaxChars:          cfg.GoogleVoice.ReplyMaxChars,
+		MaxReplyParts:          cfg.GoogleVoice.MaxReplyParts,
+		ProgressInterval:       cfg.GoogleVoice.ProgressIntervalSeconds,
+		ReplyAck:               cfg.GoogleVoice.ReplyAck,
+		ProgressUpdates:        cfg.GoogleVoice.ProgressUpdates,
+		StartupEnabled:         autostartEnabled(),
+		BootStartupEnabled:     bootStartupEnabled(),
+		MachineSecrets:         cfg.Security.MachineScopeSecrets,
+		CloseToTray:            cfg.UI.CloseToTray,
+		Theme:                  normalizeTheme(cfg.UI.Theme),
+		Compact:                cfg.UI.Compact,
+		Alerts:                 cfg.UI.Alerts,
+		AlertSound:             cfg.UI.AlertSound,
+		Update:                 loadUpdateState(a.statePath),
 	}
 	s.CodexFound = executableExists(s.CodexResolved)
 	s.ClaudeFound = executableExists(s.ClaudeResolved)
@@ -231,6 +255,18 @@ func (a *App) status() uiStatus {
 	s.CodexThreadActive = st.CodexThreadID != ""
 	s.ClaudeSessionActive = st.ClaudeSessionID != ""
 	s.PermissionModeLabel = claudePermissionModeLabel(s.PermissionMode)
+
+	// Live mode's real state, which is not the same as the configured mode: a
+	// preflight can refuse it, and it can run without reaching claude.ai/code.
+	// The page reports what is actually happening.
+	a.mu.Lock()
+	live, support := a.liveClaude, a.liveSupport
+	a.mu.Unlock()
+	s.LiveActive = live != nil
+	s.LiveRemoteControl = s.LiveActive && support.RemoteControl
+	if s.ClaudeSessionMode == claudeSessionModeLive {
+		s.LiveNotice = support.Reason
+	}
 	s.DefaultAgentName = "Codex"
 	if cfg.DefaultAgent == "A" {
 		s.DefaultAgentName = "Claude"

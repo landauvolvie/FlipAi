@@ -40,6 +40,10 @@ func main() {
 		runTrayProcess(dataDir, cfgPath)
 	case "--quit":
 		requestQuit(dataDir, "command-line quit")
+	case "--claude-hook":
+		// Hook helper for a live Claude session. It reads one hook event from
+		// stdin and posts it to the running host; see claudehook.go.
+		os.Exit(runClaudeHookCommand(os.Args))
 	case "--boot-task":
 		// Elevated helper for the "start before sign-in" switch. It only ever
 		// creates or removes FlipAi's own scheduled task, then exits.
@@ -336,7 +340,7 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	app := &App{dataDir: dataDir, configPath: cfgPath, statePath: statePath, tokenPath: tokenPath, cfg: cfg, mail: mailClient, gmail: oauthClient, stop: cancel}
+	app := &App{dataDir: dataDir, configPath: cfgPath, statePath: statePath, tokenPath: tokenPath, cfg: cfg, mail: mailClient, gmail: oauthClient, stop: cancel, hookToken: newHookToken()}
 	quitFlag := filepath.Join(dataDir, "quit.flag")
 	go func() {
 		t := time.NewTicker(400 * time.Millisecond)
