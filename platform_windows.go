@@ -19,7 +19,36 @@ import (
 var (
 	platformShell32       = syscall.NewLazyDLL("shell32.dll")
 	procPlatformShellOpen = platformShell32.NewProc("ShellExecuteW")
+
+	// The window icon is applied at runtime rather than through
+	// WindowOptions.IconId, which reads an icon compiled into the executable's
+	// resources. FlipAi is built with plain `go build` and embeds none, which is
+	// why the app window and its taskbar button showed the generic Windows
+	// placeholder. This reuses the same FlipAi.ico the installer places beside
+	// the executable and the tray already loads.
+	procPlatformSendMessage = trayUser32.NewProc("SendMessageW")
 )
+
+const (
+	wmSetIcon      = 0x0080
+	iconSmallParam = 0
+	iconBigParam   = 1
+)
+
+// applyFlipAiWindowIcon gives a window FlipAi's own icon. A failure is not worth
+// failing the window over: the app still opens, it just keeps the placeholder.
+func applyFlipAiWindowIcon(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	icon, _ := loadFlipAiTrayIcon(0)
+	if icon == 0 {
+		return
+	}
+	// Small drives the title bar, big drives the taskbar button and Alt-Tab.
+	procPlatformSendMessage.Call(hwnd, wmSetIcon, iconSmallParam, icon)
+	procPlatformSendMessage.Call(hwnd, wmSetIcon, iconBigParam, icon)
+}
 
 // openBrowser keeps external links (for example Google OAuth) in the user's
 // normal browser, but renders FlipAi's own loopback control UI inside a real
@@ -74,6 +103,7 @@ func openFlipAiWindow(target string) error {
 		return fmt.Errorf("could not create the FlipAi desktop window; Microsoft Edge WebView2 Runtime may be unavailable")
 	}
 	defer w.Destroy()
+	applyFlipAiWindowIcon(uintptr(w.Window()))
 	w.SetSize(1040, 680, webview2.HintMin)
 	w.Init(desktopInitScript)
 	w.Navigate(target)

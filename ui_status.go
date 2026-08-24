@@ -49,8 +49,18 @@ type uiStatus struct {
 	// ClaudeUseChrome reports whether SMS turns pass --chrome.
 	ClaudeUseChrome bool
 
+	// ChromeTokenNotice explains a machine where Chrome is switched on but the
+	// stored token is the only sign-in, which Claude Code answers by turning
+	// Chrome off. Empty when there is nothing to warn about.
+	ChromeTokenNotice string
+
 	// ClaudeSessionMode is the configured mode, and ClaudeSessionModeLabel names
 	// it in the same plain words the access level uses.
+	// ClaudeProgressInterval and CodexProgressInterval are the per-agent
+	// heartbeat overrides, 0 meaning "follow the shared Phone setting".
+	ClaudeProgressInterval int
+	CodexProgressInterval  int
+
 	ClaudeSessionMode      string
 	ClaudeSessionModeLabel string
 
@@ -70,9 +80,9 @@ type uiStatus struct {
 	// per-message conversation id so the page can show each for what it is.
 	ClaudeLiveSessionID string
 
-	// AutoUpdate and UpdateCheckHours drive the Updates card on Settings.
-	AutoUpdate       bool
-	UpdateCheckHours int
+	// AutoUpdate and UpdateCheckMinutes drive the Updates card on Settings.
+	AutoUpdate         bool
+	UpdateCheckMinutes int
 
 	// ClaudeSessionID and ClaudeSessionName are what the Agents page needs to
 	// tell the user how to reopen the SMS conversation in Claude Code, which
@@ -211,11 +221,13 @@ func (a *App) status() uiStatus {
 		HasClaudeToken:         hasClaudeToken(claudeTokenPath(a.dataDir)),
 		PermissionMode:         normalizeClaudePermissionMode(cfg.Claude.PermissionMode),
 		ClaudeUseChrome:        cfg.Claude.UseChrome,
+		ClaudeProgressInterval: cfg.Claude.ProgressIntervalSeconds,
+		CodexProgressInterval:  cfg.Codex.ProgressIntervalSeconds,
 		ClaudeSessionMode:      normalizeClaudeSessionMode(cfg.Claude.SessionMode),
 		ClaudeSessionModeLabel: claudeSessionModeLabel(cfg.Claude.SessionMode),
 		ClaudeLiveSessionID:    st.ClaudeLiveSessionID,
 		AutoUpdate:             cfg.Updates.Automatic,
-		UpdateCheckHours:       int(cfg.Updates.checkInterval() / time.Hour),
+		UpdateCheckMinutes:     cfg.Updates.normalizedCheckMinutes(),
 		ClaudeSessionID:        st.ClaudeSessionID,
 		ClaudeSessionName:      st.ClaudeSessionName,
 		LastAgent:              st.LastAgent,
@@ -260,8 +272,12 @@ func (a *App) status() uiStatus {
 	// preflight can refuse it, and it can run without reaching claude.ai/code.
 	// The page reports what is actually happening.
 	a.mu.Lock()
-	live, support := a.liveClaude, a.liveSupport
+	live, support, claude := a.liveClaude, a.liveSupport, a.claude
 	a.mu.Unlock()
+	if claude != nil {
+		// Reads a cached probe; it never starts a subprocess from a page render.
+		s.ChromeTokenNotice = claude.CachedChromeTokenConflict()
+	}
 	s.LiveActive = live != nil
 	s.LiveRemoteControl = s.LiveActive && support.RemoteControl
 	if s.ClaudeSessionMode == claudeSessionModeLive {

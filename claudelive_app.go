@@ -162,3 +162,54 @@ func (a *App) currentBridge() *Bridge {
 	defer a.mu.Unlock()
 	return a.bridge
 }
+
+// agentHealthProbeInterval is how often FlipAi re-checks agent sign-in in the
+// background. It is deliberately unhurried: a real SMS turn already refreshes
+// the record, so this only has to catch a bridge that has been idle while its
+// Claude or Codex login lapsed underneath it.
+const agentHealthProbeInterval = 5 * time.Minute
+
+// runAgentHealthProbe keeps the Agents page describing the present rather than
+// the last time someone pressed Test.
+//
+// The probes are the cheap sign-in checks, not full turns: a background health
+// check must not spend the user's subscription. A turn that actually runs is a
+// stronger signal and overwrites whatever this records.
+func (a *App) runAgentHealthProbe(ctx context.Context) {
+	t := time.NewTicker(agentHealthProbeInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.probeAgentsOnce(ctx)
+		}
+	}
+}
+
+func (a *App) probeAgentsOnce(ctx context.Context) {
+	a.mu.Lock()
+	cfg, b := a.cfg, a.bridge
+	a.mu.Unlock()
+	// Never probe underneath a running turn: the Codex probe starts its own
+	// app-server, and the Claude one spends a subprocess.
+	if b == nil || b.Busy() {
+		return
+	}
+
+	cctx, ccancel := context.WithTimeout(ctx, 30*time.Second)
+	claude := a.newClaudeClient(cfg)
+	st, err := claude.authStatus(cctx)
+	ccancel()
+	switch {
+	case err != nil:
+		a.recordCheck("claude", false, friendlyAgentError(err))
+	case validateClaudeSubscriptionPath(st) != nil:
+		a.recordCheck("claude", false, validateClaudeSubscriptionPath(st).Error())
+	case !st.LoggedIn:
+		a.recordCheck("claude", false, "Claude Code is not signed in on this Windows account")
+	default:
+		a.recordCheck("claude", true, "Claude Code sign-in verified")
+	}
+}

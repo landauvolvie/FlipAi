@@ -394,7 +394,13 @@ func (a *App) startBridge(ctx context.Context) {
 	// through the same Activity log the user reads, and so a refusal leaves a
 	// working per-message bridge rather than no bridge at all.
 	a.startClaudeLive(ctx, cfg, b)
+	// A finished turn is what keeps the Agents tiles honest; without this they
+	// only ever showed the last time someone pressed a Test button.
+	b.SetAgentResultSink(func(agent string, ok bool, detail string) {
+		a.recordCheck(agent, ok, detail)
+	})
 	go b.Run(ctx)
+	go a.runAgentHealthProbe(ctx)
 	if cfg.Gmail.Method == GmailMethodAppPassword {
 		log.Printf("Gmail monitoring active via App Password with IMAP IDLE")
 	} else {

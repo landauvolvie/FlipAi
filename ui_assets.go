@@ -30,7 +30,10 @@ const uiCSS = `
   --bad:#b42318; --bad-soft:#fef3f2;
   --info:#175cd3; --info-soft:#eff8ff;
   --shadow:0 1px 2px rgba(16,24,40,.05);
-  --radius:10px;
+  --radius:16px;
+  /* One radius for every interactive control, so an input, a select button and
+     a push button are never subtly different shapes on the same row. */
+  --radius-control:12px;
   --pad:20px;
 }
 :root[data-theme="dark"]{
@@ -62,7 +65,7 @@ const uiCSS = `
     --bad:#f79e94; --bad-soft:#2e1815; --info:#8ab6f5; --info-soft:#152537; --shadow:none;
   }
 }
-:root[data-compact="1"]{--pad:14px;--radius:8px}
+:root[data-compact="1"]{--pad:14px;--radius:13px;--radius-control:10px}
 
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -84,12 +87,12 @@ h1,h2,h3{margin:0;letter-spacing:-.2px}
 }
 .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 22px;font-size:17px;font-weight:650}
 .brand-mark{
-  width:30px;height:30px;border-radius:8px;background:var(--brand);color:#fff;
+  width:30px;height:30px;border-radius:10px;background:var(--brand);color:#fff;
   display:grid;place-items:center;font-weight:800;font-size:15px;flex:0 0 auto;
 }
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav a{
-  display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;
+  display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:var(--radius-control);
   color:var(--ink-2);text-decoration:none;font-size:13.5px;font-weight:500;
 }
 .nav a svg{width:18px;height:18px;flex:0 0 auto;opacity:.85}
@@ -224,7 +227,7 @@ select{
 .nicewrap select{position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none}
 .nicesel{
   display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;
-  padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--surface);
+  padding:9px 11px;border:1px solid var(--line);border-radius:var(--radius-control);background:var(--surface);
   box-shadow:var(--shadow);font-size:13px;color:var(--ink);cursor:pointer;text-align:left;
 }
 :root[data-theme="dark"] .nicesel{background:var(--surface-2)}
@@ -232,10 +235,16 @@ select{
 .nicesel svg{width:16px;height:16px;color:var(--muted);flex:0 0 auto;transition:transform .15s}
 .nicewrap.open .nicesel{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
 .nicewrap.open .nicesel svg{transform:rotate(180deg)}
+/* Fixed, not absolute. As an absolutely positioned child the list was clipped
+   by any ancestor with overflow:hidden — .card is one — so a long menu such as
+   the update interval lost its lower options entirely, and every menu could run
+   off the bottom of the window with no way to reach the rest. Taking it out of
+   the flow means no ancestor can crop it; openNiceOpts places it against the
+   button's viewport rect and flips it above when there is more room there. */
 .niceopts{
-  position:absolute;left:0;right:0;top:calc(100% + 5px);z-index:40;padding:5px;
-  background:var(--surface);border:1px solid var(--line);border-radius:9px;
-  box-shadow:0 14px 34px rgba(16,24,40,.16);display:none;max-height:280px;overflow:auto;
+  position:fixed;z-index:80;padding:5px;
+  background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 14px 34px rgba(16,24,40,.16);display:none;overflow:auto;
 }
 .nicewrap.open .niceopts{display:block}
 .niceopts div{
@@ -246,12 +255,15 @@ select{
 .niceopts div[aria-selected="true"]{color:var(--brand-ink);font-weight:650}
 .niceopts div[aria-selected="true"]:after{content:"";width:14px;height:8px;border-left:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg) translateY(-3px);flex:0 0 auto}
 input[type=text],input[type=password],input[type=email],input[type=number],input[type=file],select,textarea{
-  width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;
+  width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:var(--radius-control);
+  box-shadow:var(--shadow);
   background:var(--surface);box-shadow:var(--shadow);outline:none;font-size:13px;
 }
 :root[data-theme="dark"] input,:root[data-theme="dark"] select,:root[data-theme="dark"] textarea{background:var(--surface-2)}
 input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
-input[readonly]{color:var(--muted)}
+/* Readonly fields carry long generated values such as the resume command,
+   which previously ran past the edge of the box with no way to see the end. */
+input[readonly]{color:var(--muted);text-overflow:ellipsis}
 .input-group{display:flex;gap:0}
 .input-group input{border-top-right-radius:0;border-bottom-right-radius:0}
 .input-group .btn{border-top-left-radius:0;border-bottom-left-radius:0;border-left:0;white-space:nowrap}
@@ -265,7 +277,7 @@ input[readonly]{color:var(--muted)}
 /* ---------- buttons ---------- */
 .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:7px;
-  padding:8px 13px;border-radius:7px;border:1px solid var(--line);
+  padding:8px 13px;border-radius:var(--radius-control);border:1px solid var(--line);
   background:var(--surface);color:var(--ink-2);font-size:12.5px;font-weight:600;
   text-decoration:none;cursor:pointer;box-shadow:var(--shadow);white-space:nowrap;
 }
@@ -315,7 +327,7 @@ td.msg{font-weight:500}
 td.who{color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
 .table-foot{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px var(--pad);border-top:1px solid var(--line);color:var(--muted);font-size:12px;flex-wrap:wrap}
 .pager{display:flex;gap:5px;align-items:center}
-.pager button{min-width:29px;height:29px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);font-size:12px;cursor:pointer;padding:0 7px}
+.pager button{min-width:29px;height:29px;border-radius:var(--radius-control);border:1px solid var(--line);background:var(--surface);color:var(--ink-2);font-size:12px;cursor:pointer;padding:0 7px}
 .pager button[aria-current="true"]{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:650}
 .pager button[disabled]{opacity:.4;cursor:not-allowed}
 .empty{padding:44px 20px;text-align:center;color:var(--muted)}
@@ -345,9 +357,9 @@ td.who{color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
 .banner.update b{color:var(--ink)}
 :root[data-theme="dark"] .banner.update b{color:var(--ink)}
 .banner form{margin:0}
-.callout{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:13px 15px;color:var(--muted);font-size:12px}
+.callout{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-control);padding:13px 15px;color:var(--muted);font-size:12px}
 .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
-.codebox{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:13px;color:var(--ink-2);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;line-height:1.75;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.codebox{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-control);padding:13px;color:var(--ink-2);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;line-height:1.75;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .codebox.bad{background:var(--bad-soft);border-color:var(--bad-soft);color:var(--bad)}
 details.disclosure{border-top:1px solid var(--line);margin-top:16px;padding-top:0}
 details.disclosure summary{
@@ -394,7 +406,7 @@ details.disclosure .disclosure-body{padding:4px 0 2px}
 .modal-head p{margin:4px 0 0;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 .modal-list{overflow:auto;flex:1;padding:8px}
 .modal-list button{
-  display:flex;width:100%;align-items:center;gap:9px;padding:9px 11px;border:0;border-radius:7px;
+  display:flex;width:100%;align-items:center;gap:9px;padding:9px 11px;border:0;border-radius:var(--radius-control);
   background:none;color:var(--ink-2);font-size:12.5px;text-align:left;cursor:pointer;
 }
 .modal-list button:hover{background:var(--surface-2)}
@@ -889,14 +901,42 @@ const uiJS = `
           list.appendChild(row);
         });
       }
+      // place puts the fixed-position list against the button and decides which
+      // way it opens. Below is preferred; it flips above when there is more room
+      // there, and the height is always capped to the space actually available
+      // so the last option can be reached by scrolling instead of being lost off
+      // the bottom of the window.
+      function place(){
+        var r=button.getBoundingClientRect();
+        var margin=8, gap=5;
+        var below=innerHeight-r.bottom-margin, above=r.top-margin;
+        var up=below<180&&above>below;
+        var room=Math.max(120,Math.floor(up?above-gap:below-gap));
+        list.style.left=Math.round(r.left)+"px";
+        list.style.width=Math.round(r.width)+"px";
+        list.style.maxHeight=Math.min(320,room)+"px";
+        if(up){
+          list.style.top="auto";
+          list.style.bottom=Math.round(innerHeight-r.top+gap)+"px";
+        }else{
+          list.style.bottom="auto";
+          list.style.top=Math.round(r.bottom+gap)+"px";
+        }
+      }
       function open(){
         closeAll();
         wrap.classList.add("open");
         button.setAttribute("aria-expanded","true");
+        place();
+        // A fixed list does not travel with its button, so follow it while open.
+        addEventListener("scroll",place,true);
+        addEventListener("resize",place);
       }
       function close(){
         wrap.classList.remove("open");
         button.setAttribute("aria-expanded","false");
+        removeEventListener("scroll",place,true);
+        removeEventListener("resize",place);
       }
       function choose(i){
         if(i<0||i>=sel.options.length)return;

@@ -18,16 +18,15 @@ const masterDetailAgentsHTML = `{{define "content"}}
 .agent-search{position:relative;margin-bottom:14px}
 .agent-search input{padding-left:36px;background:var(--surface)}
 .agent-search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--muted)}
-.agent-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
-.agent-item{display:flex;align-items:center;gap:11px;padding:13px 12px;cursor:pointer;border-top:1px solid var(--line-soft);min-width:0;transition:.15s}
-.agent-item:first-child{border-top:0}
+.agent-list{display:flex;flex-direction:column;gap:8px}
+.agent-item{display:flex;align-items:center;gap:11px;padding:13px 12px;cursor:pointer;border:1px solid var(--line);border-radius:var(--radius-control);background:var(--surface);min-width:0;transition:.15s}
+
 .agent-item:hover{background:var(--surface-2)}
 .agent-item-copy{min-width:0;flex:1}
 .agent-item-copy b{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:620;color:var(--ink)}
 .agent-item-copy span{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .agent-mini-status{display:inline-flex!important;margin:0!important;padding:2px 7px;border-radius:999px;font-size:10px!important;font-weight:650;background:var(--ok-soft);color:var(--ok)!important}
 .agent-mini-status.warn{background:var(--warn-soft);color:var(--warn)!important}
-.agent-more{color:var(--muted);font-weight:700;letter-spacing:2px}
 #agent-codex:checked~.agents-studio .agent-item[for="agent-codex"],#agent-claude:checked~.agents-studio .agent-item[for="agent-claude"],#agent-shared:checked~.agents-studio .agent-item[for="agent-shared"]{background:var(--brand-soft);box-shadow:inset 0 0 0 1px var(--brand);}
 .agent-workspace{padding:26px 32px 44px;min-width:0;overflow:auto}
 .agent-pane{display:none;max-width:980px;margin:0 auto}
@@ -65,7 +64,7 @@ const masterDetailAgentsHTML = `{{define "content"}}
 .agent-shared-title{font-size:23px!important}
 .agent-shared-sub{color:var(--muted);font-size:12.5px;margin-top:3px}
 @media(max-width:1050px){.agents-studio{grid-template-columns:245px minmax(0,1fr)}.agent-workspace{padding:22px 22px 40px}.agent-fields-3{grid-template-columns:1fr 1fr}.agent-session-row{grid-template-columns:1fr 1fr}.agent-session-row .agent-stat:last-child{grid-column:1/-1}.agent-shared-grid{grid-template-columns:1fr 1fr}}
-@media(max-width:760px){.agents-studio{display:block}.agent-rail{border-right:0;border-bottom:1px solid var(--line);padding:18px}.agent-list{display:grid;grid-template-columns:repeat(3,1fr)}.agent-item{border-top:0;border-left:1px solid var(--line-soft)}.agent-item:first-child{border-left:0}.agent-item-copy span,.agent-more{display:none}.agent-workspace{padding:20px 16px}.agent-header{align-items:flex-start;flex-direction:column}.agent-actions{width:100%;justify-content:flex-start}.agent-fields-3,.agent-fields-2,.agent-session-row,.agent-shared-grid{grid-template-columns:1fr}.agent-session-row .agent-stat:last-child{grid-column:auto}}
+@media(max-width:760px){.agents-studio{display:block}.agent-rail{border-right:0;border-bottom:1px solid var(--line);padding:18px}.agent-list{display:grid;grid-template-columns:repeat(3,1fr)}.agent-item-copy span{display:none}.agent-workspace{padding:20px 16px}.agent-header{align-items:flex-start;flex-direction:column}.agent-actions{width:100%;justify-content:flex-start}.agent-fields-3,.agent-fields-2,.agent-session-row,.agent-shared-grid{grid-template-columns:1fr}.agent-session-row .agent-stat:last-child{grid-column:auto}}
 </style>
 
 <input class="agent-switch" type="radio" name="agent-view" id="agent-codex">
@@ -79,15 +78,15 @@ const masterDetailAgentsHTML = `{{define "content"}}
     <div class="agent-list" id="agent-list">
       <label class="agent-item" for="agent-codex" data-agent-name="codex">
         <span class="bmark codex">{{brand "codex"}}</span>
-        <span class="agent-item-copy"><b>Codex <span class="agent-mini-status {{if not .S.CodexCheck.OK}}warn{{end}}">{{if .S.CodexCheck.OK}}Ready{{else if .S.CodexCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Local Codex CLI</span></span><span class="agent-more">⋮</span>
+        <span class="agent-item-copy"><b>Codex <span class="agent-mini-status {{if not .S.CodexCheck.OK}}warn{{end}}">{{if .S.CodexCheck.OK}}Ready{{else if .S.CodexCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Local Codex CLI</span></span>
       </label>
       <label class="agent-item" for="agent-claude" data-agent-name="claude">
         <span class="bmark claude">{{brand "claude"}}</span>
-        <span class="agent-item-copy"><b>Claude <span class="agent-mini-status {{if not .S.ClaudeCheck.OK}}warn{{end}}">{{if .S.ClaudeCheck.OK}}Ready{{else if .S.ClaudeCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Claude Code CLI</span></span><span class="agent-more">⋮</span>
+        <span class="agent-item-copy"><b>Claude <span class="agent-mini-status {{if not .S.ClaudeCheck.OK}}warn{{end}}">{{if .S.ClaudeCheck.OK}}Ready{{else if .S.ClaudeCheck.Known}}Needs attention{{else}}Not tested{{end}}</span></b><span>Claude Code CLI</span></span>
       </label>
       <label class="agent-item" for="agent-shared" data-agent-name="shared defaults">
         <span class="mark shield" style="width:34px;height:34px;border-radius:9px">{{icon "sliders"}}</span>
-        <span class="agent-item-copy"><b>Shared defaults</b><span>Applied to all agents</span></span><span class="agent-more">⋮</span>
+        <span class="agent-item-copy"><b>Shared defaults</b><span>Applied to all agents</span></span>
       </label>
     </div>
   </aside>
@@ -118,6 +117,13 @@ const masterDetailAgentsHTML = `{{define "content"}}
         </div></div>
 
         <div class="agent-section"><div class="agent-section-head"><span class="agent-section-icon">{{icon "key"}}</span>Authentication &amp; session</div><div class="agent-section-body">
+          <div class="field" style="margin-bottom:14px"><label for="mdCodexProgress">Progress texts every</label><select id="mdCodexProgress" name="codexProgressInterval">
+            <option value="0"{{if eq .S.CodexProgressInterval 0}} selected{{end}}>Follow shared setting</option>
+            <option value="30"{{if eq .S.CodexProgressInterval 30}} selected{{end}}>30 seconds</option>
+            <option value="60"{{if eq .S.CodexProgressInterval 60}} selected{{end}}>1 minute</option>
+            <option value="300"{{if eq .S.CodexProgressInterval 300}} selected{{end}}>5 minutes</option>
+            <option value="900"{{if eq .S.CodexProgressInterval 900}} selected{{end}}>15 minutes</option>
+          </select><div class="agent-note">How often a long Codex turn texts that it is still working.</div></div>
           <div class="agent-session-row"><div class="agent-stat"><label>Authentication</label><b>ChatGPT / Codex CLI</b></div><div class="agent-stat"><label>Current session</label>{{if .S.CodexThreadActive}}<span class="pill ok">Active</span>{{else}}<span class="pill">None</span>{{end}}</div><div class="agent-stat"><label>Session</label><span class="agent-empty-id">Managed by Codex Desktop</span></div></div>
         </div></div>
       </form>
@@ -146,6 +152,7 @@ const masterDetailAgentsHTML = `{{define "content"}}
         <div class="agent-section"><div class="agent-section-head"><span class="agent-section-icon">{{icon "shield"}}</span>Access &amp; tools</div><div class="agent-section-body">
           <div class="agent-fields-2"><div class="field"><label for="mdPermission">Permission mode</label><select id="mdPermission" name="permissionMode"><option value="bypassPermissions"{{if eq .S.PermissionMode "bypassPermissions"}} selected{{end}}>Full user access (matches Codex)</option><option value="dontAsk"{{if eq .S.PermissionMode "dontAsk"}} selected{{end}}>Never prompt</option><option value="acceptEdits"{{if eq .S.PermissionMode "acceptEdits"}} selected{{end}}>Accept edits only</option><option value="plan"{{if eq .S.PermissionMode "plan"}} selected{{end}}>Plan only</option><option value="default"{{if eq .S.PermissionMode "default"}} selected{{end}}>Ask</option></select></div><div class="agent-toggle-line"><span>Let Claude control Chrome</span><label class="switch"><input type="hidden" name="claudeUseChrome" value="0"><input type="checkbox" name="claudeUseChrome" value="1"{{if .S.ClaudeUseChrome}} checked{{end}}><span class="slider"></span></label></div></div>
           <div style="margin-top:12px"><span class="agent-note" style="margin-right:8px">Effective access</span><span class="pill brand">{{.S.PermissionModeLabel}}</span></div>
+          {{if .S.ChromeTokenNotice}}<div class="agent-note" style="margin-top:12px"><b>Chrome is off:</b> {{.S.ChromeTokenNotice}}</div>{{end}}
         </div></div>
 
         <div class="agent-section"><div class="agent-section-head"><span class="agent-section-icon">{{icon "refresh"}}</span>Conversation mode</div><div class="agent-section-body">
@@ -154,6 +161,13 @@ const masterDetailAgentsHTML = `{{define "content"}}
               <option value="print"{{if eq .S.ClaudeSessionMode "print"}} selected{{end}}>Per-message (recommended)</option>
               <option value="live"{{if eq .S.ClaudeSessionMode "live"}} selected{{end}}>Live session with Remote Control</option>
             </select><div class="agent-note">Per-message runs one request per text and needs nothing running in the background. Live keeps one Claude session open for the whole conversation so you can also open it at claude.ai/code.</div></div>
+            <div class="field"><label for="mdClaudeProgress">Progress texts every</label><select id="mdClaudeProgress" name="claudeProgressInterval">
+              <option value="0"{{if eq .S.ClaudeProgressInterval 0}} selected{{end}}>Follow shared setting</option>
+              <option value="30"{{if eq .S.ClaudeProgressInterval 30}} selected{{end}}>30 seconds</option>
+              <option value="60"{{if eq .S.ClaudeProgressInterval 60}} selected{{end}}>1 minute</option>
+              <option value="300"{{if eq .S.ClaudeProgressInterval 300}} selected{{end}}>5 minutes</option>
+              <option value="900"{{if eq .S.ClaudeProgressInterval 900}} selected{{end}}>15 minutes</option>
+            </select><div class="agent-note">How often a long Claude turn texts that it is still working.</div></div>
             <div class="agent-stat"><label>Running now</label>{{if .S.LiveActive}}<span class="pill ok">Live session</span>{{else}}<span class="pill">Per-message</span>{{end}}{{if .S.LiveRemoteControl}}<span class="pill brand" style="margin-left:6px">Remote Control</span>{{end}}</div>
           </div>
           {{if .S.LiveNotice}}<div class="agent-note" style="margin-top:12px"><b>Heads up:</b> {{.S.LiveNotice}}</div>{{end}}

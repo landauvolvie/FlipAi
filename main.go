@@ -155,9 +155,20 @@ func runWatchdog(dataDir, cfgPath string) {
 	defer release()
 
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
-	_ = os.Remove(filepath.Join(dataDir, "quit.flag"))
+	// The quit flag is deliberately NOT cleared here. Clearing it made Quit
+	// unreliable: the tray writes the flag and exits, and any watchdog that
+	// started in that window — an autostart entry, a relaunch, a second
+	// instance racing the first — erased the request before the host acted on
+	// it, leaving FlipAi running after the user had explicitly quit it.
+	//
+	// Only an explicit user launch clears the flag, in runLauncher, which is
+	// exactly the moment the user has asked for FlipAi to be running again.
 	exe, err := os.Executable()
 	if err != nil {
+		return
+	}
+	// A quit that is already pending must not be started over.
+	if quitRequested(dataDir) {
 		return
 	}
 
@@ -292,6 +303,18 @@ func runTrayProcess(dataDir, cfgPath string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	openSettings := func() {
+		// Start the launcher as a separate process rather than opening the
+		// window here. openBrowser routes a local address to openFlipAiWindow,
+		// whose w.Run() is a blocking Win32 message loop — and this callback
+		// runs inside the tray's own window procedure, on its locked OS thread.
+		// Opening the window inline therefore stalled the tray's message pump,
+		// which is why double-clicking the icon appeared to do nothing.
+		if exe, err := os.Executable(); err == nil {
+			if err := spawnDetached(exe); err == nil {
+				return
+			}
+		}
+		// Only if the launcher cannot be started at all.
 		_ = openBrowser("http://" + cfg.Listen + "/?token=" + cfg.LocalToken)
 	}
 	quit := func() {
