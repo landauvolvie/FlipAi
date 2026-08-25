@@ -109,14 +109,15 @@ type navEntry struct {
 	Group                  string
 }
 
+// Five pages. Phone is gone: an allowed number belongs to the agent it reaches,
+// so it is configured with that agent. Advanced is gone: it was a second
+// settings page, and one is enough.
 var uiNav = []navEntry{
 	{Key: "home", Href: "/", Label: "Home", Icon: "home"},
 	{Key: "connections", Href: "/connections", Label: "Connections", Icon: "link", Group: "Bridge"},
 	{Key: "agents", Href: "/agents", Label: "Agents", Icon: "agent"},
-	{Key: "phone", Href: "/phone", Label: "Phone", Icon: "phone"},
 	{Key: "activity", Href: "/activity", Label: "Activity", Icon: "clock"},
 	{Key: "settings", Href: "/settings", Label: "Settings", Icon: "gear", Group: "App"},
-	{Key: "advanced", Href: "/advanced", Label: "Advanced", Icon: "sliders"},
 }
 
 // shellData is everything the frame around a page needs: navigation state,

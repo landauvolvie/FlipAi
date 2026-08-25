@@ -5,10 +5,22 @@ import "testing"
 func testConfigWithCode(t *testing.T) Config {
 	t.Helper()
 	cfg := defaultConfig(t.TempDir())
-	if err := setSecurityCode(&cfg, "482913"); err != nil {
-		t.Fatal(err)
+	// The number is allowed on Codex and both agents require the same code, so
+	// the cases below read the way they did before codes became per agent.
+	for _, agent := range []string{"C", "A"} {
+		if err := setAgentCode(&cfg, agent, "482913"); err != nil {
+			t.Fatal(err)
+		}
+		s := agentSettings(cfg, agent)
+		s.RequireCode = true
+		if agent == "A" {
+			cfg.Claude.AgentSettings = s
+		} else {
+			cfg.Codex.AgentSettings = s
+		}
 	}
-	cfg.GoogleVoice.AllowedFrom = "8455551212"
+	cfg.Codex.Phones = []AgentPhone{{Number: "8455551212", Access: AccessAll}}
+	cfg.GoogleVoice.AllowedFrom = smsAllowedFrom(cfg)
 	return cfg
 }
 func TestParseGVAndRouting(t *testing.T) {
@@ -18,21 +30,21 @@ func TestParseGVAndRouting(t *testing.T) {
 	if !ok || sender != "8455551212" {
 		t.Fatalf("not parsed correctly: sender=%q ok=%v", sender, ok)
 	}
-	rc, err := parseRemoteCommand(raw, cfg)
+	rc, err := parseRemoteCommand(raw, cfg, "C")
 	if err != nil || rc.Agent != "C" || rc.Text != "Check my GitHub and fix the failing build." {
 		t.Fatalf("%+v %v", rc, err)
 	}
 }
 func TestClaudeRouting(t *testing.T) {
 	cfg := testConfigWithCode(t)
-	rc, err := parseRemoteCommand("482913 A: check Gmail", cfg)
+	rc, err := parseRemoteCommand("482913 A: check Gmail", cfg, "A")
 	if err != nil || rc.Agent != "A" || rc.Text != "check Gmail" {
 		t.Fatalf("%+v %v", rc, err)
 	}
 }
 func TestRejectWrongCode(t *testing.T) {
 	cfg := testConfigWithCode(t)
-	if _, err := parseRemoteCommand("111111 C: do it", cfg); err == nil {
+	if _, err := parseRemoteCommand("111111 C: do it", cfg, "C"); err == nil {
 		t.Fatal("wrong code accepted")
 	}
 }

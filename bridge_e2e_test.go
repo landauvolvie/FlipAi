@@ -42,9 +42,9 @@ func (f *fakeMailClient) joined() string { return strings.Join(f.sentTexts(), "\
 func TestEndToEndIncomingVoiceStatusAndReply(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
 	cfg.Gmail.Method = GmailMethodAppPassword
-	cfg.GoogleVoice.AllowedFrom = "8455551234\n2125557777"
+	allowTestNumber(&cfg, "C", "8455551234", "2125557777")
 	cfg.GoogleVoice.RequiredSubjectPhrase = "new text message from"
-	if err := setSecurityCode(&cfg, "482913"); err != nil {
+	if err := requireTestCode(&cfg, "482913"); err != nil {
 		t.Fatal(err)
 	}
 	m := GmailMessage{
@@ -77,9 +77,9 @@ func TestEndToEndIncomingVoiceStatusAndReply(t *testing.T) {
 func TestEndToEndUnauthorizedSenderNeverExecutesOrReplies(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
 	cfg.Gmail.Method = GmailMethodAppPassword
-	cfg.GoogleVoice.AllowedFrom = "8455551234\n2125557777"
+	allowTestNumber(&cfg, "C", "8455551234", "2125557777")
 	cfg.GoogleVoice.RequiredSubjectPhrase = "new text message from"
-	if err := setSecurityCode(&cfg, "482913"); err != nil {
+	if err := requireTestCode(&cfg, "482913"); err != nil {
 		t.Fatal(err)
 	}
 	m := GmailMessage{

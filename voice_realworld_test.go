@@ -43,10 +43,14 @@ func realVoiceMessageFixture() GmailMessage {
 
 func TestRealGoogleVoiceNotificationExtractsSMSNotLeadingURL(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
-	cfg.GoogleVoice.AllowedFrom = "8455550142"
-	if err := setSecurityCode(&cfg, "123456"); err != nil {
+	cfg.Codex.Phones = []AgentPhone{{Number: "8455550142", Access: AccessAll}}
+	cfg.GoogleVoice.AllowedFrom = smsAllowedFrom(cfg)
+	if err := setAgentCode(&cfg, "C", "123456"); err != nil {
 		t.Fatal(err)
 	}
+	codex := cfg.Codex.AgentSettings
+	codex.RequireCode = true
+	cfg.Codex.AgentSettings = codex
 	m := realVoiceMessageFixture()
 	raw, sender, ok, reason := parseGoogleVoiceBodyDetailed(m, cfg.GoogleVoice.AllowedFrom, "new text message from")
 	if !ok {
@@ -58,7 +62,7 @@ func TestRealGoogleVoiceNotificationExtractsSMSNotLeadingURL(t *testing.T) {
 	if raw != "123456 C: FLIPAI_CODEX_OK" {
 		t.Fatalf("wrong extracted SMS: %q", raw)
 	}
-	rc, err := parseRemoteCommand(raw, cfg)
+	rc, err := parseRemoteCommand(raw, cfg, "C")
 	if err != nil {
 		t.Fatalf("security/routing parser rejected real SMS: %v", err)
 	}
@@ -73,10 +77,10 @@ func TestRealGoogleVoiceNotificationRunsCodexAndRepliesWithoutReplyTo(t *testing
 
 	cfg := defaultConfig(t.TempDir())
 	cfg.Gmail.Method = GmailMethodAppPassword
-	cfg.GoogleVoice.AllowedFrom = "8455550142"
+	allowTestNumber(&cfg, "C", "8455550142")
 	cfg.GoogleVoice.RequiredSubjectPhrase = "new text message from"
 	cfg.CodexPath = os.Args[0]
-	if err := setSecurityCode(&cfg, "123456"); err != nil {
+	if err := requireTestCode(&cfg, "123456"); err != nil {
 		t.Fatal(err)
 	}
 

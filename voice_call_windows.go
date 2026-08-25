@@ -360,7 +360,21 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		})
 	}
 
-	bridge := newVoiceBridge(dataDir, activateAgentVoice, deactivateAgentVoice)
+	// The agents -- and with them the numbers allowed to call -- live in the
+	// main configuration, which this process reads fresh so a change made in the
+	// FlipAi window applies to the next call without a restart.
+	mainConfig := func() Config {
+		_, cfgPath, _, _, err := appPaths()
+		if err != nil {
+			return Config{}
+		}
+		cfg, err := loadConfig(cfgPath, dataDir)
+		if err != nil {
+			return Config{}
+		}
+		return cfg
+	}
+	bridge := newVoiceBridge(dataDir, mainConfig, activateAgentVoice, deactivateAgentVoice)
 	_ = w.Bind("flipVoiceAudioSettings", bridge.AudioSettings)
 	_ = w.Bind("flipVoiceIncoming", bridge.Incoming)
 	_ = w.Bind("flipVoiceAnswered", bridge.Answered)

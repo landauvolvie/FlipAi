@@ -37,40 +37,52 @@ func TestVoiceCallConfigNeverBecomesGeneralBrowser(t *testing.T) {
 	}
 }
 
-func TestVoiceEnabledAgentRequiresCallerAllowlist(t *testing.T) {
-	cfg := defaultVoiceCallConfig()
-	cfg.Codex.Enabled = true
-	if _, err := normalizeVoiceCallConfig(cfg, true); err == nil {
-		t.Fatal("enabled agent without allowed callers should be rejected")
+// voiceTestConfig builds a main configuration where one number reaches Codex.
+func voiceTestConfig(t *testing.T) Config {
+	t.Helper()
+	cfg := defaultConfig(t.TempDir())
+	cfg.DefaultAgent = "C"
+	cfg.Codex.Phones = []AgentPhone{
+		{Number: "8455551000", Access: AccessAll},
+		{Number: "8455554000", Access: AccessSMS},
+	}
+	cfg.Claude.Phones = []AgentPhone{{Number: "8455552000", Access: AccessVoice}}
+	return cfg
+}
+
+func enabledVoiceConfig() VoiceCallConfig {
+	vc := defaultVoiceCallConfig()
+	vc.Enabled = true
+	vc.GoogleVoiceInput = "Cable B Output"
+	vc.GoogleVoiceOutput = "Cable A Input"
+	vc.Codex.Enabled = true
+	vc.Claude.Enabled = true
+	return vc
+}
+
+func TestVoiceCallsUseTheSameAllowlistAsTexts(t *testing.T) {
+	cfg := voiceTestConfig(t)
+	vc := enabledVoiceConfig()
+
+	if d := decideVoiceCall(vc, cfg, "+1 (845) 555-1000", ""); !d.Allowed || d.Agent != "C" {
+		t.Fatalf("a number allowed for texts and calls on Codex was refused: %+v", d)
+	}
+	if d := decideVoiceCall(vc, cfg, "8455552000", ""); !d.Allowed || d.Agent != "A" {
+		t.Fatalf("a calls-only Claude number was refused: %+v", d)
+	}
+	if d := decideVoiceCall(vc, cfg, "8455559999", ""); d.Allowed {
+		t.Fatal("an unlisted number was allowed to call")
 	}
 }
 
-func TestVoiceCallerRoutesPerAgentAndDefault(t *testing.T) {
-	cfg := defaultVoiceCallConfig()
-	cfg.Enabled = true
-	cfg.Codex.Enabled = true
-	cfg.Claude.Enabled = true
-	cfg.Codex.AllowedCallers = "8455551000\n8455553000"
-	cfg.Claude.AllowedCallers = "8455552000\n8455553000"
-
-	if agent, ok := voiceAgentForCaller(cfg, "+1 (845) 555-1000"); !ok || agent != "C" {
-		t.Fatalf("Codex-only caller routed to %q, %v", agent, ok)
+func TestVoiceRefusesANumberAllowedForTextsOnly(t *testing.T) {
+	cfg := voiceTestConfig(t)
+	d := decideVoiceCall(enabledVoiceConfig(), cfg, "8455554000", "")
+	if d.Allowed {
+		t.Fatal("a texts-only number was allowed to call")
 	}
-	if agent, ok := voiceAgentForCaller(cfg, "8455552000"); !ok || agent != "A" {
-		t.Fatalf("Claude-only caller routed to %q, %v", agent, ok)
-	}
-	if agent, ok := voiceAgentForCaller(cfg, "8455553000"); !ok || agent != "C" {
-		t.Fatalf("shared caller should follow C default, got %q, %v", agent, ok)
-	}
-	cfg.DefaultAgent = "A"
-	if agent, ok := voiceAgentForCaller(cfg, "8455553000"); !ok || agent != "A" {
-		t.Fatalf("shared caller should follow A default, got %q, %v", agent, ok)
-	}
-	if agent, ok := voiceAgentForCaller(cfg, "8455559999"); ok || agent != "" {
-		t.Fatalf("unknown caller was authorized as %q", agent)
-	}
-	if agent, ok := voiceAgentForCaller(cfg, "Private Caller"); ok || agent != "" {
-		t.Fatalf("unparseable caller was authorized as %q", agent)
+	if !strings.Contains(d.Reason, "not to call") {
+		t.Errorf("reason does not explain the permission: %q", d.Reason)
 	}
 }
 
@@ -116,22 +128,19 @@ func TestVoiceConfigIsIndependentFromSMSConfig(t *testing.T) {
 }
 
 func TestVoiceCallerNameAllowlistCoversContactCallers(t *testing.T) {
-	cfg := defaultVoiceCallConfig()
-	cfg.Enabled = true
-	cfg.GoogleVoiceInput = "Cable B Output"
-	cfg.GoogleVoiceOutput = "Cable A Input"
-	cfg.Codex.Enabled = true
-	cfg.Codex.AllowedLabels = "Jane Appleseed"
+	cfg := voiceTestConfig(t)
+	cfg.Codex.CallerNames = "Jane Appleseed"
+	vc := enabledVoiceConfig()
 
 	// Google Voice shows a name instead of a number whenever the caller is in
 	// the user's contacts, which is the normal case for calling your own line.
-	if d := decideVoiceCall(cfg, "", "Jane Appleseed"); !d.Allowed || d.Agent != "C" {
+	if d := decideVoiceCall(vc, cfg, "", "Jane Appleseed"); !d.Allowed || d.Agent != "C" {
 		t.Fatalf("approved caller name was refused: %+v", d)
 	}
-	if d := decideVoiceCall(cfg, "", "jane   appleseed"); !d.Allowed {
+	if d := decideVoiceCall(vc, cfg, "", "jane   appleseed"); !d.Allowed {
 		t.Fatalf("caller name matching must ignore case and spacing: %+v", d)
 	}
-	if d := decideVoiceCall(cfg, "", "John Appleseed"); d.Allowed {
+	if d := decideVoiceCall(vc, cfg, "", "John Appleseed"); d.Allowed {
 		t.Fatal("a different name was authorized")
 	}
 }
@@ -147,32 +156,28 @@ func TestVoiceCallerNameAllowlistRejectsPlaceholders(t *testing.T) {
 			t.Errorf("loading a stored %q should drop it quietly, got %v %v", name, got, err)
 		}
 	}
-	cfg := defaultVoiceCallConfig()
-	cfg.Enabled = true
-	cfg.Codex.Enabled = true
-	cfg.Codex.AllowedLabels = "Unknown"
-	if d := decideVoiceCall(cfg, "", "Unknown"); d.Allowed {
+	cfg := voiceTestConfig(t)
+	cfg.Codex.CallerNames = "Unknown"
+	if d := decideVoiceCall(enabledVoiceConfig(), cfg, "", "Unknown"); d.Allowed {
 		t.Fatal("a placeholder caller ID was authorized")
 	}
 }
 
 func TestVoiceBlockedCallExplainsItself(t *testing.T) {
-	cfg := defaultVoiceCallConfig()
-	cfg.Enabled = true
-	cfg.Codex.Enabled = true
-	cfg.Codex.AllowedCallers = "8455551000"
+	cfg := voiceTestConfig(t)
+	vc := enabledVoiceConfig()
 
-	d := decideVoiceCall(cfg, "", "Jane Appleseed")
+	d := decideVoiceCall(vc, cfg, "", "Jane Appleseed")
 	if d.Allowed {
 		t.Fatal("an unlisted contact name was authorized")
 	}
 	if !strings.Contains(d.Reason, "Jane Appleseed") || !strings.Contains(d.Reason, "Allowed caller names") {
 		t.Errorf("reason does not tell the user what to do: %q", d.Reason)
 	}
-	if d := decideVoiceCall(cfg, "8455559999", ""); d.Allowed || !strings.Contains(d.Reason, "845") {
+	if d := decideVoiceCall(vc, cfg, "8455559999", ""); d.Allowed || !strings.Contains(d.Reason, "845") {
 		t.Errorf("unlisted number reason = %q", d.Reason)
 	}
-	if d := decideVoiceCall(cfg, "", ""); d.Allowed || d.Reason == "" {
+	if d := decideVoiceCall(vc, cfg, "", ""); d.Allowed || d.Reason == "" {
 		t.Errorf("a call with no caller ID must still be explained, got %+v", d)
 	}
 }
@@ -182,7 +187,6 @@ func TestVoiceAudioBridgeRejectsSilentWiring(t *testing.T) {
 		cfg := defaultVoiceCallConfig()
 		cfg.Enabled = true
 		cfg.Codex.Enabled = true
-		cfg.Codex.AllowedCallers = "8455551000"
 		cfg.GoogleVoiceInput = "Cable B Output (capture)"
 		cfg.GoogleVoiceOutput = "Cable A Input (render)"
 		cfg.AgentInput = "Cable A Output (capture)"
@@ -214,7 +218,7 @@ func TestVoiceAudioBridgeRejectsSilentWiring(t *testing.T) {
 
 func TestVoiceBridgeReportsOnlyRealAudioEndpoints(t *testing.T) {
 	dir := t.TempDir()
-	b := newVoiceBridge(dir, func(VoiceCallConfig, string) error { return nil }, func(VoiceCallConfig, string) error { return nil })
+	b := newVoiceBridge(dir, func() Config { return Config{} }, func(VoiceCallConfig, string) error { return nil }, func(VoiceCallConfig, string) error { return nil })
 
 	// Before a page holds a microphone grant the browser returns endpoints with
 	// empty names. Inventing names for them would put unselectable placeholders
@@ -237,17 +241,12 @@ func TestVoiceBridgeReportsOnlyRealAudioEndpoints(t *testing.T) {
 
 func TestVoiceBridgeTurnsAgentVoiceOffWhenTheCallEnds(t *testing.T) {
 	dir := t.TempDir()
-	cfg := defaultVoiceCallConfig()
-	cfg.Enabled = true
-	cfg.GoogleVoiceInput = "Cable B Output"
-	cfg.GoogleVoiceOutput = "Cable A Input"
-	cfg.Codex.Enabled = true
-	cfg.Codex.AllowedCallers = "8455551000"
-	if err := saveVoiceCallConfig(dir, cfg); err != nil {
+	main := voiceTestConfig(t)
+	if err := saveVoiceCallConfig(dir, enabledVoiceConfig()); err != nil {
 		t.Fatal(err)
 	}
 	var on, off []string
-	b := newVoiceBridge(dir,
+	b := newVoiceBridge(dir, func() Config { return main },
 		func(_ VoiceCallConfig, agent string) error { on = append(on, agent); return nil },
 		func(_ VoiceCallConfig, agent string) error { off = append(off, agent); return nil })
 

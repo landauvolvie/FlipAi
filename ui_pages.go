@@ -64,7 +64,6 @@ const uiPartials = `
 func registerUIPages() {
 	registerPage("home", homeHTML)
 	registerPage("connections", connectionsHTML)
-	registerPage("phone", phoneHTML)
 	registerPage("activity", activityPageHTML)
 	registerPage("settings", settingsHTML)
 }
@@ -244,7 +243,6 @@ const connectionsHTML = `{{define "content"}}
   </div>
 </div>
 
-<div class="tiles">{{range .Tiles}}{{template "tile" .}}{{end}}</div>
 
 <section class="card">
   <div class="card-head divided">
@@ -392,176 +390,6 @@ func mailboxSub(s uiStatus) string {
 // Phone
 // ---------------------------------------------------------------------------
 
-type phoneView struct {
-	pageView
-	Tiles []tileView
-}
-
-const phoneHTML = `{{define "content"}}
-<div class="page-head">
-  <div>
-    <h1>Phone</h1>
-    <p>Control incoming SMS access, reply behavior, and progress texts.</p>
-  </div>
-</div>
-
-<div class="tiles">{{range .Tiles}}{{template "tile" .}}{{end}}</div>
-
-<section class="card">
-  <div class="card-head">
-    <div><h2>Allowed numbers</h2><p>Only messages from these numbers are accepted. Every other sender is ignored.</p></div>
-    <div class="head-actions"><button class="btn accent" type="button" data-reveal="#add-number">{{icon "plus"}}Add number</button></div>
-  </div>
-  <div id="add-number" class="card-body hidden">
-    <form method="post" action="/phone/numbers/add">
-      <div class="grid-2">
-        <div class="field">
-          <label for="number">Phone number</label>
-          <input id="number" type="text" name="number" placeholder="(845) 555-1234" required>
-          <p class="hint">10-digit US/Canada mobile number. A leading +1 is fine.</p>
-        </div>
-        <div class="field">
-          <label for="label">Label</label>
-          <input id="label" type="text" name="label" placeholder="My mobile" maxlength="40">
-          <p class="hint">Optional, only shown in this list.</p>
-        </div>
-      </div>
-      <div class="form-actions"><button class="btn primary" type="submit">Add to allowlist</button></div>
-    </form>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Phone number</th><th>Label</th><th>Added</th><th>Status</th><th class="num">Actions</th></tr></thead>
-      <tbody>
-        {{range .S.AllowedNumbers}}
-        <tr>
-          <td><b>{{.Display}}</b></td>
-          <td>{{if .Label}}{{.Label}}{{else}}—{{end}}</td>
-          <td class="when">{{day .Added}}</td>
-          <td><span class="pill ok">Allowed</span></td>
-          <td class="num">
-            <form method="post" action="/phone/numbers/remove" data-confirm="Remove {{.Display}} from the allowlist?">
-              <input type="hidden" name="number" value="{{.Number}}">
-              <button class="btn small danger" type="submit">{{icon "trash"}}Remove</button>
-            </form>
-          </td>
-        </tr>
-        {{else}}
-        <tr><td colspan="5"><div class="empty"><b>No numbers yet</b>Add the mobile number you text from so FlipAi can accept it.</div></td></tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  <div class="table-foot"><span>Showing {{.S.AllowedCount}} of {{.S.AllowedCount}} number(s)</span></div>
-</section>
-
-<div class="cards-2">
-  <section class="card">
-    <form method="post" action="/phone/save">
-      <div class="card-head"><div><h2>Reply behavior</h2><p>How FlipAi composes and sends replies.</p></div></div>
-      <div class="card-body">
-        <div class="field">
-          <label for="replyMaxChars">Reply max characters</label>
-          <input id="replyMaxChars" type="number" name="replyMaxChars" min="80" max="1000" value="{{.S.ReplyMaxChars}}">
-          <p class="hint">Maximum characters per message part.</p>
-        </div>
-        <div class="field">
-          <label for="maxReplyParts">Max reply parts</label>
-          <select id="maxReplyParts" name="maxReplyParts">
-            {{range $i := .Parts}}<option value="{{$i}}"{{if eq $i $.S.MaxReplyParts}} selected{{end}}>{{$i}}</option>{{end}}
-          </select>
-          <p class="hint">A longer answer is split into numbered texts instead of being cut off.</p>
-        </div>
-        <div class="toggle">
-          <div class="label">Reply acknowledgement<span>Text a one-line confirmation as soon as a command is accepted.</span></div>
-          <label class="switch"><input type="hidden" name="replyAck" value="0"><input type="checkbox" name="replyAck" value="1" data-autosubmit{{if .S.ReplyAck}} checked{{end}}><span class="slider"></span></label>
-        </div>
-        <div class="toggle">
-          <div class="label">Progress updates<span>Text periodic updates while a long turn is still running.</span></div>
-          <label class="switch"><input type="hidden" name="progressUpdates" value="0"><input type="checkbox" name="progressUpdates" value="1" data-autosubmit{{if .S.ProgressUpdates}} checked{{end}}><span class="slider"></span></label>
-        </div>
-        <div class="field">
-          <label for="progressInterval">Progress interval</label>
-          <div class="input-suffix"><input id="progressInterval" type="number" name="progressInterval" min="30" max="3600" value="{{.S.ProgressInterval}}"><span class="unit">sec</span></div>
-          <p class="hint">Time between progress updates. Either agent can override this for its own turns on the <a href="/agents">Agents</a> page.</p>
-        </div>
-        <p class="callout">What the agent is <i>told</i> about SMS — the instruction sent with every text — belongs to the agent, so it lives with Codex and Claude on the <a href="/agents">Agents</a> page.</p>
-        <div class="form-actions"><button class="btn primary" type="submit">Save reply behavior</button></div>
-      </div>
-    </form>
-  </section>
-
-  <section class="card">
-    <form method="post" action="/phone/security">
-      <div class="card-head"><div><h2>Security code</h2><p>Require a private code at the start of every text.</p></div></div>
-      <div class="card-body">
-        <div class="toggle">
-          <div class="label">Require code<span>Messages must start with the correct code. The number allowlist is enforced either way.</span></div>
-          <label class="switch"><input type="hidden" name="requireCode" value="0"><input type="checkbox" name="requireCode" value="1" data-autosubmit{{if .S.RequireCode}} checked{{end}}><span class="slider"></span></label>
-        </div>
-        <div class="rows">
-          <div class="row"><div class="label">Status</div><div class="value">{{if .S.RequireCode}}<span class="pill ok">Enabled</span>{{else}}<span class="pill">Off</span>{{end}}</div></div>
-          <div class="row">
-            <div class="label">Security code</div>
-            <div class="value"><b class="mono">{{if .S.HasCode}}••••••{{else}}Not set{{end}}</b><button class="btn small" type="button" data-reveal="#change-code">Change code</button></div>
-          </div>
-        </div>
-        <div id="change-code" class="hidden">
-          <div class="field">
-            <label for="securityCode">New security code</label>
-            <input id="securityCode" type="password" name="securityCode" autocomplete="new-password" placeholder="At least 6 characters, no spaces">
-            <p class="hint">Stored only as a salted, iterated hash. Example text: <b>482913 C: check GitHub</b>.</p>
-          </div>
-          <div class="form-actions"><button class="btn primary" type="submit">Save security code</button></div>
-        </div>
-      </div>
-    </form>
-  </section>
-</div>
-{{end}}`
-
-func (a *App) phonePage(w http.ResponseWriter, r *http.Request) {
-	s := a.status()
-	view := struct {
-		phoneView
-		Parts []int
-	}{phoneView: phoneView{pageView: pageView{Shell: a.shell(r, "phone", "Phone"), S: s}}}
-	for i := 1; i <= 10; i++ {
-		view.Parts = append(view.Parts, i)
-	}
-	codeValue, codeTone := "Off", ""
-	if s.RequireCode {
-		codeValue, codeTone = "Enabled", "ok"
-	}
-	progressValue, progressTone := "Off", ""
-	progressSub := "No updates during long turns"
-	if s.ProgressUpdates {
-		progressValue, progressTone = "Enabled", "ok"
-		progressSub = "Every " + itoa(s.ProgressInterval) + " sec"
-	}
-	view.Tiles = []tileView{
-		{Icon: "phone", Title: "Allowed numbers", Value: itoa(s.AllowedCount), Tone: "brand", Big: true, Sub: plural(s.AllowedCount, "number") + " allowed"},
-		{Icon: "shield", Title: "Security code", Value: codeValue, Tone: codeTone, Big: true, Sub: securitySub(s)},
-		{Icon: "send", Title: "Reply split limit", Value: itoa(s.MaxReplyParts) + " parts", Tone: "brand", Big: true, Sub: itoa(s.ReplyMaxChars) + " characters per part"},
-		{Icon: "refresh", Title: "Progress updates", Value: progressValue, Tone: progressTone, Big: true, Sub: progressSub},
-	}
-	a.render(w, "phone", view)
-}
-
-func securitySub(s uiStatus) string {
-	if !s.RequireCode {
-		return "Allowlist only"
-	}
-	if s.HasCode {
-		return "Active"
-	}
-	return "No code set yet"
-}
-
-// ---------------------------------------------------------------------------
-// Activity
-// ---------------------------------------------------------------------------
-
 type activityView struct {
 	pageView
 	Stages []string
@@ -652,6 +480,12 @@ func (a *App) activityPage(w http.ResponseWriter, r *http.Request) {
 type settingsView struct {
 	pageView
 	Tiles []tileView
+
+	// Absorbed from the retired Advanced page: one settings screen, not two.
+	LastError ActivityEvent
+	HasError  bool
+	Health    []healthRow
+	Healthy   bool
 }
 
 const settingsHTML = `{{define "content"}}
@@ -797,10 +631,103 @@ const settingsHTML = `{{define "content"}}
           </div>
         </div>
       </div>
-      <p class="hint">Log files, the loopback endpoint, and the restart and quit tools are on <a href="/advanced">Advanced</a>. Exporting the activity log is on <a href="/activity">Activity</a>.</p>
+      <p class="hint">Exporting the activity log is on <a href="/activity">Activity</a>.</p>
     </div>
   </section>
 </div>
+
+<div class="section-label">Message routing</div>
+<section class="card">
+  <div class="card-head divided"><div><h2>Shared routing</h2><p>The few things that are not one agent's own. Allowed numbers, security codes and instructions live with their agent on <a href="/agents">Agents</a>.</p></div></div>
+  <div class="card-body">
+    <form method="post" action="/agents/save">
+      <input type="hidden" name="back" value="/settings">
+      <div class="grid-3">
+        <div class="field">
+          <label for="newSessionCommand">New-conversation keyword</label>
+          <input id="newSessionCommand" type="text" name="newSessionCommand" value="{{.S.NewSessionCommand}}" maxlength="24" required>
+          <p class="hint">Works as <b>{{.S.CodexPrefix}} {{.S.NewSessionCommand}}</b>, <b>{{.S.ClaudePrefix}} {{.S.NewSessionCommand}}</b>, or on its own.</p>
+        </div>
+        <div class="field">
+          <label for="turnTimeout">Turn timeout</label>
+          <div class="input-suffix"><input id="turnTimeout" type="number" name="turnTimeout" min="1" max="600" value="{{.S.TurnTimeout}}"><span class="unit">min</span></div>
+          <p class="hint">Maximum time any one agent turn may run.</p>
+        </div>
+        <div class="field">
+          <label for="replyMaxChars">Reply size</label>
+          <div class="input-suffix"><input id="replyMaxChars" type="number" name="replyMaxChars" min="120" max="1600" value="{{.S.ReplyMaxChars}}"><span class="unit">chars</span></div>
+          <p class="hint">Longer answers are split into numbered texts.</p>
+        </div>
+      </div>
+      <div class="field">
+        <label for="cwd">Fallback working folder</label>
+        <div class="input-group">
+          <input id="cwd" type="text" name="cwd" value="{{.S.Cwd}}">
+          <button class="btn" type="button" data-browse="#cwd">Browse</button>
+        </div>
+        <p class="hint">Used only by an agent that has no folder of its own.</p>
+      </div>
+      <div class="form-actions"><button class="btn primary" type="submit">Save routing</button></div>
+    </form>
+  </div>
+</section>
+
+<div class="section-label">The local service</div>
+<div class="cards-2">
+  <section class="card">
+    <div class="card-head divided"><div class="card-title-row"><span class="mark shield">{{icon "server"}}</span><div><h2>Local service</h2><p>The loopback control server this window is talking to.</p></div></div></div>
+    <div class="card-body">
+      <div class="rows">
+        <div class="row"><div class="label">Loopback address</div><div class="value"><b class="mono">http://{{.S.Listen}}</b><span class="pill ok">Listening</span></div></div>
+        <div class="row"><div class="label">Session token<span>Pages are only served to windows FlipAi opened itself.</span></div><div class="value"><b>Active</b><span class="pill ok">Valid</span></div></div>
+        {{range .Health}}
+        <div class="row"><div class="label">{{.Label}}</div><div class="value"><b class="{{.Tone}}">{{.Value}}</b></div></div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head divided"><div class="card-title-row"><span class="mark shield">{{icon "clock"}}</span><div><h2>Log files</h2><p>Written locally for this Windows user. Export and clear live on the Activity page.</p></div></div></div>
+    <div class="card-body">
+      <div class="rows">
+        <div class="row"><div class="label">Open logs folder<span>{{.S.DataDir}}</span></div><div class="value"><a class="btn small" href="/open/folder?which=logs">{{icon "folder"}}Open</a></div></div>
+        <div class="row"><div class="label">Read the full event log<span>Filter, search, export, or clear it there.</span></div><div class="value"><a class="btn small" href="/activity">{{icon "clock"}}Open Activity</a></div></div>
+      </div>
+      {{if .HasError}}
+      <div class="field">
+        <label>Most recent error <span class="unit">{{stamp .LastError.Time}}</span></label>
+        <div class="input-suffix">
+          <div class="codebox bad" id="last-error">[{{.LastError.Stage}}] {{.LastError.Message}}</div>
+          <button class="btn icon" type="button" data-copy="#last-error" title="Copy">{{icon "copy"}}</button>
+        </div>
+      </div>
+      {{else}}
+      <p class="hint">No errors have been recorded.</p>
+      {{end}}
+    </div>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head divided">
+    <div class="card-title-row"><span class="mark shield">{{icon "wrench"}}</span><div><h2>Service tools</h2><p>Use with care. These actions restart or stop local FlipAi processes.</p></div></div>
+  </div>
+  <div class="card-body">
+    <div class="rows">
+      <div class="row">
+        <div class="label">Restart bridge<span>Reloads settings and reconnects Gmail and the agents. Texting pauses for a moment.</span></div>
+        <div class="value"><form method="post" action="/bridge/restart"><button class="btn small" type="submit">{{icon "refresh"}}Restart</button></form></div>
+      </div>
+      <div class="row">
+        <div class="label">Quit FlipAi completely<span>Stops the window, the tray icon, the background host, and the watchdog. Texts are not processed until you start it again.</span></div>
+        <div class="value"><form method="post" action="/quit" data-confirm="Stop FlipAi completely? Texts will not be processed until you start it again."><button class="btn small danger" type="submit">{{icon "power"}}Quit</button></form></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<p class="callout">Executable paths, permission modes, SMS shortcuts, allowed phone numbers, security codes and the instruction sent with every text all belong to one agent, so they live with Codex or Claude on the <a href="/agents">Agents</a> page. Gmail and Google Voice live on <a href="/connections">Connections</a>.</p>
 {{end}}`
 
 func (a *App) settingsPage(w http.ResponseWriter, r *http.Request) {
@@ -815,6 +742,14 @@ func (a *App) settingsPage(w http.ResponseWriter, r *http.Request) {
 		startupValue, startupTone = "At power-on", "ok"
 		startupSub = "Runs before anyone signs in"
 	}
+	view.LastError, view.HasError = lastError(a.recentEvents(200))
+	view.Health = []healthRow{
+		{Label: "Gmail backend", Value: readyText(s.GmailReady, "Connected", "Not connected"), Tone: toneClass(s.GmailReady)},
+		{Label: "SMS processing", Value: readyText(s.Running && !s.Paused, "Active", pausedOrStopped(s)), Tone: toneClass(s.Running && !s.Paused)},
+		{Label: "Codex executable", Value: readyText(s.CodexFound, "Found", "Missing"), Tone: toneClass(s.CodexFound)},
+		{Label: "Claude executable", Value: readyText(s.ClaudeFound, "Found", "Missing"), Tone: toneClass(s.ClaudeFound)},
+	}
+	view.Healthy = s.GmailReady && s.Running && !s.Paused
 	view.Tiles = []tileView{
 		{Icon: "cpu", Title: "App version", Value: "v" + s.Version, Tone: "brand", Sub: updateSub(s)},
 		{Icon: "power", Title: "Startup", Value: startupValue, Tone: startupTone, Sub: startupSub},

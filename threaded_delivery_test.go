@@ -84,7 +84,7 @@ func TestBridgeAnswersOnTheThreadedPath(t *testing.T) {
 	m := notificationFixture(t)
 	cfg := defaultConfig(t.TempDir())
 	cfg.Security.RequireCode = false
-	cfg.GoogleVoice.AllowedFrom = "2125557777"
+	allowTestNumber(&cfg, "C", "2125557777")
 	cfg.GoogleVoice.ReplyAck = true
 
 	mc := &threadingMailClient{msg: m}
@@ -229,7 +229,13 @@ func TestDefaultCommandWordsStillRoute(t *testing.T) {
 		{raw: "A: NEW", agent: "A", isNew: true},
 	}
 	for _, c := range cases {
-		rc, err := parseRemoteCommand(c.raw, cfg)
+		// The sending number decides the agent; a case naming an agent is parsed
+		// as though it arrived from a number allowed on that agent.
+		from := c.agent
+		if from == "" {
+			from = "C"
+		}
+		rc, err := parseRemoteCommand(c.raw, cfg, from)
 		if err != nil {
 			t.Fatalf("%q: %v", c.raw, err)
 		}
@@ -242,25 +248,34 @@ func TestDefaultCommandWordsStillRoute(t *testing.T) {
 // Custom words have to survive the security code in front of them.
 func TestCustomCommandWordsWorkWithTheSecurityCode(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
-	if err := setSecurityCode(&cfg, "482913"); err != nil {
-		t.Fatal(err)
+	for _, agent := range []string{"C", "A"} {
+		if err := setAgentCode(&cfg, agent, "482913"); err != nil {
+			t.Fatal(err)
+		}
+		s := agentSettings(cfg, agent)
+		s.RequireCode = true
+		if agent == "A" {
+			cfg.Claude.AgentSettings = s
+		} else {
+			cfg.Codex.AgentSettings = s
+		}
 	}
 	cfg.DefaultAgent = "A"
 	cfg.CodexPrefix, cfg.ClaudePrefix, cfg.NewSessionCommand = "go", "ask", "reset"
 
-	rc, err := parseRemoteCommand("482913 go: check the build", cfg)
+	rc, err := parseRemoteCommand("482913 go: check the build", cfg, "C")
 	if err != nil || rc.Agent != "C" || rc.Text != "check the build" {
 		t.Fatalf("coded Codex command parsed as %#v (%v)", rc, err)
 	}
-	rc, err = parseRemoteCommand("482913 ASK: summarize", cfg)
+	rc, err = parseRemoteCommand("482913 ASK: summarize", cfg, "A")
 	if err != nil || rc.Agent != "A" || rc.Text != "summarize" {
 		t.Fatalf("coded Claude command parsed as %#v (%v)", rc, err)
 	}
-	rc, err = parseRemoteCommand("482913 go reset", cfg)
+	rc, err = parseRemoteCommand("482913 go reset", cfg, "C")
 	if err != nil || rc.Agent != "C" || !rc.New {
 		t.Fatalf("coded new-conversation command parsed as %#v (%v)", rc, err)
 	}
-	if _, err := parseRemoteCommand("go: check the build", cfg); err == nil {
+	if _, err := parseRemoteCommand("go: check the build", cfg, "C"); err == nil {
 		t.Fatal("a command without the security code was accepted")
 	}
 }
@@ -272,18 +287,17 @@ func TestCustomCommandWordsWorkWithTheSecurityCode(t *testing.T) {
 // being a message and being a Codex command.
 func TestSpaceSeparatedAgentWordGoesToTheDefaultAgent(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
-	cfg.Security.RequireCode = false
 	cfg.DefaultAgent = "A"
 	cfg.CodexPrefix, cfg.ClaudePrefix, cfg.NewSessionCommand = "go", "ask", "reset"
 
-	rc, err := parseRemoteCommand("go check the build", cfg)
+	rc, err := parseRemoteCommand("go check the build", cfg, "A")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rc.Agent != "A" || rc.Text != "go check the build" {
 		t.Fatalf("space form routed as %#v; update this test deliberately if that changes", rc)
 	}
-	rc, err = parseRemoteCommand("go reset", cfg)
+	rc, err = parseRemoteCommand("go reset", cfg, "C")
 	if err != nil || rc.Agent != "C" || !rc.New {
 		t.Fatalf("space form before the new-conversation word parsed as %#v (%v)", rc, err)
 	}

@@ -42,6 +42,22 @@ func (a *App) updateConfig(mutate func(cfg *Config) error) error {
 	return nil
 }
 
+// agentsSaveReturn keeps the user on the page the form was on. Settings hosts a
+// small routing form that posts to the same handler.
+func agentsSaveReturn(r *http.Request) string {
+	if r.FormValue("back") == "/settings" {
+		return "/settings"
+	}
+	return "/agents"
+}
+
+// snapshotConfig returns the configuration a page render should show.
+func (a *App) snapshotConfig() Config {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg
+}
+
 // formFlag reads a checkbox that is paired with a hidden "0" field, so an
 // unchecked box arrives as an explicit false instead of a missing key. The
 // second return reports whether the form carried the field at all.
@@ -358,11 +374,28 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		// The shared line itself falls back to the built-in default when cleared,
 		// because every turn needs some framing and a blank one would silently
 		// stop telling the agent its answer becomes a text message.
+		for _, agent := range []string{"C", "A"} {
+			if err := applyAgentAccessForm(cfg, r, agent); err != nil {
+				return err
+			}
+		}
+		// Reply size is one of the few genuinely shared settings; the Settings
+		// page posts it here so there is one handler for the agent form.
+		if n, ok, err := formInt(r, "replyMaxChars", 80, 1000); err != nil {
+			return fmt.Errorf("reply length: %w", err)
+		} else if ok {
+			cfg.GoogleVoice.ReplyMaxChars = n
+		}
+		if n, ok, err := formInt(r, "maxReplyParts", 1, 10); err != nil {
+			return fmt.Errorf("reply parts: %w", err)
+		} else if ok {
+			cfg.GoogleVoice.MaxReplyParts = n
+		}
 		if r.Form.Has("codexReplyStyle") {
-			cfg.Codex.ReplyStyleHint = normalizeReplyStyleHint(r.FormValue("codexReplyStyle"))
+			cfg.Codex.Instruction = normalizeReplyStyleHint(r.FormValue("codexReplyStyle"))
 		}
 		if r.Form.Has("claudeReplyStyle") {
-			cfg.Claude.ReplyStyleHint = normalizeReplyStyleHint(r.FormValue("claudeReplyStyle"))
+			cfg.Claude.Instruction = normalizeReplyStyleHint(r.FormValue("claudeReplyStyle"))
 		}
 		if r.Form.Has("sharedReplyStyle") {
 			shared := normalizeReplyStyleHint(r.FormValue("sharedReplyStyle"))
@@ -400,130 +433,12 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 			flash = "claude-token-only"
 		}
 	}
-	redirectTo(w, r, "/agents", flash)
+	redirectTo(w, r, agentsSaveReturn(r), flash)
 	go a.restartSoon()
 }
 
 // ---------------------------------------------------------------------------
 // Phone
-// ---------------------------------------------------------------------------
-
-func (a *App) savePhone(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		renderResult(w, r, 400, false, "Could not read the reply settings", err.Error())
-		return
-	}
-	err := a.updateConfig(func(cfg *Config) error {
-		if n, ok, err := formInt(r, "replyMaxChars", 80, 1000); err != nil {
-			return fmt.Errorf("reply length: %w", err)
-		} else if ok {
-			cfg.GoogleVoice.ReplyMaxChars = n
-		}
-		if n, ok, err := formInt(r, "maxReplyParts", 1, 10); err != nil {
-			return fmt.Errorf("reply parts: %w", err)
-		} else if ok {
-			cfg.GoogleVoice.MaxReplyParts = n
-		}
-		if n, ok, err := formInt(r, "progressInterval", 30, 3600); err != nil {
-			return fmt.Errorf("progress interval: %w", err)
-		} else if ok {
-			cfg.GoogleVoice.ProgressIntervalSeconds = n
-		}
-		if v, ok := formFlag(r, "replyAck"); ok {
-			cfg.GoogleVoice.ReplyAck = v
-		}
-		if v, ok := formFlag(r, "progressUpdates"); ok {
-			cfg.GoogleVoice.ProgressUpdates = v
-		}
-		return nil
-	})
-	if err != nil {
-		renderResult(w, r, 400, false, "Reply settings were not saved", err.Error())
-		return
-	}
-	redirectTo(w, r, "/phone", "saved-restart")
-	go a.restartSoon()
-}
-
-func (a *App) savePhoneSecurity(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		renderResult(w, r, 400, false, "Could not read the security settings", err.Error())
-		return
-	}
-	code := strings.TrimSpace(r.FormValue("securityCode"))
-	err := a.updateConfig(func(cfg *Config) error {
-		if code != "" {
-			if err := setSecurityCode(cfg, code); err != nil {
-				return err
-			}
-		}
-		require, ok := formFlag(r, "requireCode")
-		if !ok {
-			return nil
-		}
-		if require && cfg.Security.CodeHash == "" {
-			return fmt.Errorf("set a security code first — enter one under Change code, then turn the requirement on")
-		}
-		if !require && cfg.Security.CodeHash == "" {
-			// Routing still checks a hash internally; an unguessable placeholder
-			// keeps that path intact while the requirement is off.
-			placeholder, e := secureRandomToken(24)
-			if e != nil {
-				return e
-			}
-			if e := setSecurityCode(cfg, placeholder); e != nil {
-				return e
-			}
-		}
-		cfg.Security.RequireCode = require
-		return nil
-	})
-	if err != nil {
-		renderResult(w, r, 400, false, "Security settings were not saved", err.Error())
-		return
-	}
-	redirectTo(w, r, "/phone", "saved-restart")
-	go a.restartSoon()
-}
-
-func (a *App) addPhoneNumber(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		renderResult(w, r, 400, false, "Could not read the number", err.Error())
-		return
-	}
-	number := r.FormValue("number")
-	err := a.updateConfig(func(cfg *Config) error {
-		return addAllowedNumber(&cfg.GoogleVoice, number, r.FormValue("label"))
-	})
-	if err != nil {
-		renderResult(w, r, 400, false, "Number was not added", err.Error())
-		return
-	}
-	activityLogForStatePath(a.statePath).Add("info", "security", "Allowed phone number added from the desktop app", number, "", "")
-	redirectTo(w, r, "/phone", "number-added")
-	go a.restartSoon()
-}
-
-func (a *App) removePhoneNumber(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		renderResult(w, r, 400, false, "Could not read the number", err.Error())
-		return
-	}
-	number := r.FormValue("number")
-	err := a.updateConfig(func(cfg *Config) error {
-		return removeAllowedNumber(&cfg.GoogleVoice, number)
-	})
-	if err != nil {
-		renderResult(w, r, 400, false, "Number was not removed", err.Error())
-		return
-	}
-	activityLogForStatePath(a.statePath).Add("info", "security", "Allowed phone number removed from the desktop app", number, "", "")
-	redirectTo(w, r, "/phone", "number-removed")
-	go a.restartSoon()
-}
-
-// ---------------------------------------------------------------------------
-// Settings
 // ---------------------------------------------------------------------------
 
 func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {

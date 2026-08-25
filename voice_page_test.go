@@ -57,16 +57,34 @@ func (h *callHarness) scenario(name string) *harnessScenario {
 	return h.scenarios[name]
 }
 
-func (h *callHarness) configure(name string, cfg VoiceCallConfig) error {
+// harnessConfig is what the driver sends: how the call bridge is set up, and
+// the agents that decide who is allowed to call.
+type harnessConfig struct {
+	Voice  VoiceCallConfig `json:"voice"`
+	Agents struct {
+		DefaultAgent string        `json:"defaultAgent"`
+		Codex        AgentSettings `json:"codex"`
+		Claude       AgentSettings `json:"claude"`
+	} `json:"agents"`
+}
+
+func (h *callHarness) configure(name string, in harnessConfig) error {
 	dataDir := filepath.Join(h.root, name)
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return err
 	}
-	if err := saveVoiceCallConfig(dataDir, cfg); err != nil {
+	if err := saveVoiceCallConfig(dataDir, in.Voice); err != nil {
+		return err
+	}
+	main := defaultConfig(dataDir)
+	main.DefaultAgent = in.Agents.DefaultAgent
+	main.Codex.AgentSettings = in.Agents.Codex
+	main.Claude.AgentSettings = in.Agents.Claude
+	if err := normalizeAgents(&main); err != nil {
 		return err
 	}
 	s := &harnessScenario{dataDir: dataDir}
-	s.bridge = newVoiceBridge(dataDir,
+	s.bridge = newVoiceBridge(dataDir, func() Config { return main },
 		func(_ VoiceCallConfig, agent string) error {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -94,7 +112,7 @@ func (h *callHarness) shimHandler() http.Handler {
 		_, _ = w.Write([]byte(googleVoiceInitScript))
 	})
 	mux.HandleFunc("/configure", func(w http.ResponseWriter, r *http.Request) {
-		var cfg VoiceCallConfig
+		var cfg harnessConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

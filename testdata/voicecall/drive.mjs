@@ -113,15 +113,24 @@ async function scenario(name, config, body) {
 const CABLE_IN = 'Fake Audio Input 2';    // stands in for the cable feeding Google Voice's mic
 const CABLE_OUT = 'Fake Audio Output 2';  // stands in for the cable carrying the caller onward
 
-const baseConfig = (extra = {}) => ({
-  enabled: true,
-  autoAnswer: true,
-  defaultAgent: 'C',
-  googleVoiceInput: CABLE_IN,
-  googleVoiceOutput: CABLE_OUT,
-  codex: { enabled: true, allowedCallers: '8455551000', appTitle: 'ChatGPT' },
-  claude: { enabled: false, appTitle: 'Claude' },
-  ...extra,
+// Who may call is decided by the agents, exactly as who may text is; the voice
+// half only says how the call is bridged.
+const baseConfig = (agents = {}) => ({
+  voice: {
+    enabled: true,
+    autoAnswer: true,
+    defaultAgent: 'C',
+    googleVoiceInput: CABLE_IN,
+    googleVoiceOutput: CABLE_OUT,
+    codex: { enabled: true, appTitle: 'ChatGPT' },
+    claude: { enabled: false, appTitle: 'Claude' },
+  },
+  agents: {
+    defaultAgent: 'C',
+    codex: { phones: [{ number: '8455551000', access: 'all' }] },
+    claude: {},
+    ...agents,
+  },
 });
 
 // 1. The whole point of the feature: an approved number calls, FlipAi answers,
@@ -150,7 +159,7 @@ await scenario('contact-name-not-allowed', baseConfig(), async ({ page, tick }) 
 
 // 3. The same call, once the user has approved that displayed name.
 await scenario('contact-name-allowed', baseConfig({
-  codex: { enabled: true, allowedCallers: '8455551000', allowedLabels: 'Jane Appleseed', appTitle: 'ChatGPT' },
+  codex: { phones: [{ number: '8455551000', access: 'all' }], callerNames: 'Jane Appleseed' },
 }), async ({ page, tick }) => {
   await tick();
   await page.evaluate(() => window.gv.ring('Jane Appleseed\nMobile'));
@@ -184,7 +193,7 @@ await scenario('unauthorized-number', baseConfig(), async ({ page, tick }) => {
 //    for the caller. Here the ringing call has no caller ID at all while an
 //    approved number is on screen in the thread list.
 await scenario('decoy-number-on-page', baseConfig({
-  codex: { enabled: true, allowedCallers: '2125550000', appTitle: 'ChatGPT' },
+  codex: { phones: [{ number: '2125550000', access: 'all' }] },
 }), async ({ page, tick }) => {
   await tick();
   await page.evaluate(() => window.gv.ring('Unknown caller'));

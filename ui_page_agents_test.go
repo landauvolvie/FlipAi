@@ -29,13 +29,19 @@ func TestAgentsPageOwnsAgentSpecificSettings(t *testing.T) {
 		`name="claudePrefix"`,
 		`name="codexPath"`,
 		`name="claudePath"`,
-		`name="newSessionCommand"`,
 		`name="permissionMode"`,
 		`name="codexReplyStyle"`,
 		`name="claudeReplyStyle"`,
-		`name="sharedReplyStyle"`,
 		`formaction="/agents/reset"`,
-		"Shared defaults",
+		// Who may reach the agent, its code, and how it replies now live on the
+		// agent rather than on a shared page.
+		"Allowed phone numbers",
+		"Security code",
+		`formaction="/agents/numbers/add"`,
+		`name="codexRequireCode"`,
+		`name="claudeRequireCode"`,
+		`name="codexAck"`,
+		`name="claudeProgress"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Agents page is missing %q", want)
@@ -48,18 +54,17 @@ func TestAgentsPageOwnsAgentSpecificSettings(t *testing.T) {
 		t.Fatal("Agents page exposes an Add agent control without backend support")
 	}
 
-	// Every agent-specific control belongs to exactly one pane. The
-	// new-conversation keyword genuinely applies to both, so it lives once, in
-	// the shared pane — it used to be repeated in all three.
+	// Every agent-specific control belongs to exactly one pane.
 	for field, want := range map[string]int{
-		`name="codexPrefix"`:       1,
-		`name="claudePrefix"`:      1,
-		`name="codexPath"`:         1,
-		`name="claudePath"`:        1,
-		`name="newSessionCommand"`: 1,
-		`name="permissionMode"`:    1,
-		`name="codexReplyStyle"`:   1,
-		`name="claudeReplyStyle"`:  1,
+		`name="codexPrefix"`:      1,
+		`name="claudePrefix"`:     1,
+		`name="codexPath"`:        1,
+		`name="claudePath"`:       1,
+		`name="permissionMode"`:   1,
+		`name="codexReplyStyle"`:  1,
+		`name="claudeReplyStyle"`: 1,
+		`name="codexRequireCode"`: 1,
+		`name="claudeCode"`:       1,
 	} {
 		if got := strings.Count(body, field); got != want {
 			t.Errorf("Agents page renders %s %d times, want %d", field, got, want)
@@ -68,7 +73,7 @@ func TestAgentsPageOwnsAgentSpecificSettings(t *testing.T) {
 
 	// Agent-specific settings must not reappear anywhere else in the app.
 	agentFields := []string{`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`, `name="codexPrefix"`, `name="claudePrefix"`, `name="claudeReplyStyle"`, `name="codexReplyStyle"`}
-	for _, page := range []string{"/advanced", "/settings", "/phone", "/connections", "/"} {
+	for _, page := range []string{"/settings", "/connections", "/"} {
 		other := a.do(t, http.MethodGet, page, nil).Body.String()
 		for _, forbidden := range agentFields {
 			if strings.Contains(other, forbidden) {
@@ -77,35 +82,43 @@ func TestAgentsPageOwnsAgentSpecificSettings(t *testing.T) {
 		}
 	}
 
-	advanced := a.do(t, http.MethodGet, "/advanced", nil).Body.String()
-	if !strings.Contains(advanced, `href="/agents"`) {
-		t.Fatal("Advanced should point users to the Agents page for agent settings")
+	// A number that exists can be removed from the agent that holds it.
+	if rr := a.do(t, http.MethodPost, "/agents/numbers/add", url.Values{
+		"agent": {"C"}, "newNumber": {"845 555 0147"}, "newAccess": {"all"},
+	}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("adding a number returned %d: %s", rr.Code, rr.Body.String())
+	}
+	withNumber := a.do(t, http.MethodGet, "/agents", nil).Body.String()
+	for _, want := range []string{`formaction="/agents/numbers/remove"`, "(845) 555-0147", `name="access-C-8455550147"`} {
+		if !strings.Contains(withNumber, want) {
+			t.Errorf("Agents page is missing %q once a number exists", want)
+		}
+	}
+
+	settings := a.do(t, http.MethodGet, "/settings", nil).Body.String()
+	if !strings.Contains(settings, `href="/agents"`) {
+		t.Fatal("Settings should point users to the Agents page for agent settings")
 	}
 }
 
 // The SMS instruction is the one thing FlipAi puts in front of the agent on
-// every text, so it must be editable per agent, must fall back to the shared
-// wording rather than to nothing, and must reach composePrompt.
+// every text, so it must be editable per agent and must reach composePrompt.
 func TestPerAgentSMSInstructionIsEditableAndUsed(t *testing.T) {
 	a := newTestApp(t)
 
 	rr := a.do(t, http.MethodPost, "/agents/save", url.Values{
 		"codexReplyStyle":  {"  Answer in one line. No markdown.  "},
-		"claudeReplyStyle": {""},
-		"sharedReplyStyle": {"Keep it under 300 characters."},
+		"claudeReplyStyle": {"Keep it under 300 characters."},
 	})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("saving instructions returned %d: %s", rr.Code, rr.Body.String())
 	}
 	cfg := a.reloadConfig(t)
-	if cfg.Codex.ReplyStyleHint != "Answer in one line. No markdown." {
-		t.Fatalf("Codex instruction was not stored trimmed: %q", cfg.Codex.ReplyStyleHint)
+	if cfg.Codex.Instruction != "Answer in one line. No markdown." {
+		t.Fatalf("Codex instruction was not stored trimmed: %q", cfg.Codex.Instruction)
 	}
-	if cfg.Claude.ReplyStyleHint != "" {
-		t.Fatalf("an empty Claude box must mean 'follow the shared line', got %q", cfg.Claude.ReplyStyleHint)
-	}
-	if cfg.GoogleVoice.ReplyStyleHint != "Keep it under 300 characters." {
-		t.Fatalf("shared instruction was not stored: %q", cfg.GoogleVoice.ReplyStyleHint)
+	if cfg.Claude.Instruction != "Keep it under 300 characters." {
+		t.Fatalf("Claude instruction was not stored: %q", cfg.Claude.Instruction)
 	}
 
 	b := NewBridge(cfg, a.statePath, State{}, nil, nil, nil)
@@ -113,17 +126,17 @@ func TestPerAgentSMSInstructionIsEditableAndUsed(t *testing.T) {
 		t.Fatalf("Codex prompt does not carry its own instruction: %q", got)
 	}
 	if got := b.composePrompt("A", "ship it"); !strings.HasSuffix(got, "Keep it under 300 characters.") {
-		t.Fatalf("Claude prompt does not fall back to the shared instruction: %q", got)
+		t.Fatalf("Claude prompt does not carry its own instruction: %q", got)
 	}
 
-	// Clearing the shared box restores the built-in wording, because every turn
+	// Clearing an agent's box restores the built-in wording, because every turn
 	// needs some framing and a blank one silently stops telling the agent that
 	// its answer becomes a text message.
-	if rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"sharedReplyStyle": {"   "}}); rr.Code != http.StatusSeeOther {
-		t.Fatalf("clearing the shared instruction returned %d", rr.Code)
+	if rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"claudeReplyStyle": {"   "}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("clearing an instruction returned %d", rr.Code)
 	}
-	if got := a.reloadConfig(t).GoogleVoice.ReplyStyleHint; got != defaultReplyStyleHint {
-		t.Fatalf("clearing the shared instruction must restore the default, got %q", got)
+	if got := a.reloadConfig(t).Claude.Instruction; got != "" {
+		t.Fatalf("a cleared instruction must fall back to the built-in wording, got %q", got)
 	}
 
 	// An over-long instruction is capped rather than stored whole, so a pasted
@@ -132,7 +145,7 @@ func TestPerAgentSMSInstructionIsEditableAndUsed(t *testing.T) {
 	if rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"claudeReplyStyle": {long}}); rr.Code != http.StatusSeeOther {
 		t.Fatalf("saving a long instruction returned %d", rr.Code)
 	}
-	if got := len(a.reloadConfig(t).Claude.ReplyStyleHint); got > replyStyleHintMaxChars {
+	if got := len(a.reloadConfig(t).Claude.Instruction); got > replyStyleHintMaxChars {
 		t.Fatalf("instruction was stored at %d chars, cap is %d", got, replyStyleHintMaxChars)
 	}
 }

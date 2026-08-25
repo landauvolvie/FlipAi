@@ -160,7 +160,7 @@ type uiStatus struct {
 }
 
 func (s uiStatus) SetupComplete() bool {
-	return s.GmailReady && s.AllowedCount > 0 && (!s.RequireCode || s.HasCode)
+	return s.GmailReady && s.AllowedCount > 0
 }
 
 // SetupSteps lists what still has to happen before a text can run an agent.
@@ -168,8 +168,7 @@ func (s uiStatus) SetupComplete() bool {
 func (s uiStatus) SetupSteps() []setupStep {
 	steps := []setupStep{
 		{Label: "Connect Gmail", Detail: "Choose App Password or your own Google OAuth project.", Href: "/connections", Done: s.GmailReady},
-		{Label: "Allow a phone number", Detail: "Only numbers on the allowlist can reach your agents.", Href: "/phone", Done: s.AllowedCount > 0},
-		{Label: "Set the SMS security code", Detail: "Required while code protection is on.", Href: "/phone", Done: !s.RequireCode || s.HasCode},
+		{Label: "Allow a phone number", Detail: "Add the phone you text from to the agent it should reach.", Href: "/agents", Done: s.AllowedCount > 0},
 		{Label: "Test an agent", Detail: "Confirm Codex or Claude answers on this PC.", Href: "/agents", Done: s.CodexCheck.OK || s.ClaudeCheck.OK},
 	}
 	return steps
@@ -285,8 +284,8 @@ func (a *App) status() uiStatus {
 	if s.SharedReplyStyle == "" {
 		s.SharedReplyStyle = defaultReplyStyleHint
 	}
-	s.CodexReplyStyle = strings.TrimSpace(cfg.Codex.ReplyStyleHint)
-	s.ClaudeReplyStyle = strings.TrimSpace(cfg.Claude.ReplyStyleHint)
+	s.CodexReplyStyle = strings.TrimSpace(cfg.Codex.Instruction)
+	s.ClaudeReplyStyle = strings.TrimSpace(cfg.Claude.Instruction)
 	s.CodexReplyStyleCustom = s.CodexReplyStyle != ""
 	s.ClaudeReplyStyleCustom = s.ClaudeReplyStyle != ""
 	s.CodexReplyStyleEffective = cfg.replyStyleHintFor("C")
@@ -300,7 +299,8 @@ func (a *App) status() uiStatus {
 	s.CwdOK = directoryExists(cfg.Cwd)
 	s.CodexCwdOK = directoryExists(s.CodexCwd)
 	s.ClaudeCwdOK = directoryExists(s.ClaudeCwd)
-	s.AllowedCount = len(s.AllowedNumbers)
+	// Counted from the agents, because that is where an allowed number lives.
+	s.AllowedCount = len(allAgentPhones(cfg))
 	s.CodexThreadActive = st.CodexThreadID != ""
 	s.ClaudeSessionActive = st.ClaudeSessionID != ""
 	s.PermissionModeLabel = claudePermissionModeLabel(s.PermissionMode)

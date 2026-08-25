@@ -280,19 +280,27 @@ type remoteCommand struct {
 	Status bool
 }
 
-func parseRemoteCommand(raw string, cfg Config) (remoteCommand, error) {
+// parseRemoteCommand reads one authenticated text for the agent the sending
+// number belongs to. The number decides the agent, so a prefix can only agree
+// with that choice or be refused -- there is no longer a shared allowlist for a
+// prefix to steer.
+func parseRemoteCommand(raw string, cfg Config, agent string) (remoteCommand, error) {
+	if agent != "A" && agent != "C" {
+		agent = "C"
+	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return remoteCommand{}, errors.New("empty command")
 	}
+	settings := agentSettings(cfg, agent)
 	rest := raw
-	if cfg.Security.RequireCode {
+	if settings.RequireCode {
 		f := strings.Fields(raw)
 		if len(f) < 2 {
-			return remoteCommand{}, errors.New("missing SMS security code or command")
+			return remoteCommand{}, fmt.Errorf("missing the %s security code or the command", agentDisplayName(agent))
 		}
-		if !verifySecurityCode(cfg, f[0]) {
-			return remoteCommand{}, errors.New("invalid SMS security code")
+		if !verifyAgentCode(settings, f[0]) {
+			return remoteCommand{}, fmt.Errorf("invalid security code for %s", agentDisplayName(agent))
 		}
 		rest = strings.TrimSpace(strings.TrimPrefix(raw, f[0]))
 	}
@@ -303,35 +311,46 @@ func parseRemoteCommand(raw string, cfg Config) (remoteCommand, error) {
 	codexPrefix := configuredCodexPrefix(cfg)
 	claudePrefix := configuredClaudePrefix(cfg)
 	newSession := configuredNewSessionCommand(cfg)
-	defaultAgent := cfg.DefaultAgent
-	if defaultAgent != "A" && defaultAgent != "C" {
-		defaultAgent = "C"
-	}
 
-	// The new-session word is configurable too. It works by itself for the
-	// configured default agent, or after either agent prefix. Existing installs
-	// keep C/A/NEW because those remain the defaults.
+	// The new-session word is configurable too. It works by itself, or after the
+	// prefix of the agent this number reaches.
 	if strings.EqualFold(strings.TrimSpace(rest), newSession) {
-		return remoteCommand{Agent: defaultAgent, New: true}, nil
+		return remoteCommand{Agent: agent, New: true}, nil
 	}
 	if isAgentNewSession(rest, codexPrefix, newSession) {
+		if agent != "C" {
+			return remoteCommand{}, wrongAgentForNumber(agent, "C")
+		}
 		return remoteCommand{Agent: "C", New: true}, nil
 	}
 	if isAgentNewSession(rest, claudePrefix, newSession) {
+		if agent != "A" {
+			return remoteCommand{}, wrongAgentForNumber(agent, "A")
+		}
 		return remoteCommand{Agent: "A", New: true}, nil
 	}
 
-	agent := defaultAgent
 	text := rest
 	if tail, ok := stripAgentCommandPrefix(rest, codexPrefix); ok {
-		agent, text = "C", tail
+		if agent != "C" {
+			return remoteCommand{}, wrongAgentForNumber(agent, "C")
+		}
+		text = tail
 	} else if tail, ok := stripAgentCommandPrefix(rest, claudePrefix); ok {
-		agent, text = "A", tail
+		if agent != "A" {
+			return remoteCommand{}, wrongAgentForNumber(agent, "A")
+		}
+		text = tail
 	}
 	if text == "" {
 		return remoteCommand{}, errors.New("empty command")
 	}
 	return remoteCommand{Agent: agent, Text: text}, nil
+}
+
+func wrongAgentForNumber(reaches, asked string) error {
+	return fmt.Errorf("this number reaches %s, so it cannot address %s; allow the number under %s if that is where it should go",
+		agentDisplayName(reaches), agentDisplayName(asked), agentDisplayName(asked))
 }
 
 func (b *Bridge) ensureCodex(ctx context.Context) error {
@@ -577,10 +596,20 @@ func (b *Bridge) poll(ctx context.Context) {
 			continue
 		}
 		b.event("success", "security", "Google Voice sender verified and allowed", sender, "", id)
-		rc, err := parseRemoteCommand(raw, b.cfg)
+		senderAgent, phone, allowed := agentForSender(b.cfg, sender)
+		if !allowed {
+			b.event("warn", "security", "SMS ignored: this number is not allowed on any agent", sender, "", id)
+			continue
+		}
+		if !phone.AllowsSMS() {
+			b.event("warn", "security", "SMS ignored: this number is allowed for calls only", sender, "", id)
+			continue
+		}
+		rc, err := parseRemoteCommand(raw, b.cfg, senderAgent)
 		if err != nil {
 			log.Printf("Rejected remote SMS %s from %s: %v", id, sender, err)
 			b.event("warn", "security", "SMS rejected: "+err.Error(), sender, "", id)
+			b.notify(ctx, m, truncate(err.Error(), 300))
 			continue
 		}
 		rc.Sender = sender
@@ -599,7 +628,7 @@ func (b *Bridge) poll(ctx context.Context) {
 		}
 		b.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
 		depth := b.enqueue(bridgeJob{msg: m, cmd: rc})
-		if b.cfg.GoogleVoice.ReplyAck {
+		if agentSettings(b.cfg, rc.Agent).ackEnabled() {
 			line := "✓ " + agentName + " working on it…"
 			if depth > 1 {
 				line = fmt.Sprintf("✓ Queued for %s (%d ahead)…", agentName, depth-1)
@@ -678,7 +707,7 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 
 	// Optional heartbeat so a long turn reports in, the way watching the
 	// desktop app does. Stops as soon as the turn returns.
-	if b.cfg.GoogleVoice.ProgressUpdates && !rc.Status && !rc.New {
+	if agentSettings(b.cfg, rc.Agent).progressEnabled() && !rc.Status && !rc.New {
 		stop := make(chan struct{})
 		defer close(stop)
 		go b.heartbeat(ctx, stop, m, rc)

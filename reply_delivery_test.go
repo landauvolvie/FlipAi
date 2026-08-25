@@ -118,9 +118,9 @@ func voiceMessage(id, body string) GmailMessage {
 func TestBothQueuedCommandsRunInOrder(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
 	cfg.Gmail.Method = GmailMethodAppPassword
-	cfg.GoogleVoice.AllowedFrom = "2125557777"
-	cfg.GoogleVoice.ProgressUpdates = false
-	if err := setSecurityCode(&cfg, "482913"); err != nil {
+	allowTestNumber(&cfg, "A", "2125557777")
+	setTestReplyBehaviour(&cfg, true, false)
+	if err := requireTestCode(&cfg, "482913"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,8 +154,8 @@ func TestBothQueuedCommandsRunInOrder(t *testing.T) {
 func TestStatusIsAnsweredWithoutQueueing(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
 	cfg.Gmail.Method = GmailMethodAppPassword
-	cfg.GoogleVoice.AllowedFrom = "2125557777"
-	if err := setSecurityCode(&cfg, "482913"); err != nil {
+	allowTestNumber(&cfg, "A", "2125557777")
+	if err := requireTestCode(&cfg, "482913"); err != nil {
 		t.Fatal(err)
 	}
 	qm := &queueMailClient{

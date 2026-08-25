@@ -18,7 +18,9 @@ func TestParseRemoteCommandConfigurablePrefixes(t *testing.T) {
 		{"no prefix here", "A", "no prefix here", false},
 	}
 	for _, tc := range cases {
-		rc, err := parseRemoteCommand(tc.raw, cfg)
+		// The sending number decides the agent now, so each case is parsed as
+		// though it arrived from a number allowed on that agent.
+		rc, err := parseRemoteCommand(tc.raw, cfg, tc.agent)
 		if err != nil {
 			t.Fatalf("parse %q: %v", tc.raw, err)
 		}
@@ -28,15 +30,23 @@ func TestParseRemoteCommandConfigurablePrefixes(t *testing.T) {
 	}
 }
 
-func TestParseRemoteCommandLegacyDefaultsRemain(t *testing.T) {
+func TestPrefixCannotReachAnAgentTheNumberIsNotAllowedOn(t *testing.T) {
+	// A number belongs to one agent. A prefix naming the other one has to be
+	// refused rather than quietly routed, or the allowlist would mean nothing.
 	cfg := Config{DefaultAgent: "C"}
-	rc, err := parseRemoteCommand("A: hello", cfg)
-	if err != nil || rc.Agent != "A" || rc.Text != "hello" {
-		t.Fatalf("legacy A prefix: rc=%+v err=%v", rc, err)
+	if _, err := parseRemoteCommand("A: hello", cfg, "C"); err == nil {
+		t.Fatal("a Codex number addressed Claude and was accepted")
 	}
-	rc, err = parseRemoteCommand("C NEW", cfg)
+	if _, err := parseRemoteCommand("C NEW", cfg, "A"); err == nil {
+		t.Fatal("a Claude number addressed Codex and was accepted")
+	}
+	rc, err := parseRemoteCommand("A: hello", cfg, "A")
+	if err != nil || rc.Agent != "A" || rc.Text != "hello" {
+		t.Fatalf("matching prefix: rc=%+v err=%v", rc, err)
+	}
+	rc, err = parseRemoteCommand("C NEW", cfg, "C")
 	if err != nil || rc.Agent != "C" || !rc.New {
-		t.Fatalf("legacy C NEW: rc=%+v err=%v", rc, err)
+		t.Fatalf("matching new-session: rc=%+v err=%v", rc, err)
 	}
 }
 

@@ -125,21 +125,14 @@ type GoogleVoiceConfig struct {
 }
 
 type CodexConfig struct {
+	AgentSettings
+
 	ApprovalPolicy string `json:"approvalPolicy"`
-
-	// ProgressIntervalSeconds overrides how often this agent texts a "still
-	// working" line during a long turn. Zero means follow the shared setting
-	// on the Phone page, which is how every install behaved before agents could
-	// differ. See Config.progressInterval.
-	ProgressIntervalSeconds int `json:"progressIntervalSeconds,omitempty"`
-
-	// ReplyStyleHint overrides the shared SMS framing line for Codex only.
-	// Empty means follow GoogleVoice.ReplyStyleHint, which is how every install
-	// behaved before the two agents could be prompted differently.
-	ReplyStyleHint string `json:"replyStyleHint,omitempty"`
 }
 
 type ClaudeConfig struct {
+	AgentSettings
+
 	// PermissionMode is passed to Claude Code as --permission-mode. It defaults
 	// to full user access so a Claude SMS turn reaches as far as the Codex one
 	// beside it; see claudeFullAccess for why a narrower mode silently breaks
@@ -149,14 +142,6 @@ type ClaudeConfig struct {
 	// UseChrome passes --chrome so Claude can drive the browser it already
 	// drives at the desktop.
 	UseChrome bool `json:"useChrome"`
-
-	// ProgressIntervalSeconds overrides how often this agent texts a "still
-	// working" line during a long turn. Zero means follow the shared setting.
-	ProgressIntervalSeconds int `json:"progressIntervalSeconds,omitempty"`
-
-	// ReplyStyleHint overrides the shared SMS framing line for Claude only.
-	// Empty means follow GoogleVoice.ReplyStyleHint.
-	ReplyStyleHint string `json:"replyStyleHint,omitempty"`
 
 	// SessionMode selects how FlipAi drives Claude Code.
 	//
@@ -237,9 +222,16 @@ func (u UpdateConfig) normalizedCheckMinutes() int {
 const retiredUpdateCheckHoursDefault = 6
 
 type SecurityConfig struct {
+	// Deprecated: a security code belongs to the agent that enforces it. These
+	// stay so an existing bridge.json still parses and can be migrated once.
 	RequireCode bool   `json:"requireCode"`
 	CodeSalt    string `json:"codeSalt,omitempty"`
 	CodeHash    string `json:"codeHash,omitempty"`
+
+	// AgentsMigrated records that the shared allowlist and code have already
+	// been moved onto the agents, so a later change on one agent is never
+	// undone by migrating the old fields again.
+	AgentsMigrated bool `json:"agentsMigrated,omitempty"`
 
 	// MachineScopeSecrets records that stored credentials are protected for
 	// this PC rather than for the signed-in account. Starting before sign-in
@@ -436,9 +428,9 @@ func (c Config) replyStyleHintFor(agent string) string {
 	var own string
 	switch agent {
 	case "A":
-		own = strings.TrimSpace(c.Claude.ReplyStyleHint)
+		own = strings.TrimSpace(c.Claude.Instruction)
 	case "C":
-		own = strings.TrimSpace(c.Codex.ReplyStyleHint)
+		own = strings.TrimSpace(c.Codex.Instruction)
 	}
 	if own != "" {
 		return own
@@ -518,8 +510,8 @@ func loadConfig(path, dataDir string) (Config, error) {
 	cfg.GoogleVoice.ReplyStyleHint = normalizeReplyStyleHint(cfg.GoogleVoice.ReplyStyleHint)
 	// Per-agent overrides stay blank when nobody set one; blank means "follow
 	// the shared line above".
-	cfg.Codex.ReplyStyleHint = normalizeReplyStyleHint(cfg.Codex.ReplyStyleHint)
-	cfg.Claude.ReplyStyleHint = normalizeReplyStyleHint(cfg.Claude.ReplyStyleHint)
+	cfg.Codex.Instruction = normalizeReplyStyleHint(cfg.Codex.Instruction)
+	cfg.Claude.Instruction = normalizeReplyStyleHint(cfg.Claude.Instruction)
 	if cfg.GoogleVoice.MaxReplyParts < 1 {
 		cfg.GoogleVoice.MaxReplyParts = 4
 	}
@@ -599,6 +591,18 @@ func loadConfig(path, dataDir string) (Config, error) {
 	}
 	cfg.UI.Theme = normalizeTheme(cfg.UI.Theme)
 	syncAllowedNumbers(&cfg.GoogleVoice)
+	// Allowed numbers, security codes and reply behaviour now belong to the
+	// agent they reach. Move a pre-agent configuration onto the agents, then
+	// clean both together so a number can never be claimed twice.
+	migrateAgentSettings(&cfg)
+	if err := normalizeAgents(&cfg); err != nil {
+		// A stored file that cannot satisfy the rules must not stop FlipAi from
+		// starting: drop what does not fit rather than refusing to load.
+		salvageAgents(&cfg)
+	}
+	// The Google Voice email parser still checks one list; it is now derived
+	// from the agents so there is a single source of truth.
+	cfg.GoogleVoice.AllowedFrom = smsAllowedFrom(cfg)
 	return cfg, nil
 }
 

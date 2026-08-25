@@ -38,17 +38,19 @@ type VoiceCallConfig struct {
 	Claude VoiceAgentCallConfig `json:"claude"`
 }
 
+// VoiceAgentCallConfig is only about how to drive one desktop app during a
+// call. Who may call it lives with the agent, on the Agents page, alongside who
+// may text it -- there is one list of allowed numbers now, not two.
 type VoiceAgentCallConfig struct {
-	Enabled        bool   `json:"enabled"`
-	AllowedCallers string `json:"allowedCallers"`
-	// AllowedLabels is the opt-in escape hatch for the common case where the
-	// caller is in the user's Google Contacts: Google Voice then shows a name
-	// where FlipAi expects digits, and a number-only allowlist can never match.
-	// Entries are exact names the user copies from what Google Voice displayed.
-	AllowedLabels string `json:"allowedLabels,omitempty"`
+	Enabled       bool   `json:"enabled"`
 	AppTitle      string `json:"appTitle"`
 	AppCommand    string `json:"appCommand,omitempty"`
 	VoiceShortcut string `json:"voiceShortcut,omitempty"`
+
+	// Deprecated: retained so an existing voice-call.json keeps parsing. The
+	// allowlist moved to the agent; nothing reads these.
+	AllowedCallers string `json:"allowedCallers,omitempty"`
+	AllowedLabels  string `json:"allowedLabels,omitempty"`
 }
 
 type VoiceAudioDevice struct {
@@ -160,22 +162,6 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 		}
 		agent.AppCommand = clean(agent.AppCommand, 500)
 		agent.VoiceShortcut = clean(agent.VoiceShortcut, 80)
-		agent.AllowedCallers = strings.TrimSpace(agent.AllowedCallers)
-		if agent.AllowedCallers != "" {
-			numbers, err := normalizeAllowedPhoneList(agent.AllowedCallers)
-			if err != nil {
-				return err
-			}
-			agent.AllowedCallers = strings.Join(numbers, "\n")
-		}
-		labels, err := normalizeAllowedCallerLabels(agent.AllowedLabels, strict)
-		if err != nil {
-			return err
-		}
-		agent.AllowedLabels = strings.Join(labels, "\n")
-		if strict && agent.Enabled && agent.AllowedCallers == "" && agent.AllowedLabels == "" {
-			return errors.New("each voice-enabled agent needs at least one allowed caller")
-		}
 		return nil
 	}
 	if err := normalizeAgent(&cfg.Codex, "ChatGPT"); err != nil {
@@ -296,11 +282,16 @@ func allowedCallerLabel(raw, label string) bool {
 	return false
 }
 
-func voiceAgentAccepts(agent VoiceAgentCallConfig, number, label string) bool {
-	if number != "" && allowedPhone(agent.AllowedCallers, number) {
-		return true
+func voiceAgentAccepts(cfg Config, agent, number, label string) bool {
+	settings := agentSettings(cfg, agent)
+	if number != "" {
+		for _, p := range settings.Phones {
+			if p.Number == number {
+				return p.AllowsVoice()
+			}
+		}
 	}
-	return allowedCallerLabel(agent.AllowedLabels, label)
+	return allowedCallerLabel(settings.CallerNames, label)
 }
 
 // voiceCallDecision is the whole authorization answer for one ring, including
@@ -312,19 +303,24 @@ type voiceCallDecision struct {
 	Reason  string
 }
 
-func decideVoiceCall(cfg VoiceCallConfig, caller, label string) voiceCallDecision {
-	if !cfg.Enabled {
+// decideVoiceCall answers one ring. Who may call is the same list that decides
+// who may text, held on the agent, so a number is allowed in one place and
+// carries what it is allowed to do.
+func decideVoiceCall(vc VoiceCallConfig, cfg Config, caller, label string) voiceCallDecision {
+	if !vc.Enabled {
 		return voiceCallDecision{Reason: "Phone voice is turned off in FlipAi settings."}
 	}
-	if !cfg.Codex.Enabled && !cfg.Claude.Enabled {
+	if !vc.Codex.Enabled && !vc.Claude.Enabled {
 		return voiceCallDecision{Reason: "No agent is allowed on phone calls yet."}
 	}
 	number := normalizeUSPhone(caller)
 	label = normalizeCallerLabel(label)
-	codexOK := cfg.Codex.Enabled && voiceAgentAccepts(cfg.Codex, number, label)
-	claudeOK := cfg.Claude.Enabled && voiceAgentAccepts(cfg.Claude, number, label)
+	codexOK := vc.Codex.Enabled && voiceAgentAccepts(cfg, "C", number, label)
+	claudeOK := vc.Claude.Enabled && voiceAgentAccepts(cfg, "A", number, label)
 	switch {
 	case codexOK && claudeOK:
+		// A number belongs to one agent, so this only happens through a caller
+		// name listed on both. The default agent settles it.
 		if cfg.DefaultAgent == "A" {
 			return voiceCallDecision{Agent: "A", Allowed: true}
 		}
@@ -334,19 +330,21 @@ func decideVoiceCall(cfg VoiceCallConfig, caller, label string) voiceCallDecisio
 	case claudeOK:
 		return voiceCallDecision{Agent: "A", Allowed: true}
 	}
+	if number != "" {
+		if agent, phone, known := agentForSender(cfg, number); known && !phone.AllowsVoice() {
+			return voiceCallDecision{Reason: fmt.Sprintf("%s is allowed to text %s but not to call it. Change that number to \"Texts and calls\" or \"Calls only\" under Agents.", formatUSPhone(number), agentDisplayName(agent))}
+		} else if known {
+			return voiceCallDecision{Reason: fmt.Sprintf("%s reaches %s, but phone calls are not switched on for that agent.", formatUSPhone(number), agentDisplayName(agent))}
+		}
+	}
 	switch {
 	case number == "" && label == "":
 		return voiceCallDecision{Reason: "Google Voice showed no caller ID for this call, so FlipAi could not match it to an agent."}
 	case number == "":
-		return voiceCallDecision{Reason: fmt.Sprintf("Google Voice showed %q instead of a phone number, which usually means the caller is in your Google Contacts. Add that exact name under Allowed caller names to let it through.", label)}
+		return voiceCallDecision{Reason: fmt.Sprintf("Google Voice showed %q instead of a phone number, which usually means the caller is in your Google Contacts. Add that exact name under the agent's Allowed caller names to let it through.", label)}
 	default:
-		return voiceCallDecision{Reason: fmt.Sprintf("%s is not on any agent's allowed-caller list.", formatUSPhone(number))}
+		return voiceCallDecision{Reason: fmt.Sprintf("%s is not allowed on any agent.", formatUSPhone(number))}
 	}
-}
-
-func voiceAgentForCaller(cfg VoiceCallConfig, caller string) (string, bool) {
-	d := decideVoiceCall(cfg, caller, "")
-	return d.Agent, d.Allowed
 }
 
 var voiceRuntimeMu sync.Mutex
@@ -554,7 +552,10 @@ func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http
 // harness exercise, so the ring/answer/bridge/hang-up path is verifiable
 // without a phone line.
 type voiceBridge struct {
-	dataDir    string
+	dataDir string
+	// mainConfig supplies the agents, because who may call an agent is the same
+	// list as who may text it.
+	mainConfig func() Config
 	activate   func(cfg VoiceCallConfig, agent string) error
 	deactivate func(cfg VoiceCallConfig, agent string) error
 
@@ -562,8 +563,11 @@ type voiceBridge struct {
 	agent string
 }
 
-func newVoiceBridge(dataDir string, activate, deactivate func(VoiceCallConfig, string) error) *voiceBridge {
-	return &voiceBridge{dataDir: dataDir, activate: activate, deactivate: deactivate}
+func newVoiceBridge(dataDir string, mainConfig func() Config, activate, deactivate func(VoiceCallConfig, string) error) *voiceBridge {
+	if mainConfig == nil {
+		mainConfig = func() Config { return Config{} }
+	}
+	return &voiceBridge{dataDir: dataDir, mainConfig: mainConfig, activate: activate, deactivate: deactivate}
 }
 
 // AudioSettings tells the page which Windows endpoints Google Voice must use.
@@ -577,7 +581,7 @@ func (b *voiceBridge) AudioSettings() map[string]string {
 // Google Voice displayed either way so a refused call is explainable.
 func (b *voiceBridge) Incoming(caller, label string) bool {
 	cfg := loadVoiceCallConfig(b.dataDir)
-	d := decideVoiceCall(cfg, caller, label)
+	d := decideVoiceCall(cfg, b.mainConfig(), caller, label)
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 		s.Caller = normalizeUSPhone(caller)
 		s.CallerLabel = normalizeCallerLabel(label)
@@ -596,7 +600,7 @@ func (b *voiceBridge) Incoming(caller, label string) bool {
 // user picked up by hand still gets bridged if the caller is authorized.
 func (b *voiceBridge) Answered(caller, label string) bool {
 	cfg := loadVoiceCallConfig(b.dataDir)
-	d := decideVoiceCall(cfg, caller, label)
+	d := decideVoiceCall(cfg, b.mainConfig(), caller, label)
 	number := normalizeUSPhone(caller)
 	name := normalizeCallerLabel(label)
 	if !d.Allowed {

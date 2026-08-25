@@ -22,11 +22,10 @@ func newTestApp(t *testing.T) *App {
 	t.Helper()
 	tmp := t.TempDir()
 	cfg := defaultConfig(tmp)
-	cfg.GoogleVoice.AllowedFrom = "8455551212"
-	syncAllowedNumbers(&cfg.GoogleVoice)
-	if err := setSecurityCode(&cfg, "482913"); err != nil {
-		t.Fatal(err)
-	}
+	// One number reaches Codex, and neither agent asks for a code -- which is
+	// how a fresh install now arrives.
+	allowTestNumber(&cfg, "C", "8455551212")
+	cfg.Security.AgentsMigrated = true
 	a := &App{
 		dataDir:    tmp,
 		configPath: tmp + "/bridge.json",
@@ -69,11 +68,12 @@ func TestDesktopPagesRender(t *testing.T) {
 	pages := map[string][]string{
 		"/":            {"Bridge Google Voice SMS commands", "Recent activity", "Pause FlipAi"},
 		"/connections": {"Gmail / Google Voice", "End-to-end check", "Test message flow"},
-		"/agents":      {"Codex", "Claude", "Shared defaults", "Executable path"},
-		"/phone":       {"Allowed numbers", "Reply behavior", "Security code"},
-		"/activity":    {"All stages", "Search activity", "Privacy"},
-		"/settings":    {"Startup", "Appearance", "Notifications", "This install"},
-		"/advanced":    {"Local service", "Log files", "Service tools"},
+		// Everything an agent owns is on its own pane now: who may reach it, its
+		// code, its instruction and how it replies.
+		"/agents":   {"Codex", "Claude", "Executable path", "Allowed phone numbers", "Security code", "Replies from"},
+		"/activity": {"All stages", "Search activity", "Privacy"},
+		// Advanced was folded in, so one settings page holds both.
+		"/settings": {"Startup", "Appearance", "Notifications", "This install", "Local service", "Log files", "Service tools", "Message routing"},
 	}
 	for path, want := range pages {
 		rr := a.do(t, http.MethodGet, path, nil)
@@ -87,13 +87,28 @@ func TestDesktopPagesRender(t *testing.T) {
 			}
 		}
 		// Every page carries the same shell.
-		for _, item := range []string{`href="/connections"`, `href="/agents"`, `href="/phone"`, `href="/activity"`, `href="/settings"`, `href="/advanced"`} {
+		for _, item := range []string{`href="/connections"`, `href="/agents"`, `href="/activity"`, `href="/settings"`} {
 			if !strings.Contains(body, item) {
 				t.Errorf("%s is missing nav entry %s", path, item)
 			}
 		}
 		if strings.Contains(body, "//fonts.googleapis.com") || strings.Contains(body, "https://cdn") {
 			t.Fatalf("%s must not depend on external fonts or CDNs", path)
+		}
+	}
+}
+
+// The two retired pages still answer, so a bookmark or an older in-app link
+// lands where their contents went.
+func TestRetiredPagesRedirectToWhereTheirSettingsWent(t *testing.T) {
+	a := newTestApp(t)
+	for path, want := range map[string]string{"/phone": "/agents", "/advanced": "/settings"} {
+		rr := a.do(t, http.MethodGet, path, nil)
+		if rr.Code != http.StatusFound {
+			t.Errorf("%s status=%d, want a redirect", path, rr.Code)
+		}
+		if got := rr.Header().Get("Location"); got != want {
+			t.Errorf("%s redirected to %q, want %q", path, got, want)
 		}
 	}
 }
@@ -139,7 +154,7 @@ func TestTokenLinkStartsASession(t *testing.T) {
 
 func TestActionsRefuseGet(t *testing.T) {
 	a := newTestApp(t)
-	for _, path := range []string{"/bridge/pause", "/phone/numbers/add", "/settings/reset", "/quit", "/activity/clear"} {
+	for _, path := range []string{"/bridge/pause", "/agents/numbers/add", "/settings/reset", "/quit", "/activity/clear"} {
 		rr := a.do(t, http.MethodGet, path, nil)
 		if rr.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("GET %s returned %d, want 405", path, rr.Code)
@@ -193,122 +208,125 @@ func TestPausedBridgeSkipsPolling(t *testing.T) {
 	}
 }
 
-func TestAllowedNumberLifecycle(t *testing.T) {
+func TestAgentNumberLifecycle(t *testing.T) {
 	a := newTestApp(t)
 
-	rr := a.do(t, http.MethodPost, "/phone/numbers/add", url.Values{"number": {"(212) 555-0147"}, "label": {"Work"}})
+	rr := a.do(t, http.MethodPost, "/agents/numbers/add", url.Values{
+		"agent": {"C"}, "newNumber": {"(212) 555-0147"}, "newLabel": {"Work"}, "newAccess": {"sms"},
+	})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("add returned %d: %s", rr.Code, rr.Body.String())
 	}
 	cfg := a.reloadConfig(t)
-	if len(cfg.GoogleVoice.AllowedNumbers) != 2 {
-		t.Fatalf("expected 2 allowed numbers, got %d", len(cfg.GoogleVoice.AllowedNumbers))
+	agent, phone, ok := agentForSender(cfg, "2125550147")
+	if !ok || agent != "C" {
+		t.Fatalf("the number did not land on Codex: agent=%q ok=%v", agent, ok)
 	}
+	if phone.Label != "Work" || phone.Access != AccessSMS || phone.Added.IsZero() {
+		t.Fatalf("label, access and date were not recorded: %#v", phone)
+	}
+	// A texts-only number still reaches the SMS parser, and never the calls.
 	if !strings.Contains(cfg.GoogleVoice.AllowedFrom, "2125550147") {
 		t.Fatalf("the routing allowlist was not updated: %q", cfg.GoogleVoice.AllowedFrom)
 	}
-	var added AllowedNumber
-	for _, n := range cfg.GoogleVoice.AllowedNumbers {
-		if n.Number == "2125550147" {
-			added = n
-		}
-	}
-	if added.Label != "Work" || added.Added.IsZero() {
-		t.Fatalf("label and added date were not recorded: %#v", added)
+	if phone.AllowsVoice() {
+		t.Fatal("a texts-only number must not be allowed to call")
 	}
 
-	// html/template escapes the leading "+" as an entity, so match the part
-	// of the formatted number that survives escaping.
-	page := a.do(t, http.MethodGet, "/phone", nil).Body.String()
+	page := a.do(t, http.MethodGet, "/agents", nil).Body.String()
 	if !strings.Contains(page, "(212) 555-0147") || !strings.Contains(page, "Work") {
-		t.Fatal("the Phone page does not list the new number with its label")
+		t.Fatal("the Agents page does not list the new number with its label")
 	}
 
-	if rr := a.do(t, http.MethodPost, "/phone/numbers/remove", url.Values{"number": {"2125550147"}}); rr.Code != http.StatusSeeOther {
+	// A number reaches one agent. Claiming it for the other has to be refused,
+	// or the allowlist would not answer "who may command this agent".
+	rr = a.do(t, http.MethodPost, "/agents/numbers/add", url.Values{
+		"agent": {"A"}, "newNumber": {"2125550147"}, "newAccess": {"all"},
+	})
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "one agent only") {
+		t.Fatalf("claiming a number for a second agent returned %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if rr := a.do(t, http.MethodPost, "/agents/numbers/remove", url.Values{"number": {"C:2125550147"}}); rr.Code != http.StatusSeeOther {
 		t.Fatalf("remove returned %d: %s", rr.Code, rr.Body.String())
 	}
-	if got := len(a.reloadConfig(t).GoogleVoice.AllowedNumbers); got != 1 {
-		t.Fatalf("after removal expected 1 number, got %d", got)
+	if _, _, ok := agentForSender(a.reloadConfig(t), "2125550147"); ok {
+		t.Fatal("the number was not removed")
 	}
 
-	// Removing the last number would silently stop the bridge, so it is refused.
-	rr = a.do(t, http.MethodPost, "/phone/numbers/remove", url.Values{"number": {"8455551212"}})
-	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "at least one allowed number") {
-		t.Fatalf("removing the last number returned %d: %s", rr.Code, rr.Body.String())
-	}
-
-	rr = a.do(t, http.MethodPost, "/phone/numbers/add", url.Values{"number": {"nonsense"}})
-	if rr.Code != http.StatusBadRequest {
+	if rr := a.do(t, http.MethodPost, "/agents/numbers/add", url.Values{"agent": {"C"}, "newNumber": {"nonsense"}}); rr.Code != http.StatusBadRequest {
 		t.Fatalf("a malformed number returned %d, want 400", rr.Code)
 	}
 }
 
-func TestReplyBehaviourValidationAndSave(t *testing.T) {
+func TestReplyBehaviourIsPerAgent(t *testing.T) {
 	a := newTestApp(t)
-	rr := a.do(t, http.MethodPost, "/phone/save", url.Values{"replyMaxChars": {"50000"}})
+	rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"replyMaxChars": {"50000"}})
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "reply length") {
 		t.Fatalf("out-of-range reply length returned %d: %s", rr.Code, rr.Body.String())
 	}
-	if a.reloadConfig(t).GoogleVoice.ReplyMaxChars == 50000 {
-		t.Fatal("an invalid value was saved anyway")
-	}
 
-	rr = a.do(t, http.MethodPost, "/phone/save", url.Values{
-		"replyMaxChars":    {"420"},
-		"maxReplyParts":    {"6"},
-		"progressInterval": {"90"},
-		"replyAck":         {"0"},
-		"progressUpdates":  {"0", "1"},
+	rr = a.do(t, http.MethodPost, "/agents/save", url.Values{
+		"replyMaxChars":          {"420"},
+		"maxReplyParts":          {"6"},
+		"codexAck":               {"1"},
+		"codexProgress":          {"0"},
+		"codexProgressInterval":  {"300"},
+		"claudeAck":              {"0"},
+		"claudeProgress":         {"1"},
+		"claudeProgressInterval": {"60"},
 	})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("save returned %d: %s", rr.Code, rr.Body.String())
 	}
 	cfg := a.reloadConfig(t)
-	if cfg.GoogleVoice.ReplyMaxChars != 420 || cfg.GoogleVoice.MaxReplyParts != 6 || cfg.GoogleVoice.ProgressIntervalSeconds != 90 {
-		t.Fatalf("reply settings were not stored: %#v", cfg.GoogleVoice)
+	if cfg.GoogleVoice.ReplyMaxChars != 420 || cfg.GoogleVoice.MaxReplyParts != 6 {
+		t.Fatalf("shared reply sizing was not stored: %#v", cfg.GoogleVoice)
 	}
-	if cfg.GoogleVoice.ReplyAck {
-		t.Fatal("an unchecked toggle must turn the setting off")
+	codex, claude := agentSettings(cfg, "C"), agentSettings(cfg, "A")
+	if !codex.ackEnabled() || codex.progressEnabled() || codex.ProgressIntervalSeconds != 300 {
+		t.Fatalf("Codex reply behaviour was not stored: %#v", codex)
 	}
-	if !cfg.GoogleVoice.ProgressUpdates {
-		t.Fatal("a checked toggle must turn the setting on")
+	if claude.ackEnabled() || !claude.progressEnabled() || claude.ProgressIntervalSeconds != 60 {
+		t.Fatalf("Claude reply behaviour was not stored: %#v", claude)
 	}
 }
 
-func TestSecurityCodeToggle(t *testing.T) {
+func TestAgentSecurityCodeToggle(t *testing.T) {
 	a := newTestApp(t)
 
-	// Turning protection off keeps routing working and records the choice.
-	rr := a.do(t, http.MethodPost, "/phone/security", url.Values{"requireCode": {"0"}})
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("disable returned %d: %s", rr.Code, rr.Body.String())
-	}
-	cfg := a.reloadConfig(t)
-	if cfg.Security.RequireCode || cfg.Security.CodeHash == "" {
-		t.Fatalf("expected code protection off with an internal hash retained: %#v", cfg.Security)
+	// Requiring a code before setting one has to be refused, or the agent would
+	// silently stop answering every text.
+	rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"codexRequireCode": {"1"}})
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "security code") {
+		t.Fatalf("requiring a code with none set returned %d: %s", rr.Code, rr.Body.String())
 	}
 
-	// A brand new install has no code, so turning protection on must ask for one.
-	fresh := newTestApp(t)
-	fresh.cfg.Security.CodeHash, fresh.cfg.Security.CodeSalt = "", ""
-	rr = fresh.do(t, http.MethodPost, "/phone/security", url.Values{"requireCode": {"0", "1"}})
-	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "set a security code first") {
-		t.Fatalf("enabling without a code returned %d: %s", rr.Code, rr.Body.String())
-	}
-
-	rr = fresh.do(t, http.MethodPost, "/phone/security", url.Values{"requireCode": {"0", "1"}, "securityCode": {"hunter42"}})
+	// Setting the code and requiring it in one save works.
+	rr = a.do(t, http.MethodPost, "/agents/save", url.Values{
+		"codexCode": {"hunter42"}, "codexRequireCode": {"1"},
+	})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("setting a code returned %d: %s", rr.Code, rr.Body.String())
 	}
-	cfg = fresh.reloadConfig(t)
-	if !cfg.Security.RequireCode || !verifySecurityCode(cfg, "hunter42") {
-		t.Fatal("the new security code was not stored")
+	cfg := a.reloadConfig(t)
+	codex := agentSettings(cfg, "C")
+	if !codex.RequireCode || !verifyAgentCode(codex, "hunter42") {
+		t.Fatalf("the Codex code was not stored: %#v", codex)
 	}
-	if strings.Contains(fresh.do(t, http.MethodGet, "/phone", nil).Body.String(), "hunter42") {
-		t.Fatal("the security code must never be rendered back to the page")
+	// One agent's code is its own.
+	if claude := agentSettings(cfg, "A"); claude.RequireCode || verifyAgentCode(claude, "hunter42") {
+		t.Fatalf("the code leaked onto the other agent: %#v", claude)
+	}
+
+	// Turning it off keeps the stored code so it can be turned back on.
+	if rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"codexRequireCode": {"0"}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("disabling returned %d: %s", rr.Code, rr.Body.String())
+	}
+	if codex := agentSettings(a.reloadConfig(t), "C"); codex.RequireCode || codex.CodeHash == "" {
+		t.Fatalf("expected the requirement off with the code retained: %#v", codex)
 	}
 }
-
 func TestAgentSettingsSave(t *testing.T) {
 	a := newTestApp(t)
 	rr := a.do(t, http.MethodPost, "/agents/save", url.Values{

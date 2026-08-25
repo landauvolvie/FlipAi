@@ -21,13 +21,45 @@ func init() {
 
 type agentsView struct {
 	pageView
-	Tiles []tileView
 
-	// The three SMS instruction editors, built by the handler so the template
-	// stays declarative and every editor is assembled the same way.
+	// One SMS instruction editor per agent. There is no shared editor any more:
+	// the instruction is part of what makes an agent behave the way it does, so
+	// it belongs to the agent.
 	CodexPrompt  promptEditorView
 	ClaudePrompt promptEditorView
-	SharedPrompt promptEditorView
+
+	// Who may reach each agent, and how it answers them.
+	CodexAccess  agentAccessView
+	ClaudeAccess agentAccessView
+}
+
+// agentAccessView is everything about who may reach one agent and how it
+// replies. A phone number lives here, on the agent it reaches, rather than on a
+// shared list that a prefix had to steer.
+type agentAccessView struct {
+	Agent       string // "C" or "A"
+	Name        string
+	Prefix      string
+	Phones      []AgentPhone
+	CallerNames string
+	RequireCode bool
+	HasCode     bool
+	Ack         bool
+	Progress    bool
+	Interval    int
+	IsDefault   bool
+	Voice       bool
+}
+
+func (v agentAccessView) Field(name string) string { return agentFieldName(v.Agent, name) }
+
+// agentFieldName keeps every per-agent form field distinct without repeating
+// the agent letter at each use.
+func agentFieldName(agent, name string) string {
+	if agent == "A" {
+		return "claude" + strings.ToUpper(name[:1]) + name[1:]
+	}
+	return "codex" + strings.ToUpper(name[:1]) + name[1:]
 }
 
 // promptEditorView is one SMS instruction editor. Fallback is the wording that
@@ -43,7 +75,111 @@ type promptEditorView struct {
 	Max      int
 }
 
-const agentsPageHTML = `{{define "content"}}
+const agentsPageHTML = `
+{{define "agentAccess"}}
+<section class="card">
+  <div class="card-head divided">
+    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}. A number belongs to one agent, so adding it here removes it from the other.</p></div>
+  </div>
+  <div class="card-body">
+    {{if .Phones}}
+    <div class="rows">
+      {{range .Phones}}
+      <div class="row">
+        <div class="label">{{.Display}}{{if .Label}}<span>{{.Label}}</span>{{end}}</div>
+        <div class="value">
+          <select name="access-{{$.Agent}}-{{.Number}}" aria-label="What {{.Display}} may do">
+            <option value="all"{{if eq .Access "all"}} selected{{end}}>Texts and calls</option>
+            <option value="sms"{{if eq .Access "sms"}} selected{{end}}>Texts only</option>
+            <option value="voice"{{if eq .Access "voice"}} selected{{end}}>Calls only</option>
+          </select>
+          <button class="btn small danger" type="submit" formaction="/agents/numbers/remove" formnovalidate name="number" value="{{$.Agent}}:{{.Number}}" data-confirm="Remove {{.Display}} from {{$.Name}}?">{{icon "x-ring"}}Remove</button>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="callout">No number can reach {{.Name}} yet. Add the phone you text from.</p>
+    {{end}}
+
+    <div class="grid-2">
+      <div class="field">
+        <label for="{{.Agent}}-newNumber">Add a number</label>
+        <input id="{{.Agent}}-newNumber" type="text" name="newNumber" placeholder="845 555 1234" autocomplete="off">
+        <p class="hint">US or Canada, 10 digits. A leading +1 is fine.</p>
+      </div>
+      <div class="field">
+        <label for="{{.Agent}}-newLabel">Name it (optional)</label>
+        <input id="{{.Agent}}-newLabel" type="text" name="newLabel" placeholder="My phone" autocomplete="off">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="field">
+        <label for="{{.Agent}}-newAccess">What it may do</label>
+        <select id="{{.Agent}}-newAccess" name="newAccess">
+          <option value="all">Texts and calls</option>
+          <option value="sms">Texts only</option>
+          <option value="voice">Calls only</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="btn accent" type="submit" formaction="/agents/numbers/add" formnovalidate name="agent" value="{{.Agent}}">{{icon "check"}}Add to {{.Name}}</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="{{.Field "callerNames"}}">Allowed caller names</label>
+      <textarea id="{{.Field "callerNames"}}" name="{{.Field "callerNames"}}" rows="2" placeholder="Jane Appleseed">{{.CallerNames}}</textarea>
+      <p class="hint">Only for calls. Google Voice shows a contact name instead of a number when the caller is in your Google Contacts, and there is no number to match. Type the name exactly as it appears, one per line.</p>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head divided">
+    <div><h2>Security code</h2><p>Make {{.Name}} refuse a text that does not start with its own code. Off unless you turn it on.</p></div>
+  </div>
+  <div class="card-body">
+    <div class="toggle">
+      <div class="label">Require a code for {{.Name}}<span>{{if .HasCode}}A code is set.{{else}}Set one below first.{{end}}</span></div>
+      <label class="switch"><input type="checkbox" name="{{.Field "requireCode"}}" value="1"{{if .RequireCode}} checked{{end}}><span class="slider"></span></label>
+    </div>
+    <div class="field">
+      <label for="{{.Field "code"}}">{{if .HasCode}}Replace the code{{else}}Set a code{{end}}</label>
+      <input id="{{.Field "code"}}" type="password" name="{{.Field "code"}}" placeholder="{{if .HasCode}}Leave blank to keep the current code{{else}}At least 6 characters{{end}}" autocomplete="new-password">
+      <p class="hint">Text it in front of your message: <b class="mono">yourcode {{.Prefix}}: check the build</b>. Each agent has its own.</p>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head divided">
+    <div><h2>Replies from {{.Name}}</h2><p>What {{.Name}} texts back while it works.</p></div>
+  </div>
+  <div class="card-body">
+    <div class="toggle">
+      <div class="label">Confirm receipt<span>Texts "working on it" the moment a command is accepted.</span></div>
+      <label class="switch"><input type="checkbox" name="{{.Field "ack"}}" value="1"{{if .Ack}} checked{{end}}><span class="slider"></span></label>
+    </div>
+    <div class="toggle">
+      <div class="label">Progress texts<span>Sends a short "still working" line during a long turn.</span></div>
+      <label class="switch"><input type="checkbox" name="{{.Field "progress"}}" value="1"{{if .Progress}} checked{{end}}><span class="slider"></span></label>
+    </div>
+    <div class="field">
+      <label for="{{.Field "progressInterval"}}">How often</label>
+      <select id="{{.Field "progressInterval"}}" name="{{.Field "progressInterval"}}">
+        <option value="60"{{if eq .Interval 60}} selected{{end}}>Every minute</option>
+        <option value="120"{{if eq .Interval 120}} selected{{end}}>Every 2 minutes</option>
+        <option value="300"{{if eq .Interval 300}} selected{{end}}>Every 5 minutes</option>
+        <option value="900"{{if eq .Interval 900}} selected{{end}}>Every 15 minutes</option>
+      </select>
+    </div>
+  </div>
+</section>
+{{end}}
+
+{{define "content"}}
 <div class="page-head">
   <div>
     <h1>Agents</h1>
@@ -54,11 +190,9 @@ const agentsPageHTML = `{{define "content"}}
   </div>
 </div>
 
-<div class="tiles">{{range .Tiles}}{{template "tile" .}}{{end}}</div>
 
 <input class="agent-switch" type="radio" name="agent-view" id="agent-codex" checked>
 <input class="agent-switch" type="radio" name="agent-view" id="agent-claude">
-<input class="agent-switch" type="radio" name="agent-view" id="agent-shared">
 
 <div class="agents-shell">
   <aside class="agent-rail">
@@ -77,11 +211,6 @@ const agentsPageHTML = `{{define "content"}}
           <b>Claude <span class="agent-chip{{if not .S.ClaudeCheck.Ready}} warn{{end}}">{{if not .S.ClaudeCheck.Known}}Untested{{else if .S.ClaudeCheck.OK}}Ready{{else}}Attention{{end}}</span></b>
           <span>Answers {{.S.ClaudePrefix}}: messages</span>
         </span>
-      </label>
-      <div class="nav-label">Both agents</div>
-      <label class="agent-item" for="agent-shared">
-        <span class="mark shield" style="width:32px;height:32px">{{icon "sliders"}}</span>
-        <span class="agent-item-copy"><b>Shared defaults</b><span>Routing fallbacks and limits</span></span>
       </label>
     </div>
   </aside>
@@ -102,15 +231,9 @@ const agentsPageHTML = `{{define "content"}}
             </div>
           </div>
           <div class="agent-head-actions">
-            <a class="btn" href="/codex/test">{{icon "play"}}Test</a>
-            <div class="menu">
-              <button class="btn icon" type="button" data-menu-trigger aria-label="More Codex actions">{{icon "more"}}</button>
-              <div class="menu-panel">
-                <button type="submit" name="defaultAgent" value="C">{{icon "check"}}Set as default agent</button>
-                <a href="/open/folder?which=codex">{{icon "folder"}}Open working folder</a>
-                <a href="/activity?stage=agent">{{icon "clock"}}View agent activity</a>
-              </div>
-            </div>
+            <button class="btn" type="button" data-test="/api/test/codex" data-test-label="Test Codex">{{icon "play"}}Test</button>
+            {{if not .CodexAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="C" formnovalidate>{{icon "check"}}Make default</button>{{end}}
+            <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Codex</button>
           </div>
         </div>
@@ -199,6 +322,8 @@ const agentsPageHTML = `{{define "content"}}
             </div>
           </div>
         </section>
+
+        {{template "agentAccess" .CodexAccess}}
       </form>
     </section>
 
@@ -217,15 +342,14 @@ const agentsPageHTML = `{{define "content"}}
             </div>
           </div>
           <div class="agent-head-actions">
-            <a class="btn" href="/claude/test">{{icon "play"}}Test</a>
-            <div class="menu">
-              <button class="btn icon" type="button" data-menu-trigger aria-label="More Claude actions">{{icon "more"}}</button>
-              <div class="menu-panel">
-                <button type="submit" name="defaultAgent" value="A">{{icon "check"}}Set as default agent</button>
-                <a href="/open/folder?which=claude">{{icon "folder"}}Open working folder</a>
-                <a href="/activity?stage=agent">{{icon "clock"}}View agent activity</a>
-              </div>
-            </div>
+            {{if not .S.ClaudeConnNeedsSignIn}}
+            <button class="btn" type="submit" formaction="/claude/disconnect" formnovalidate data-confirm="Disconnect Claude? FlipAi will need connecting again before it can answer a text.">{{icon "x-ring"}}Disconnect</button>
+            {{else}}
+            <button class="btn accent" type="submit" formaction="/claude/connect" formnovalidate>{{icon "link"}}Connect</button>
+            {{end}}
+            <button class="btn" type="button" data-test="/api/test/claude" data-test-label="Test Claude">{{icon "play"}}Test</button>
+            {{if not .ClaudeAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="A" formnovalidate>{{icon "check"}}Make default</button>{{end}}
+            <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Claude</button>
           </div>
         </div>
@@ -379,104 +503,52 @@ const agentsPageHTML = `{{define "content"}}
             </details>
           </div>
         </section>
+
+        {{template "agentAccess" .ClaudeAccess}}
       </form>
     </section>
 
-    <!-- -------------------------- Shared defaults ------------------------- -->
-    <section class="agent-pane" id="shared-pane">
-      <form method="post" action="/agents/save">
-        <div class="agent-head">
-          <div class="agent-head-main">
-            <span class="mark shield" style="width:40px;height:40px;border-radius:11px">{{icon "sliders"}}</span>
-            <div><h2>Shared defaults</h2><p>Only what both agents genuinely share. Everything else lives with its agent.</p></div>
-          </div>
-          <div class="agent-head-actions"><button class="btn primary" type="submit">Save defaults</button></div>
-        </div>
-
-        <section class="card">
-          <div class="card-head divided"><div><h2>Routing</h2><p>What happens to a text that names no agent, and how long any one turn may run.</p></div></div>
-          <div class="card-body">
-            <div class="grid-3">
-              <div class="field">
-                <label for="defaultAgent">Default agent</label>
-                <select id="defaultAgent" name="defaultAgent">
-                  <option value="C"{{if eq .S.DefaultAgent "C"}} selected{{end}}>Codex</option>
-                  <option value="A"{{if eq .S.DefaultAgent "A"}} selected{{end}}>Claude</option>
-                </select>
-                <p class="hint">Used when a text carries no {{.S.CodexPrefix}}: or {{.S.ClaudePrefix}}: shortcut.</p>
-              </div>
-              <div class="field">
-                <label for="newSessionCommand">New-conversation keyword</label>
-                <input id="newSessionCommand" type="text" name="newSessionCommand" value="{{.S.NewSessionCommand}}" maxlength="24" required>
-                <p class="hint">Works as <b>{{.S.CodexPrefix}} {{.S.NewSessionCommand}}</b>, <b>{{.S.ClaudePrefix}} {{.S.NewSessionCommand}}</b>, or alone for the default agent.</p>
-              </div>
-              <div class="field">
-                <label for="turnTimeout">Turn timeout</label>
-                <div class="input-suffix"><input id="turnTimeout" type="number" name="turnTimeout" min="1" max="600" value="{{.S.TurnTimeout}}"><span class="unit">min</span></div>
-                <p class="hint">Maximum time any one agent turn may run.</p>
-              </div>
-            </div>
-            <div class="field">
-              <label for="cwd">Fallback working folder</label>
-              <div class="input-group">
-                <input id="cwd" type="text" name="cwd" value="{{.S.Cwd}}">
-                <button class="btn" type="button" data-browse="#cwd">Browse</button>
-              </div>
-              <p class="hint">Used only by an agent that has no folder of its own above.</p>
-            </div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card-head divided">
-            <div><h2>Shared SMS instruction</h2><p>The wording an agent uses when it has no instruction of its own. Editing it changes both agents that are still following the default.</p></div>
-          </div>
-          <div class="card-body">
-            {{template "promptEditor" .SharedPrompt}}
-            <div class="rows" style="margin-top:16px">
-              <div class="row"><div class="label">Codex is sending</div><div class="value">{{if .S.CodexReplyStyleCustom}}<span class="pill brand">Its own instruction</span>{{else}}<span class="pill">This shared one</span>{{end}}</div></div>
-              <div class="row"><div class="label">Claude is sending</div><div class="value">{{if .S.ClaudeReplyStyleCustom}}<span class="pill brand">Its own instruction</span>{{else}}<span class="pill">This shared one</span>{{end}}</div></div>
-            </div>
-          </div>
-        </section>
-      </form>
-    </section>
   </div>
 </div>
 {{end}}`
 
 func (a *App) agentsPage(w http.ResponseWriter, r *http.Request) {
 	s := a.status()
-	codexValue, codexTone := checkLabel(s.CodexCheck, "Ready")
-	claudeValue, claudeTone := checkLabel(s.ClaudeCheck, "Ready")
 	view := agentsView{pageView: pageView{Shell: a.shell(r, "agents", "Agents"), S: s}}
-	view.Tiles = []tileView{
-		{Brand: "codex", Title: "Codex", Value: codexValue, Tone: codexTone, Sub: "Answers " + s.CodexPrefix + ": messages",
-			FootLabel: "Executable", FootValue: foundLabel(s.CodexFound), FootTone: codexTone},
-		{Brand: "claude", Title: "Claude", Value: claudeValue, Tone: claudeTone, Sub: "Answers " + s.ClaudePrefix + ": messages",
-			FootLabel: "Executable", FootValue: foundLabel(s.ClaudeFound), FootTone: claudeTone},
-		{Icon: "cpu", Title: "Default agent", Value: s.DefaultAgentName, Tone: "brand", Sub: "Used by a text with no shortcut",
-			FootLabel: "Turn timeout", FootValue: itoa(s.TurnTimeout) + " min"},
-		{Icon: "send", Title: "SMS instruction", Value: promptSourceLabel(s), Tone: "", Sub: "Sent with every text",
-			FootLabel: "Shared wording", FootValue: itoa(len(s.SharedReplyStyle)) + " chars"},
-	}
 	view.CodexPrompt = promptEditorView{
 		Name: "codexReplyStyle", Title: "What Codex is told about SMS",
-		Value: s.CodexReplyStyle, Fallback: s.SharedReplyStyle, Custom: s.CodexReplyStyleCustom,
-		Hint: "Leave empty to follow the shared instruction.", Max: s.ReplyStyleMaxChars,
+		Value: s.CodexReplyStyle, Fallback: s.DefaultReplyStyle, Custom: s.CodexReplyStyleCustom,
+		Hint: "Leave empty to use the wording FlipAi ships with.", Max: s.ReplyStyleMaxChars,
 	}
 	view.ClaudePrompt = promptEditorView{
 		Name: "claudeReplyStyle", Title: "What Claude is told about SMS",
-		Value: s.ClaudeReplyStyle, Fallback: s.SharedReplyStyle, Custom: s.ClaudeReplyStyleCustom,
-		Hint: "Leave empty to follow the shared instruction.", Max: s.ReplyStyleMaxChars,
+		Value: s.ClaudeReplyStyle, Fallback: s.DefaultReplyStyle, Custom: s.ClaudeReplyStyleCustom,
+		Hint: "Leave empty to use the wording FlipAi ships with.", Max: s.ReplyStyleMaxChars,
 	}
-	view.SharedPrompt = promptEditorView{
-		Name: "sharedReplyStyle", Title: "Shared instruction",
-		Value: s.SharedReplyStyle, Fallback: s.DefaultReplyStyle,
-		Custom: s.SharedReplyStyle != s.DefaultReplyStyle,
-		Hint:   "Clearing it restores the wording FlipAi ships with.", Max: s.ReplyStyleMaxChars,
-	}
+
+	cfg := a.snapshotConfig()
+	view.CodexAccess = newAgentAccessView(cfg, "C", s.CodexPrefix)
+	view.ClaudeAccess = newAgentAccessView(cfg, "A", s.ClaudePrefix)
 	a.render(w, "agents", view)
+}
+
+func newAgentAccessView(cfg Config, agent, prefix string) agentAccessView {
+	settings := agentSettings(cfg, agent)
+	name := "Codex"
+	if agent == "A" {
+		name = "Claude"
+	}
+	interval := settings.ProgressIntervalSeconds
+	if interval <= 0 {
+		interval = 120
+	}
+	return agentAccessView{
+		Agent: agent, Name: name, Prefix: prefix,
+		Phones: settings.Phones, CallerNames: settings.CallerNames,
+		RequireCode: settings.RequireCode, HasCode: settings.CodeHash != "",
+		Ack: settings.ackEnabled(), Progress: settings.progressEnabled(),
+		Interval: interval, IsDefault: cfg.DefaultAgent == agent,
+	}
 }
 
 // promptSourceLabel says, in three words, whether the agents are still sending

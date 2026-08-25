@@ -265,10 +265,13 @@ func (a *App) handler() http.Handler {
 	for path, page := range map[string]http.HandlerFunc{
 		"/connections": a.connectionsPage,
 		"/agents":      a.agentsPage,
-		"/phone":       a.phonePage,
 		"/activity":    a.activityPage,
 		"/settings":    a.settingsPage,
-		"/advanced":    a.advancedPage,
+		// Retired pages. A bookmark, an in-page link from an older build, or the
+		// installer's finish page can still point at these, so they land where
+		// their contents went instead of on a 404.
+		"/phone":    pageMovedTo("/agents"),
+		"/advanced": pageMovedTo("/settings"),
 	} {
 		m.HandleFunc(path, a.requireAuth(page))
 	}
@@ -290,10 +293,8 @@ func (a *App) handler() http.Handler {
 		"/claude/connect":        a.claudeConnect,
 		"/claude/connect/verify": a.claudeConnectVerify,
 		"/claude/disconnect":     a.claudeDisconnect,
-		"/phone/save":            a.savePhone,
-		"/phone/security":        a.savePhoneSecurity,
-		"/phone/numbers/add":     a.addPhoneNumber,
-		"/phone/numbers/remove":  a.removePhoneNumber,
+		"/agents/numbers/add":    a.addAgentNumber,
+		"/agents/numbers/remove": a.removeAgentNumber,
 		"/settings/save":         a.saveSettings,
 		"/settings/startup":      a.saveStartup,
 		"/settings/updates":      a.saveUpdates,
@@ -320,6 +321,13 @@ func (a *App) handler() http.Handler {
 		m.HandleFunc(path, a.requireAuth(action))
 	}
 	return m
+}
+
+// pageMovedTo sends a retired page to the one that absorbed it.
+func pageMovedTo(target string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusFound)
+	}
 }
 
 // requirePost keeps state-changing routes off GET, so a link or a prefetch can
