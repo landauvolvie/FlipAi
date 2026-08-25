@@ -62,6 +62,24 @@ const voiceDesktopInitScript = `
     return select(id,items,selected||'');
   }
 
+  function serviceErrorCard(err){
+    q('#voice-call-unavailable')?.remove();
+    const card=E('section','card'); card.id='voice-call-unavailable';
+    const [head,actions]=sectionHead('Google Voice calls','Phone-to-agent calling is installed, but the local voice service could not be reached.');
+    head.querySelector('h2').append(document.createTextNode(' '),pill('Needs attention','warn'));
+    const retry=btn('Retry','btn accent'); actions.append(retry); card.append(head);
+    const body=E('div','card-body');
+    const callout=E('p','callout'); callout.append(E('b','', 'Voice service error: '),document.createTextNode(err?.message||String(err||'unknown error'))); body.append(callout);
+    body.append(E('p','hint','Restart FlipAi first. The calling controls will reappear automatically when the local voice component is available. SMS is unaffected.'));
+    card.append(body);
+    const anchor=q('.tiles'); const cards=q('.cards-2');
+    if(location.pathname==='/agents') q('#codex-pane')?.prepend(card);
+    else if(anchor) anchor.after(card);
+    else if(cards) cards.before(card);
+    else q('.content')?.append(card);
+    retry.addEventListener('click',()=>location.reload());
+  }
+
   function connectionsCard(){
     const cfg=snapshot.config,rt=snapshot.runtime,card=E('section','card'); card.id='voice-call-connection-card';
     const [head,actions]=sectionHead('Google Voice calls','Dedicated Google Voice inside FlipAi for phone conversations with desktop voice.');
@@ -117,8 +135,9 @@ const voiceDesktopInitScript = `
   }
 
   async function install(){
-    if(!document.documentElement.dataset.flipaiDesktop)return;
-    try{await refresh()}catch(_){return}
+    if(!globalThis.__flipaiDesktop && !document.documentElement?.dataset.flipaiDesktop)return;
+    try{await refresh()}catch(e){serviceErrorCard(e);return}
+    q('#voice-call-unavailable')?.remove();
     if(location.pathname==='/connections')connectionsCard();
     if(location.pathname==='/settings')settingsCard();
     if(location.pathname==='/agents'){agentCard('C');agentCard('A');}
