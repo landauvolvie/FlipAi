@@ -36,15 +36,36 @@ var (
 
 const flipAiWindowTitle = "FlipAi"
 
+// flipAiWindowClass is the window class the WebView2 binding registers. The
+// search has to be class-scoped: the tray process owns a hidden helper window
+// with the very same title, and matching that one meant the desktop window was
+// never created at all -- while restoring it put an empty frame on screen.
+const flipAiWindowClass = "webview"
+
 // flipAiWindowHWND finds an already-open FlipAi window, whichever process owns
 // it. Opening from the tray should raise the window the user already has rather
-// than stack another copy of it on top.
+// than stack another copy on top of it.
+//
+// It answers 0 for anything it is not certain about. Opening a second window is
+// a small annoyance; failing to open one at all leaves the user with no way
+// into the app.
 func flipAiWindowHWND() uintptr {
+	class, err := syscall.UTF16PtrFromString(flipAiWindowClass)
+	if err != nil {
+		return 0
+	}
 	title, err := syscall.UTF16PtrFromString(flipAiWindowTitle)
 	if err != nil {
 		return 0
 	}
-	h, _, _ := procPlatformFindWindow.Call(0, uintptr(unsafe.Pointer(title)))
+	h, _, _ := procPlatformFindWindow.Call(uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(title)))
+	if h == 0 {
+		return 0
+	}
+	// A window nobody can see is not the one the user is asking for.
+	if visible, _, _ := procVoiceIsWindowVisible.Call(h); visible == 0 {
+		return 0
+	}
 	return h
 }
 

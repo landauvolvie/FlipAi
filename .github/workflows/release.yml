@@ -124,6 +124,51 @@ jobs:
           Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
           Wait-NoBridge
 
+      - name: The FlipAi window opens
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The lifecycle test above runs with the window suppressed, which is
+          # exactly how a bug that stopped the window opening reached a release.
+          # This one opens it for real.
+          #
+          # The launcher process is the check: it blocks for as long as it owns
+          # the window, so a launcher that has exited, or one with no window
+          # title, means nothing opened.
+          $dataDir = Join-Path $env:RUNNER_TEMP 'FlipAi-Window-Opens'
+          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $env:LOCALAPPDATA = $dataDir
+          Remove-Item Env:AISMSBRIDGE_NO_BROWSER -ErrorAction SilentlyContinue
+          Remove-Item Env:FLIPAI_BROWSER_TEST_CAPTURE -ErrorAction SilentlyContinue
+
+          Start-Process -FilePath '.\dist\FlipAi.exe'
+          $deadline = (Get-Date).AddSeconds(90)
+          $window = $null
+          do {
+            $launcher = @(Get-CimInstance Win32_Process |
+              Where-Object { $_.Name -eq 'FlipAi.exe' -and "$($_.CommandLine)" -notmatch '--' })
+            foreach ($p in $launcher) {
+              $proc = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+              if ($proc -and $proc.MainWindowTitle -eq 'FlipAi') { $window = $proc; break }
+            }
+            if ($window) { break }
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+
+          if (-not $window) {
+            @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'FlipAi.exe' } |
+              Select-Object ProcessId,CommandLine | Format-Table | Out-String) | Write-Host
+            @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue |
+              Select-Object Id,MainWindowTitle | Format-Table | Out-String) | Write-Host
+            throw 'FlipAi did not open its desktop window'
+          }
+          Write-Host "FlipAi window is open (pid $($window.Id))."
+
+          Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
+          Start-Sleep -Seconds 2
+          Get-Process -Name FlipAi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
       - name: Google Voice window opens on a real desktop
         shell: pwsh
         run: |
