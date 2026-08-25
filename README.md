@@ -388,6 +388,80 @@ Nothing else is added. FlipAi never tells the agent to open a browser, find a
 conversation, or emit a delivery marker — delivery is decided in Go — so the
 agent behaves as it does when you are sitting in front of it.
 
+## Phone calls to the agent (experimental)
+
+FlipAi can answer a call to your Google Voice number and put the caller through
+to the voice mode of the ChatGPT or Claude desktop app you already pay for. No
+AI API key is involved: the conversation happens inside the desktop app exactly
+as it does when you talk to it yourself.
+
+FlipAi runs Google Voice in its own window, watches for a ringing call, checks
+the caller against a per-agent allowlist, answers it, switches the desktop app
+into voice mode, and switches it back off when the call ends.
+
+### What you have to provide
+
+**Two virtual audio cables.** This is the part FlipAi cannot do for you, and
+without it a call will connect in silence. A phone conversation needs two
+independent audio paths, and Windows has no way to patch one application's
+speaker into another's microphone on its own. Install a virtual audio cable
+driver that gives you two separate cables — each cable appears in Windows as one
+playback endpoint and one recording endpoint. FlipAi does not install, bundle,
+or redistribute any audio driver.
+
+Wire them like this:
+
+| Direction | Set in | Endpoint |
+| --- | --- | --- |
+| Caller reaches the agent | FlipAi: Google Voice speaker | Cable 1 playback |
+| | ChatGPT/Claude: microphone | Cable 1 recording |
+| Agent reaches the caller | ChatGPT/Claude: speaker | Cable 2 playback |
+| | FlipAi: Google Voice microphone | Cable 2 recording |
+
+FlipAi applies the Google Voice side itself. The desktop app side you choose
+once, inside that app's own audio settings. FlipAi refuses to save a
+configuration where both sides share an endpoint, because that produces a call
+in which nobody can hear anything.
+
+### Setting it up
+
+1. Settings → **Google Voice phone bridge** → **Open Google Voice**, and sign in.
+   The endpoint pickers stay empty until this window exists, because Windows
+   only reveals endpoint names to a page that holds microphone permission.
+2. Choose the Google Voice microphone and speaker from the table above.
+3. Agents → pick the agent → **Phone voice**: allow the agent on calls and list
+   who may reach it.
+4. Back in Settings, turn **Enable phone voice** on.
+
+### Who is allowed to call
+
+Callers are listed per agent, separately from the SMS allowlist. Two kinds of
+entry are accepted:
+
+- **Allowed callers** — 10-digit US/Canada numbers.
+- **Allowed caller names** — the exact text Google Voice displays. You need this
+  whenever the caller is in your Google Contacts, because Google Voice then
+  shows a name and there is no number for FlipAi to match. Placeholders such as
+  "Unknown" or "Private" are refused, since accepting one would let any
+  anonymous call through.
+
+When a call is refused, Connections shows what Google Voice displayed and why it
+was not connected, and the agent's Phone voice card offers to add that name to
+the list. A caller matching neither list is never answered.
+
+### Limits worth knowing
+
+- Windows only, and the desktop session has to be signed in. The window keeps
+  running while the PC is locked, but it cannot start at the sign-in screen.
+- ChatGPT desktop Voice is a full two-way conversation. Claude Desktop's voice
+  support is dictation-oriented, so the Claude side may not hold up its end of a
+  spoken conversation the same way.
+- FlipAi drives the desktop app by focusing its window and sending its Voice
+  shortcut, so the app has to be running and its window must not be blocked by
+  another elevated window.
+- This is separate from SMS. Turning it on changes nothing about Gmail, message
+  routing, or the SMS allowlist.
+
 ## Runtime data
 
 Runtime configuration, encrypted credentials/tokens, state, and logs are stored under:
@@ -452,6 +526,22 @@ Before a Windows artifact is accepted, GitHub Actions verifies:
 - Settings opener targeting the FlipAi localhost URL;
 - installed tray loading the branded icon;
 - real uninstaller cleanup of app files, Start Menu shortcut, uninstall registration, and startup entry.
+
+### Call-bridge browser tests
+
+`TestGoogleVoiceCallFlowInRealBrowser` runs the script FlipAi injects into
+Google Voice inside headless Chromium, against a stand-in Google Voice page and
+the real Go call bridge. Chromium's fake audio endpoints stand in for the two
+virtual cables, and the browser genuinely applies the microphone and speaker
+FlipAi selects, so the routing is checked rather than assumed. It covers
+answering an approved caller, refusing an unknown one, contact-name callers,
+refusing to treat a number elsewhere in the page as the caller, answering a
+single ring only once, and the capabilities the call window must not keep.
+
+It needs Node and Playwright and skips itself when they are absent, so the
+Windows release job does not run it. What it cannot cover, and what only a real
+call on a real PC can confirm: Google's own markup, WebView2, the telephony
+itself, and whether the desktop AI app actually enters voice mode.
 
 ## SmartScreen / antivirus
 

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,5 +107,176 @@ func TestVoiceConfigIsIndependentFromSMSConfig(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Fatal("saving voice-call settings modified the SMS bridge config")
+	}
+}
+
+func TestVoiceCallerNameAllowlistCoversContactCallers(t *testing.T) {
+	cfg := defaultVoiceCallConfig()
+	cfg.Enabled = true
+	cfg.GoogleVoiceInput = "Cable B Output"
+	cfg.GoogleVoiceOutput = "Cable A Input"
+	cfg.Codex.Enabled = true
+	cfg.Codex.AllowedLabels = "Jane Appleseed"
+
+	// Google Voice shows a name instead of a number whenever the caller is in
+	// the user's contacts, which is the normal case for calling your own line.
+	if d := decideVoiceCall(cfg, "", "Jane Appleseed"); !d.Allowed || d.Agent != "C" {
+		t.Fatalf("approved caller name was refused: %+v", d)
+	}
+	if d := decideVoiceCall(cfg, "", "jane   appleseed"); !d.Allowed {
+		t.Fatalf("caller name matching must ignore case and spacing: %+v", d)
+	}
+	if d := decideVoiceCall(cfg, "", "John Appleseed"); d.Allowed {
+		t.Fatal("a different name was authorized")
+	}
+}
+
+func TestVoiceCallerNameAllowlistRejectsPlaceholders(t *testing.T) {
+	// "Unknown" is what the network supplies when there is no caller ID at all,
+	// so allowing it would authorize every anonymous call.
+	for _, name := range []string{"Unknown", "unknown caller", "Private Number", "Anonymous"} {
+		if _, err := normalizeAllowedCallerLabels(name); err == nil {
+			t.Errorf("%q was accepted as an allowed caller name", name)
+		}
+	}
+	cfg := defaultVoiceCallConfig()
+	cfg.Enabled = true
+	cfg.Codex.Enabled = true
+	cfg.Codex.AllowedLabels = "Unknown"
+	if d := decideVoiceCall(cfg, "", "Unknown"); d.Allowed {
+		t.Fatal("a placeholder caller ID was authorized")
+	}
+}
+
+func TestVoiceBlockedCallExplainsItself(t *testing.T) {
+	cfg := defaultVoiceCallConfig()
+	cfg.Enabled = true
+	cfg.Codex.Enabled = true
+	cfg.Codex.AllowedCallers = "8455551000"
+
+	d := decideVoiceCall(cfg, "", "Jane Appleseed")
+	if d.Allowed {
+		t.Fatal("an unlisted contact name was authorized")
+	}
+	if !strings.Contains(d.Reason, "Jane Appleseed") || !strings.Contains(d.Reason, "Allowed caller names") {
+		t.Errorf("reason does not tell the user what to do: %q", d.Reason)
+	}
+	if d := decideVoiceCall(cfg, "8455559999", ""); d.Allowed || !strings.Contains(d.Reason, "845") {
+		t.Errorf("unlisted number reason = %q", d.Reason)
+	}
+	if d := decideVoiceCall(cfg, "", ""); d.Allowed || d.Reason == "" {
+		t.Errorf("a call with no caller ID must still be explained, got %+v", d)
+	}
+}
+
+func TestVoiceAudioBridgeRejectsSilentWiring(t *testing.T) {
+	base := func() VoiceCallConfig {
+		cfg := defaultVoiceCallConfig()
+		cfg.Enabled = true
+		cfg.Codex.Enabled = true
+		cfg.Codex.AllowedCallers = "8455551000"
+		cfg.GoogleVoiceInput = "Cable B Output (capture)"
+		cfg.GoogleVoiceOutput = "Cable A Input (render)"
+		cfg.AgentInput = "Cable A Output (capture)"
+		cfg.AgentOutput = "Cable B Input (render)"
+		return cfg
+	}
+	if _, err := normalizeVoiceCallConfig(base(), true); err != nil {
+		t.Fatalf("a correctly wired pair of cables was rejected: %v", err)
+	}
+
+	missing := base()
+	missing.GoogleVoiceOutput = ""
+	if _, err := normalizeVoiceCallConfig(missing, true); err == nil {
+		t.Error("enabling calling without an audio path should be refused")
+	}
+
+	shared := base()
+	shared.AgentOutput = shared.GoogleVoiceOutput
+	if _, err := normalizeVoiceCallConfig(shared, true); err == nil {
+		t.Error("both sides sharing one speaker endpoint should be refused")
+	}
+
+	sharedMic := base()
+	sharedMic.AgentInput = sharedMic.GoogleVoiceInput
+	if _, err := normalizeVoiceCallConfig(sharedMic, true); err == nil {
+		t.Error("both sides sharing one microphone endpoint should be refused")
+	}
+}
+
+func TestVoiceBridgeReportsOnlyRealAudioEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	b := newVoiceBridge(dir, func(VoiceCallConfig, string) error { return nil }, func(VoiceCallConfig, string) error { return nil })
+
+	// Before a page holds a microphone grant the browser returns endpoints with
+	// empty names. Inventing names for them would put unselectable placeholders
+	// in the settings pickers and hide the real problem.
+	b.Devices(`[{"kind":"audioinput","deviceId":"a","label":""},{"kind":"audiooutput","deviceId":"b","label":""}]`)
+	st := loadVoiceRuntime(dir)
+	if len(st.Devices) != 0 || !st.DeviceLabelsHidden {
+		t.Fatalf("unnamed endpoints were not reported as hidden: %+v", st)
+	}
+
+	b.Devices(`[{"kind":"audioinput","deviceId":"a","label":"Cable B Output"},{"kind":"videoinput","deviceId":"c","label":"Webcam"}]`)
+	st = loadVoiceRuntime(dir)
+	if len(st.Devices) != 1 || st.Devices[0].Label != "Cable B Output" {
+		t.Fatalf("audio endpoints = %+v, want only the named audio one", st.Devices)
+	}
+	if st.DeviceLabelsHidden {
+		t.Error("named endpoints should clear the hidden-labels warning")
+	}
+}
+
+func TestVoiceBridgeTurnsAgentVoiceOffWhenTheCallEnds(t *testing.T) {
+	dir := t.TempDir()
+	cfg := defaultVoiceCallConfig()
+	cfg.Enabled = true
+	cfg.GoogleVoiceInput = "Cable B Output"
+	cfg.GoogleVoiceOutput = "Cable A Input"
+	cfg.Codex.Enabled = true
+	cfg.Codex.AllowedCallers = "8455551000"
+	if err := saveVoiceCallConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var on, off []string
+	b := newVoiceBridge(dir,
+		func(_ VoiceCallConfig, agent string) error { on = append(on, agent); return nil },
+		func(_ VoiceCallConfig, agent string) error { off = append(off, agent); return nil })
+
+	if !b.Incoming("8455551000", "") {
+		t.Fatal("an approved caller was not auto-answered")
+	}
+	if !b.Answered("8455551000", "") {
+		t.Fatal("an approved call was not bridged")
+	}
+	b.Ended()
+	if len(on) != 1 || on[0] != "C" || len(off) != 1 || off[0] != "C" {
+		t.Fatalf("agent voice was not switched on and back off exactly once: on=%v off=%v", on, off)
+	}
+	if st := loadVoiceRuntime(dir); st.InCall || st.Agent != "" {
+		t.Fatalf("state after hang-up still shows a call: %+v", st)
+	}
+}
+
+func TestGoogleVoiceScriptSurvivesDocumentCreatedTiming(t *testing.T) {
+	// WebView2 injects this script before <html> exists. Touching the document
+	// root at that moment throws, and the throw takes the whole call bridge with
+	// it, which is exactly how the feature failed silently before.
+	if strings.Contains(googleVoiceInitScript, ".observe(document.documentElement,") {
+		t.Fatal("the mutation observer must not assume a document root exists")
+	}
+	if !strings.Contains(googleVoiceInitScript, "const observeDocument = ") {
+		t.Fatal("the mutation observer must wait for a document root")
+	}
+}
+
+func TestGoogleVoiceScriptIsSingleFlighted(t *testing.T) {
+	// The bridge polls, and a poll awaits several host round-trips. Overlapping
+	// polls answered one ring twice.
+	if strings.Contains(googleVoiceInitScript, "setInterval(tick") {
+		t.Fatal("polling must not be able to overlap itself")
+	}
+	if !strings.Contains(googleVoiceInitScript, "if (ticking) return;") {
+		t.Fatal("the poll needs a re-entrancy guard")
 	}
 }

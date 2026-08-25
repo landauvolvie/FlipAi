@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Google Voice</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0; }
+  .shell { display: flex; }
+  .threads { width: 260px; padding: 12px; }
+  .thread { padding: 8px 0; }
+  #callarea:empty { display: none; }
+  #callarea > div { padding: 16px; border: 1px solid #ccc; margin: 12px; width: 320px; }
+  .caller { font-size: 20px; font-weight: 600; }
+  button { display: inline-block; padding: 8px 14px; margin: 6px 6px 0 0; }
+</style>
+<body>
+<div class="shell">
+  <!-- A decoy conversation. Google Voice always has other numbers on screen;
+       none of them may be treated as the caller of a ringing call. -->
+  <div class="threads">
+    <div class="thread">Mom<br>(212) 555-0000<br>see you soon</div>
+    <div class="thread">Pharmacy<br>+1 617-555-0143<br>prescription ready</div>
+  </div>
+  <div id="callarea"></div>
+</div>
+<script>
+// A stand-in for the parts of Google Voice the FlipAi bridge actually touches:
+// a ringing dialog with an Answer button, an in-call dialog with Hang up, and a
+// media element plus a microphone capture for the conversation itself.
+window.gv = {
+  gumConstraints: null,
+  gumSettings: null,
+  playCalled: false,
+  playError: '',
+
+  ring(display, ariaLabel) {
+    const area = document.getElementById('callarea');
+    area.textContent = '';
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    if (ariaLabel) dialog.setAttribute('aria-label', ariaLabel);
+
+    const who = document.createElement('div');
+    who.className = 'caller';
+    for (const [i, line] of String(display).split('\n').entries()) {
+      if (i) who.append(document.createElement('br'));
+      who.append(document.createTextNode(line));
+    }
+    const sub = document.createElement('div');
+    sub.textContent = 'Incoming call';
+
+    const answer = document.createElement('button');
+    answer.textContent = 'Answer';
+    answer.addEventListener('click', () => window.gv.connect());
+    const decline = document.createElement('button');
+    decline.textContent = 'Decline';
+    decline.addEventListener('click', () => window.gv.hangup());
+
+    dialog.append(who, sub, answer, decline);
+    area.append(dialog);
+  },
+
+  async connect() {
+    const area = document.getElementById('callarea');
+    area.textContent = '';
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    const hangup = document.createElement('button');
+    hangup.textContent = 'Hang up';
+    hangup.addEventListener('click', () => window.gv.hangup());
+    const audio = document.createElement('audio');
+    audio.id = 'remote';
+    audio.autoplay = true;
+    dialog.append(hangup, audio);
+    area.append(dialog);
+
+    // Google Voice opens the microphone when the call connects. This is the
+    // request FlipAi has to redirect onto the virtual cable.
+    const constraints = {audio: {echoCancellation: true}};
+    window.gv.gumConstraints = null;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      window.gv.stream = stream;
+      window.gv.gumSettings = stream.getAudioTracks()[0].getSettings();
+      // The remote party is rendered through the media element; its sink is
+      // what has to land on the other virtual cable.
+      audio.srcObject = stream;
+    } catch (e) {
+      window.gv.gumError = String(e);
+    }
+    try {
+      window.gv.playCalled = true;
+      await audio.play();
+    } catch (e) {
+      window.gv.playError = String(e);
+    }
+  },
+
+  hangup() {
+    document.getElementById('callarea').textContent = '';
+    if (window.gv.stream) {
+      window.gv.stream.getTracks().forEach(t => t.stop());
+      window.gv.stream = null;
+    }
+  },
+
+  // What getUserMedia was ultimately called with, after FlipAi rewrote it.
+  observed() {
+    return {
+      gumCalls: window.__flipRecordedCalls || [],
+      gumSettings: window.gv.gumSettings || null,
+      gumError: window.gv.gumError || '',
+      playCalled: window.gv.playCalled,
+      playError: window.gv.playError,
+      sinkId: (document.getElementById('remote') || {}).sinkId || '',
+      secureContext: window.isSecureContext,
+      hasMediaDevices: !!navigator.mediaDevices,
+      hasSetSinkId: typeof HTMLMediaElement.prototype.setSinkId === 'function'
+    };
+  }
+};
+
+</script>

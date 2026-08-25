@@ -3,13 +3,13 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,6 +36,7 @@ var (
 	procVoiceIsWindowVisible      = voiceUser32.NewProc("IsWindowVisible")
 	procVoiceGetWindowTextLength  = voiceUser32.NewProc("GetWindowTextLengthW")
 	procVoiceGetWindowText        = voiceUser32.NewProc("GetWindowTextW")
+	procVoiceGetForegroundWindow  = voiceUser32.NewProc("GetForegroundWindow")
 )
 
 const (
@@ -211,6 +212,12 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 }
 
 func runGoogleVoiceWindow(dataDir string, visible bool) error {
+	// A Win32 message pump only works on the thread that created the window.
+	// This currently runs inside init(), where the Go runtime happens to hold
+	// the main thread, but that is an implementation detail of the runtime and
+	// not something the call bridge should depend on staying true.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if err := os.MkdirAll(voiceProfilePath(dataDir), 0700); err != nil {
 		return err
 	}
@@ -232,100 +239,28 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	applyFlipAiWindowIcon(uintptr(w.Window()))
 	w.SetSize(760, 560, webview2.HintMin)
 	chromium := voiceChromium(w)
-	if chromium != nil {
-		chromium.SetPermission(edge.CoreWebView2PermissionKindMicrophone, edge.CoreWebView2PermissionStateAllow)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindNotifications, edge.CoreWebView2PermissionStateAllow)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindCamera, edge.CoreWebView2PermissionStateDeny)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindGeolocation, edge.CoreWebView2PermissionStateDeny)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindOtherSensors, edge.CoreWebView2PermissionStateDeny)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateDeny)
+	if chromium == nil {
+		return errors.New("could not reach the Google Voice browser control to grant microphone access")
 	}
+	// Per-kind permissions do not work with this WebView2 binding: its
+	// PermissionRequested handler passes the out-parameter of GetPermissionKind
+	// by value instead of by pointer, so every request reads back as kind 0 and
+	// falls through to "ask the user". FlipAi keeps the Google Voice window
+	// minimized, so that prompt is invisible and unanswerable — Google Voice
+	// silently never gets a microphone and the caller hears nothing. Only the
+	// global path skips that broken lookup, so the grant is made there and the
+	// permissions FlipAi does not want are removed inside the page instead (see
+	// googleVoiceInitScript, which deletes camera, geolocation and clipboard
+	// access before Google Voice can ask for them).
+	chromium.SetGlobalPermission(edge.CoreWebView2PermissionStateAllow)
 
-	_ = w.Bind("flipVoiceAudioSettings", func() map[string]string {
-		cfg := loadVoiceCallConfig(dataDir)
-		return map[string]string{"input": cfg.GoogleVoiceInput, "output": cfg.GoogleVoiceOutput, "ring": cfg.RingOutput}
-	})
-	_ = w.Bind("flipVoiceIncoming", func(caller string) bool {
-		cfg := loadVoiceCallConfig(dataDir)
-		agent, allowed := voiceAgentForCaller(cfg, caller)
-		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-			s.Caller = normalizeUSPhone(caller)
-			s.Agent = agent
-			if allowed {
-				s.LastEvent = "authorized-call-ringing"
-			} else {
-				s.LastEvent = "blocked-call-ringing"
-			}
-		})
-		return allowed && cfg.AutoAnswer
-	})
-	_ = w.Bind("flipVoiceAnswered", func(caller string) bool {
-		cfg := loadVoiceCallConfig(dataDir)
-		agent, allowed := voiceAgentForCaller(cfg, caller)
-		if !allowed {
-			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-				s.InCall = true
-				s.Caller = normalizeUSPhone(caller)
-				s.Agent = ""
-				s.LastEvent = "unbridged-call"
-			})
-			return false
-		}
-		if err := activateAgentVoice(cfg, agent); err != nil {
-			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-				s.InCall = true
-				s.Caller = normalizeUSPhone(caller)
-				s.Agent = agent
-				s.LastError = err.Error()
-				s.LastEvent = "agent-voice-error"
-			})
-			return false
-		}
-		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-			s.InCall = true
-			s.Caller = normalizeUSPhone(caller)
-			s.Agent = agent
-			s.LastError = ""
-			s.LastEvent = "call-bridged"
-		})
-		return true
-	})
-	_ = w.Bind("flipVoiceEnded", func() {
-		s := loadVoiceRuntime(dataDir)
-		cfg := loadVoiceCallConfig(dataDir)
-		if s.Agent == "A" || s.Agent == "C" {
-			_ = deactivateAgentVoice(cfg, s.Agent)
-		}
-		mutateVoiceRuntime(dataDir, func(st *VoiceRuntimeState) {
-			st.InCall = false
-			st.Caller = ""
-			st.Agent = ""
-			st.LastEvent = "call-ended"
-		})
-	})
-	_ = w.Bind("flipVoiceDevices", func(raw string) {
-		var devices []VoiceAudioDevice
-		if json.Unmarshal([]byte(raw), &devices) != nil {
-			return
-		}
-		if len(devices) > 80 {
-			devices = devices[:80]
-		}
-		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-			s.Devices = devices
-			s.LastEvent = "audio-devices"
-		})
-	})
-	_ = w.Bind("flipVoicePage", func(href string, signedIn bool) {
-		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-			s.BrowserRunning = true
-			s.Page = href
-			s.SignedIn = signedIn
-			if s.LastEvent == "" || s.LastEvent == "browser-starting" {
-				s.LastEvent = "browser-ready"
-			}
-		})
-	})
+	bridge := newVoiceBridge(dataDir, activateAgentVoice, deactivateAgentVoice)
+	_ = w.Bind("flipVoiceAudioSettings", bridge.AudioSettings)
+	_ = w.Bind("flipVoiceIncoming", bridge.Incoming)
+	_ = w.Bind("flipVoiceAnswered", bridge.Answered)
+	_ = w.Bind("flipVoiceEnded", bridge.Ended)
+	_ = w.Bind("flipVoiceDevices", bridge.Devices)
+	_ = w.Bind("flipVoicePage", bridge.Page)
 
 	w.Init(googleVoiceInitScript)
 	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
@@ -389,11 +324,17 @@ func activateAgentVoice(cfg VoiceCallConfig, agent string) error {
 	if hwnd == 0 {
 		return fmt.Errorf("could not find the %s desktop window; open the app or set its launch command", target.AppTitle)
 	}
-	procVoiceShowWindow.Call(hwnd, voiceSWRestore)
-	procVoiceSetForegroundWindow.Call(hwnd)
-	time.Sleep(180 * time.Millisecond)
+	focused := bringToFront(hwnd)
 	if target.VoiceShortcut != "" {
-		return sendVoiceShortcut(target.VoiceShortcut)
+		if focused {
+			return sendVoiceShortcut(target.VoiceShortcut)
+		}
+		// The accessibility tree does not need focus, so it is the safe way to
+		// start voice when Windows would not let the app come forward.
+		if invokeVoiceButton(hwnd, false) == nil {
+			return nil
+		}
+		return fmt.Errorf("Windows would not bring %s to the front, so FlipAi did not send its Voice shortcut to another app by mistake; leave %s visible or unminimized during calls", target.AppTitle, target.AppTitle)
 	}
 	if err := invokeVoiceButton(hwnd, false); err != nil {
 		return fmt.Errorf("could not start voice automatically; configure the app's Voice shortcut in FlipAi: %w", err)
@@ -407,9 +348,14 @@ func deactivateAgentVoice(cfg VoiceCallConfig, agent string) error {
 	if hwnd == 0 {
 		return nil
 	}
-	procVoiceSetForegroundWindow.Call(hwnd)
+	// Ending voice mode is tried through the accessibility tree first: it works
+	// without focus, and the Escape fallback would otherwise land in whatever
+	// window the user has in front of them.
 	if invokeVoiceButton(hwnd, true) == nil {
 		return nil
+	}
+	if !bringToFront(hwnd) {
+		return fmt.Errorf("could not bring %s forward to end its voice session", target.AppTitle)
 	}
 	return sendKeysLiteral("{ESC}")
 }
@@ -427,12 +373,30 @@ func startConfiguredVoiceApp(command string) error {
 	return nil
 }
 
+// browserWindowTitle reports whether a window title looks like a web browser
+// showing the app rather than the desktop app itself. A Chrome tab on
+// chatgpt.com is titled "ChatGPT - Google Chrome" and matches the same needle
+// as the real ChatGPT window; sending a Voice shortcut to the browser would do
+// nothing useful, so a genuine app window is always preferred.
+func browserWindowTitle(title string) bool {
+	title = strings.ToLower(title)
+	for _, suffix := range []string{
+		" - google chrome", " - chromium", " - microsoft edge", " - brave",
+		" — mozilla firefox", " - mozilla firefox", " - opera", " - vivaldi",
+	} {
+		if strings.HasSuffix(title, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func findWindowContaining(needle string) uintptr {
 	needle = strings.ToLower(strings.TrimSpace(needle))
 	if needle == "" {
 		return 0
 	}
-	var found uintptr
+	var best, fallback uintptr
 	cb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
 		visible, _, _ := procVoiceIsWindowVisible.Call(hwnd)
 		if visible == 0 {
@@ -444,15 +408,50 @@ func findWindowContaining(needle string) uintptr {
 		}
 		buf := make([]uint16, n+1)
 		procVoiceGetWindowText.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), n+1)
-		title := strings.ToLower(syscall.UTF16ToString(buf))
-		if strings.Contains(title, needle) {
-			found = hwnd
-			return 0
+		title := syscall.UTF16ToString(buf)
+		lower := strings.ToLower(title)
+		if !strings.Contains(lower, needle) {
+			return 1
 		}
-		return 1
+		// FlipAi's own windows can carry the agent's name in status text; they
+		// are never the desktop app being driven.
+		if strings.Contains(lower, strings.ToLower(googleVoiceWindowTitle)) {
+			return 1
+		}
+		if browserWindowTitle(title) {
+			if fallback == 0 {
+				fallback = hwnd
+			}
+			return 1
+		}
+		best = hwnd
+		return 0
 	})
 	procVoiceEnumWindows.Call(cb, 0)
-	return found
+	if best != 0 {
+		return best
+	}
+	return fallback
+}
+
+// bringToFront returns whether the window really ended up in the foreground.
+// Windows refuses foreground changes requested by a background process in
+// several situations, and it does so silently. That matters here because the
+// next step may be a keystroke: sending one to a window that never came forward
+// types into whatever the user is actually working in.
+func bringToFront(hwnd uintptr) bool {
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for {
+		procVoiceShowWindow.Call(hwnd, voiceSWRestore)
+		procVoiceSetForegroundWindow.Call(hwnd)
+		if fg, _, _ := procVoiceGetForegroundWindow.Call(); fg == hwnd {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func sendVoiceShortcut(raw string) error {
@@ -540,155 +539,6 @@ exit 3`, hwnd, pattern)
 	}
 	return nil
 }
-
-const googleVoiceInitScript = `
-(() => {
-  if (window.__flipVoiceInstalled) return;
-  window.__flipVoiceInstalled = true;
-
-  const allowedTopLevel = (href) => {
-    try {
-      const h = new URL(href, location.href).hostname.toLowerCase();
-      return h === 'voice.google.com' || h === 'accounts.google.com';
-    } catch (_) { return false; }
-  };
-  document.addEventListener('click', (e) => {
-    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    if (a && !allowedTopLevel(a.href)) e.preventDefault();
-  }, true);
-
-  const normPhone = (v) => {
-    const d = String(v || '').replace(/\D/g, '');
-    if (d.length === 11 && d[0] === '1') return d.slice(1);
-    return d.length === 10 ? d : '';
-  };
-  const phoneFrom = (text) => {
-    const m = String(text || '').match(/(?:\+?1[\s.\-]?)?(?:\([0-9]{3}\)|[0-9]{3})[\s.\-]?[0-9]{3}[\s.\-]?[0-9]{4}/);
-    return m ? normPhone(m[0]) : '';
-  };
-  const visible = (el) => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const buttonName = (b) => ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || b.textContent || '')).trim();
-  const buttons = () => Array.from(document.querySelectorAll('button,[role="button"]')).filter(visible);
-  const findAnswer = () => buttons().find(b => /^(answer|accept)(\s+call)?$/i.test(buttonName(b)) || /^answer\b/i.test(buttonName(b)));
-  const findHangup = () => buttons().find(b => /(hang\s*up|end\s+call|leave\s+call)/i.test(buttonName(b)));
-
-  let rememberedCaller = '';
-  let inCall = false;
-  let answerBusy = false;
-  let lastDeviceJSON = '';
-
-  async function audioSettings() {
-    try { return await window.flipVoiceAudioSettings(); } catch (_) { return {input:'',output:'',ring:''}; }
-  }
-  async function currentDevices() {
-    try { return await navigator.mediaDevices.enumerateDevices(); } catch (_) { return []; }
-  }
-  async function reportDevices() {
-    const ds = await currentDevices();
-    const out = ds.filter(d => d.kind === 'audioinput' || d.kind === 'audiooutput').map((d, i) => ({
-      kind: d.kind,
-      deviceId: d.deviceId || '',
-      label: d.label || (d.kind === 'audioinput' ? 'Microphone ' : 'Speaker ') + (i + 1)
-    }));
-    const raw = JSON.stringify(out);
-    if (raw !== lastDeviceJSON) {
-      lastDeviceJSON = raw;
-      try { await window.flipVoiceDevices(raw); } catch (_) {}
-    }
-    return ds;
-  }
-  async function deviceIdFor(kind, wanted) {
-    if (!wanted) return '';
-    const ds = await currentDevices();
-    const exact = ds.find(d => d.kind === kind && d.label === wanted);
-    if (exact) return exact.deviceId;
-    const loose = ds.find(d => d.kind === kind && d.label && d.label.toLowerCase().includes(String(wanted).toLowerCase()));
-    return loose ? loose.deviceId : '';
-  }
-  async function routeElement(el) {
-    if (!el || typeof el.setSinkId !== 'function') return;
-    const s = await audioSettings();
-    const id = await deviceIdFor('audiooutput', s.output);
-    if (id) { try { await el.setSinkId(id); } catch (_) {} }
-  }
-
-  // Force Google Voice's requested microphone onto the virtual endpoint selected
-  // in FlipAi. The original constraints are preserved except for deviceId.
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    navigator.mediaDevices.getUserMedia = async function(constraints) {
-      let next = constraints;
-      try {
-        const s = await audioSettings();
-        if (constraints && constraints.audio && s.input) {
-          const id = await deviceIdFor('audioinput', s.input);
-          if (id) {
-            const a = constraints.audio === true ? {} : Object.assign({}, constraints.audio);
-            a.deviceId = {exact:id};
-            next = Object.assign({}, constraints, {audio:a});
-          }
-        }
-      } catch (_) {}
-      const stream = await gum(next);
-      reportDevices();
-      return stream;
-    };
-    navigator.mediaDevices.addEventListener('devicechange', reportDevices);
-  }
-
-  // Google Voice normally renders the remote party through HTML media elements.
-  // Apply the selected virtual speaker before playback and whenever new media is
-  // inserted. This leaves system-wide Windows audio defaults untouched.
-  const nativePlay = HTMLMediaElement.prototype.play;
-  HTMLMediaElement.prototype.play = function(...args) {
-    routeElement(this);
-    return nativePlay.apply(this, args);
-  };
-  new MutationObserver(() => {
-    document.querySelectorAll('audio,video').forEach(routeElement);
-  }).observe(document.documentElement, {childList:true, subtree:true});
-
-  async function tick() {
-    try {
-      const href = location.href;
-      const signedIn = location.hostname === 'voice.google.com' && !/sign\s*in/i.test((document.body && document.body.innerText || '').slice(0, 2500));
-      await window.flipVoicePage(href, signedIn);
-
-      // If script-driven navigation escapes Voice or Google's sign-in surface,
-      // return to Voice. Normal page resources are not affected by this check.
-      if (!allowedTopLevel(href)) {
-        location.replace('https://voice.google.com/');
-        return;
-      }
-
-      const answer = findAnswer();
-      if (answer && !answerBusy && !inCall) {
-        const scope = answer.closest('[role="dialog"]') || answer.parentElement || document.body;
-        rememberedCaller = phoneFrom((scope && scope.innerText) || buttonName(answer)) || rememberedCaller;
-        answerBusy = true;
-        let auto = false;
-        try { auto = !!(await window.flipVoiceIncoming(rememberedCaller)); } catch (_) {}
-        if (auto && answer.isConnected) answer.click();
-        setTimeout(() => { answerBusy = false; }, 1200);
-      }
-
-      const hang = findHangup();
-      if (hang && !inCall) {
-        inCall = true;
-        try { await window.flipVoiceAnswered(rememberedCaller); } catch (_) {}
-      } else if (!hang && inCall) {
-        inCall = false;
-        rememberedCaller = '';
-        try { await window.flipVoiceEnded(); } catch (_) {}
-      }
-      document.querySelectorAll('audio,video').forEach(routeElement);
-      reportDevices();
-    } catch (_) {}
-  }
-  setInterval(tick, 900);
-  setTimeout(tick, 250);
-})();
-`
 
 // Keep strconv linked on Windows builds where future shortcut expansion uses
 // numeric virtual-key names; it is also useful in debugger expressions and
