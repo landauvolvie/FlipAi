@@ -114,6 +114,7 @@ var (
 	procShellNotifyIconW       = trayShell32.NewProc("Shell_NotifyIconW")
 	procGetModuleHandleW       = trayKernel32.NewProc("GetModuleHandleW")
 	procCreateMutexW           = trayKernel32.NewProc("CreateMutexW")
+	procTraySetLastError       = trayKernel32.NewProc("SetLastError")
 	procReleaseMutex           = trayKernel32.NewProc("ReleaseMutex")
 	procCloseHandle            = trayKernel32.NewProc("CloseHandle")
 )
@@ -274,15 +275,37 @@ func runSystemTray(ctx context.Context, tooltip string, onOpen, onQuit func()) e
 func acquireWatchdogInstance() (func(), bool, error) {
 	// Keep the legacy mutex name during upgrades so a pre-v0.6.1 watchdog and a
 	// new FlipAi watchdog cannot run at the same time.
-	name, _ := syscall.UTF16PtrFromString(`Local\AISMSBridgeWatchdog`)
-	h, _, err := procCreateMutexW.Call(0, 1, uintptr(unsafe.Pointer(name)))
-	if h == 0 {
-		return func() {}, false, fmt.Errorf("create watchdog mutex: %v", err)
+	return acquireNamedInstance(`Local\AISMSBridgeWatchdog`, "watchdog")
+}
+
+// acquireHostInstance makes the background host single-instance.
+//
+// Nothing used to stop two hosts existing at once, and two hosts mean two
+// mailbox pollers: each keeps its own record of which messages it has handled,
+// so a single SMS is delivered to the agent once per host. That is how one text
+// came back answered twice. A version mismatch between a running host and a
+// freshly installed one was enough to produce the second host, because the
+// watchdog only recognises a host of its own version as healthy.
+func acquireHostInstance() (func(), bool, error) {
+	return acquireNamedInstance(`Local\FlipAi-Host`, "host")
+}
+
+func acquireNamedInstance(name, what string) (func(), bool, error) {
+	ptr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return func() {}, false, err
 	}
-	if errno, ok := err.(syscall.Errno); ok && errno == 183 {
+	// CreateMutexW reports "already exists" through GetLastError and does not
+	// reset it on a clean creation, so a leftover value from an earlier call
+	// would otherwise make the first instance stand down and exit.
+	procTraySetLastError.Call(0)
+	h, _, callErr := procCreateMutexW.Call(0, 1, uintptr(unsafe.Pointer(ptr)))
+	if h == 0 {
+		return func() {}, false, fmt.Errorf("create %s mutex: %v", what, callErr)
+	}
+	if errno, ok := callErr.(syscall.Errno); ok && errno == 183 { // ERROR_ALREADY_EXISTS
 		procCloseHandle.Call(h)
 		return func() {}, false, nil
 	}
-	release := func() { procReleaseMutex.Call(h); procCloseHandle.Call(h) }
-	return release, true, nil
+	return func() { procReleaseMutex.Call(h); procCloseHandle.Call(h) }, true, nil
 }

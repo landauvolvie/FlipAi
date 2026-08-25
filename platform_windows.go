@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -27,7 +28,25 @@ var (
 	// placeholder. This reuses the same FlipAi.ico the installer places beside
 	// the executable and the tray already loads.
 	procPlatformSendMessage = trayUser32.NewProc("SendMessageW")
+
+	procPlatformFindWindow    = trayUser32.NewProc("FindWindowW")
+	procPlatformShowWindow    = trayUser32.NewProc("ShowWindow")
+	procPlatformSetForeground = trayUser32.NewProc("SetForegroundWindow")
 )
+
+const flipAiWindowTitle = "FlipAi"
+
+// flipAiWindowHWND finds an already-open FlipAi window, whichever process owns
+// it. Opening from the tray should raise the window the user already has rather
+// than stack another copy of it on top.
+func flipAiWindowHWND() uintptr {
+	title, err := syscall.UTF16PtrFromString(flipAiWindowTitle)
+	if err != nil {
+		return 0
+	}
+	h, _, _ := procPlatformFindWindow.Call(0, uintptr(unsafe.Pointer(title)))
+	return h
+}
 
 const (
 	wmSetIcon      = 0x0080
@@ -88,7 +107,25 @@ func isFlipAiLocalTarget(target string) bool {
 	return strings.HasPrefix(lower, "http://127.0.0.1:") || strings.HasPrefix(lower, "http://localhost:")
 }
 
+// platformFlipAiWindowOpen reports whether the FlipAi window is on screen, so an
+// automatic update can restore what the user had rather than always coming back
+// as a background process.
+func platformFlipAiWindowOpen() bool { return flipAiWindowHWND() != 0 }
+
 func openFlipAiWindow(target string) error {
+	// Raise the window that already exists instead of opening a second one.
+	if h := flipAiWindowHWND(); h != 0 {
+		procPlatformShowWindow.Call(h, 9) // SW_RESTORE
+		procPlatformSetForeground.Call(h)
+		return nil
+	}
+	// The Win32 message loop below only receives this window's messages on the
+	// thread that created it. Without pinning the goroutine, Go is free to move
+	// it to another thread partway through, and the window then never responds
+	// or never appears -- which is why opening FlipAi from the tray sometimes
+	// did nothing at all.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,
@@ -106,10 +143,43 @@ func openFlipAiWindow(target string) error {
 	applyFlipAiWindowIcon(uintptr(w.Window()))
 	w.SetSize(1040, 680, webview2.HintMin)
 	w.Init(desktopInitScript)
+
+	// This window lives in its own process and its message loop blocks below,
+	// so Quit from the tray never reached it: the bridge stopped but the FlipAi
+	// window stayed on screen, still holding the data folder open.
+	stop := watchQuitAndClose(uintptr(w.Window()))
+	defer close(stop)
+
 	w.Navigate(target)
 	w.Run()
 	handleWindowClosed()
 	return nil
+}
+
+// watchQuitAndClose closes a window as soon as a quit is requested. The returned
+// channel stops the watcher.
+func watchQuitAndClose(hwnd uintptr) chan struct{} {
+	stop := make(chan struct{})
+	dataDir, _, _, _, err := appPaths()
+	if err != nil {
+		return stop
+	}
+	go func() {
+		t := time.NewTicker(400 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				if quitRequested(dataDir) {
+					procVoicePostMessage.Call(hwnd, voiceWMClose, 0, 0)
+					return
+				}
+			}
+		}
+	}()
+	return stop
 }
 
 // handleWindowClosed honours the Settings "Close to tray" choice. With it on

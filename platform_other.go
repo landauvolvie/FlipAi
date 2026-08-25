@@ -26,6 +26,10 @@ func uninstallAutostart() error                      { return nil }
 // sign-in startup is a Windows feature.
 func autostartEnabled() bool { return false }
 
+// platformFlipAiWindowOpen reports whether the FlipAi window is on screen, so an
+// automatic update can restore what the user had.
+func platformFlipAiWindowOpen() bool { return false }
+
 // The published installer is a Windows Setup EXE; there is nothing to run
 // elsewhere.
 func runUpdateInstaller(path string, reopenWindow bool) error {

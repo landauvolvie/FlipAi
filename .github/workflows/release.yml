@@ -198,6 +198,29 @@ jobs:
           Start-Sleep -Seconds 3
           Get-Process -Name FlipAi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
+          # 3. Quit has to take everything with it, including the Google Voice
+          #    window, or the data folder stays locked and a second host can
+          #    keep polling the mailbox.
+          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $launcher = Start-Process -FilePath '.\dist\FlipAi.exe' -PassThru
+          if (-not $launcher.WaitForExit(20000)) { throw 'launcher did not exit' }
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            try { if ((Invoke-WebRequest 'http://127.0.0.1:8765/health' -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200) { break } } catch {}
+            Start-Sleep -Milliseconds 250
+          } while ((Get-Date) -lt $deadline)
+          Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--google-voice','--visible'
+          if (-not (Wait-VoiceWindow 90)) { Show-VoiceState 'window missing before quit'; throw 'Google Voice window did not open before the quit test' }
+          Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
+          $left = @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue)
+          if ($left.Count -gt 0) {
+            Show-VoiceState 'processes survived quit'
+            throw "Quit left $($left.Count) FlipAi process(es) running"
+          }
+          Write-Host 'Quit stopped every FlipAi process, Google Voice window included.'
+
+
       - name: Microsoft Defender scan app (when available)
         shell: pwsh
         run: |

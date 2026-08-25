@@ -12,3 +12,5 @@ func platformTestAgentVoice(cfg VoiceCallConfig, agent string) error {
 	return errors.New("agent voice calling is available only on Windows")
 }
 func platformWebView2Runtime() string { return "" }
+
+func platformVoiceStillOpen() bool { return false }

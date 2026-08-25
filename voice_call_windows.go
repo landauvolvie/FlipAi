@@ -374,6 +374,29 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		s.LastError = ""
 		s.LastEvent = "browser-starting"
 	})
+	// Quit has to reach this window. Its message loop below blocks until the
+	// window closes, so nothing here would otherwise notice the quit flag: the
+	// Google Voice process outlived "Quit FlipAi", kept a browser profile open
+	// inside the data folder, and so also blocked the uninstaller from removing
+	// it and the installer from replacing FlipAi.exe.
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		t := time.NewTicker(400 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-watchDone:
+				return
+			case <-t.C:
+				if quitRequested(dataDir) {
+					procVoicePostMessage.Call(uintptr(w.Window()), voiceWMClose, 0, 0)
+					return
+				}
+			}
+		}
+	}()
+
 	w.Navigate(googleVoiceWebURL)
 	if visible {
 		// The window is created by a process the user did not click on, so it
@@ -665,6 +688,10 @@ var _ = strconv.Itoa
 // The runtime registers itself under a fixed product GUID, per-machine or
 // per-user. The read is cached because the settings page asks on every poll.
 var webView2Probe = newCachedBool(5*time.Minute, func() bool { return webView2Version() != "" })
+
+// platformVoiceStillOpen reports whether the Google Voice window is still up,
+// so a quit can wait for it rather than leaving it holding the data folder.
+func platformVoiceStillOpen() bool { return googleVoiceHWND() != 0 }
 
 func platformWebView2Runtime() string {
 	if !webView2Probe.get() {

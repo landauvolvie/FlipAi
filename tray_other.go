@@ -12,3 +12,4 @@ func runSystemTray(ctx context.Context, tooltip string, onOpen, onQuit func()) e
 }
 
 func acquireWatchdogInstance() (func(), bool, error) { return func() {}, true, nil }
+func acquireHostInstance() (func(), bool, error)     { return func() {}, true, nil }

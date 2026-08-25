@@ -38,8 +38,26 @@ func main() {
 		runWatchdog(dataDir, cfgPath)
 	case "--tray":
 		runTrayProcess(dataDir, cfgPath)
+	case "--resume":
+		// How the installer brings FlipAi back after an unattended update. The
+		// watchdog deliberately never clears the quit flag -- that is what makes
+		// Quit stick -- so a plain "--watchdog" restart after an update found
+		// the installer's own quit flag still in place and exited immediately,
+		// leaving the app permanently stopped. Resuming is an explicit
+		// instruction to run again, so it clears the flag, exactly as an
+		// ordinary launch does.
+		_ = os.Remove(filepath.Join(dataDir, "quit.flag"))
+		if exe, err := os.Executable(); err == nil {
+			_ = spawnDetached(exe, "--watchdog")
+		}
 	case "--quit":
+		// The uninstaller and the installer both run this and wait for it, so
+		// it has to mean "FlipAi has stopped", not "the request was filed".
+		// Returning early let Setup start deleting files while the app still
+		// held them open, which is why %LOCALAPPDATA%\AISMSBridge survived an
+		// uninstall.
 		requestQuit(dataDir, "command-line quit")
+		waitForShutdown(dataDir, cfgPath, 20*time.Second)
 	case "--claude-hook":
 		// Hook helper for a live Claude session. It reads one hook event from
 		// stdin and posts it to the running host; see claudehook.go.
@@ -101,6 +119,40 @@ func requestQuit(dataDir, reason string) {
 func quitRequested(dataDir string) bool {
 	_, err := os.Stat(filepath.Join(dataDir, "quit.flag"))
 	return err == nil
+}
+
+// waitForShutdown blocks until nothing of FlipAi is still answering, or the
+// deadline passes. The local control port going quiet is the signal that the
+// host is gone; platformVoiceStillOpen covers the Google Voice window, which
+// runs in a process of its own and keeps a browser profile open inside the data
+// folder.
+func waitForShutdown(dataDir, cfgPath string, d time.Duration) {
+	cfg, err := loadConfig(cfgPath, dataDir)
+	if err != nil {
+		cfg = defaultConfig(dataDir)
+	}
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() {
+			// WebView2 keeps helper processes and open handles inside the data
+			// folder for a moment after its window goes; Setup deletes that
+			// folder next, so give them time to let go.
+			time.Sleep(1500 * time.Millisecond)
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func hostResponding(listen string) bool {
+	c := &http.Client{Timeout: 500 * time.Millisecond}
+	r, err := c.Get("http://" + listen + "/health")
+	if err != nil {
+		return false
+	}
+	defer r.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 4096))
+	return true
 }
 
 func showLauncherError(dataDir string, cfg Config, detail string) {
@@ -336,6 +388,18 @@ func minInt(a, b int) int {
 }
 
 func runHost(dataDir, cfgPath, statePath, tokenPath string) {
+	// Exactly one host may exist. Two hosts poll the same mailbox with separate
+	// records of what they have already handled, so every SMS is delivered to
+	// the agent twice -- once per host. The watchdog can produce a second one
+	// whenever the running host reports a different version from its own.
+	releaseHost, owner, err := acquireHostInstance()
+	if err == nil && !owner {
+		log.Printf("another FlipAi host is already running; this one is exiting")
+		return
+	}
+	if err == nil {
+		defer releaseHost()
+	}
 	hostStartedAt = time.Now()
 	lf, _ := os.OpenFile(filepath.Join(dataDir, "bridge.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if lf != nil {

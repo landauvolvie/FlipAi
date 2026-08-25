@@ -251,9 +251,12 @@ func (a *App) autoInstallUpdate(ctx context.Context, info ReleaseInfo) {
 		log.Add("info", "host", "Automatic update deferred: an agent turn started during download", "", "", "")
 		return
 	}
-	// reopenWindow=false: nobody asked for this one, so come back as the
-	// background bridge rather than popping a window open on its own.
-	if err := runUpdateInstaller(path, false); err != nil {
+	// An automatic update should put back what the user had. If the FlipAi
+	// window was on screen, it comes back on screen; if only the tray bridge was
+	// running, only that comes back. Coming back as the background bridge no
+	// matter what is what made an update look like the app never returned.
+	reopen := platformFlipAiWindowOpen()
+	if err := runUpdateInstaller(path, reopen); err != nil {
 		log.Add("error", "host", "Automatic update could not start: "+truncate(err.Error(), 200), "", "", "")
 		return
 	}

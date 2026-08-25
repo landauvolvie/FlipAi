@@ -64,7 +64,7 @@ Filename: "{app}\FlipAi.exe"; Description: "Launch FlipAi and complete setup"; W
 Filename: "{app}\FlipAi.exe"; WorkingDir: "{app}"; Flags: nowait; Check: RestartWithWindow
 ; /restartapp=2 is an unattended automatic update. Nobody is waiting at the
 ; screen, so restore the background bridge and tray without stealing focus.
-Filename: "{app}\FlipAi.exe"; Parameters: "--watchdog"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartBridgeOnly
+Filename: "{app}\FlipAi.exe"; Parameters: "--resume"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartBridgeOnly
 
 [UninstallRun]
 Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopFlipAi"
@@ -91,6 +91,26 @@ begin
   ForceDirectories(DataDir);
   QuitFile := AddBackslash(DataDir) + 'quit.flag';
   SaveStringToFile(QuitFile, Reason, False);
+end;
+
+{ Stop FlipAi and wait for it to really be gone. The flag alone only files a
+  request; FlipAi.exe --quit waits until nothing is answering and the Google
+  Voice window has closed. Without that wait Setup began replacing FlipAi.exe
+  and deleting the data folder while both were still open. }
+procedure StopFlipAiAndWait(const Reason: String);
+var
+  Exe: String;
+  ResultCode: Integer;
+begin
+  SignalBridgeToQuit(Reason);
+  Exe := ExpandConstant('{app}\FlipAi.exe');
+  if FileExists(Exe) then
+  begin
+    if not Exec(Exe, '--quit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      Sleep(4000);
+  end
+  else
+    Sleep(3000);
 end;
 
 { An existing install is an update, not a first run. Setup detects it up front
@@ -139,9 +159,8 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { Stop the running bridge, whichever build started it. }
-  SignalBridgeToQuit('installer upgrade');
-  Sleep(3000);
+  { Stop the running bridge, whichever build started it, and wait for it. }
+  StopFlipAiAndWait('installer upgrade');
 
   { Remove both the old and new per-user startup values before writing the one
     this install should have. PriorStartup remembers what was there so an
@@ -155,6 +174,9 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    { Setup wrote this flag to stop the old build. Leaving it behind would tell
+      the freshly installed one to stop as soon as it started. }
+    DeleteFile(AddBackslash(ExpandConstant('{localappdata}\AISMSBridge')) + 'quit.flag');
     if (PriorStartup <> '') and not WizardIsTaskSelected('startup') then
       RegWriteStringValue(HKCU, RunKey, 'FlipAi',
         '"' + ExpandConstant('{app}\FlipAi.exe') + '" --watchdog');
@@ -165,8 +187,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
-    SignalBridgeToQuit('uninstall');
-    Sleep(1500);
+    StopFlipAiAndWait('uninstall');
     RegDeleteValue(HKCU, RunKey, 'AISMSBridge');
     RegDeleteValue(HKCU, RunKey, 'FlipAi');
   end;
