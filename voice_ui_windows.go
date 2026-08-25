@@ -105,7 +105,14 @@ const voiceDesktopInitScript = `
     head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand'));
     const open=btn('Open Google Voice','btn accent'); actions.append(open); card.append(head);
     const body=E('div','card-body'),rows=E('div','rows');
-    rows.append(row('Voice calling','Calls only. Existing SMS/Gmail routing is unchanged.',cfg.enabled?pill('Enabled','ok'):pill('Off')));
+    rows.append(row('Voice calling','Calls only. Existing SMS/Gmail routing is unchanged.',cfg.enabled?pill('On','ok'):pill('Off')));
+    rows.append(row('Starts by itself','Opens at Windows sign-in and stays running in the background.',
+      cfg.enabled?pill('Yes, at sign-in','ok'):pill('No, only when you press Open','warn')));
+    rows.append(row('Audio path','Needed for the caller and the agent to hear each other.',
+      (cfg.googleVoiceInput&&cfg.googleVoiceOutput)?pill('Configured','ok'):pill('Not set up','warn')));
+    const onCalls=snapshot.callAgents||[];
+    rows.append(row('Agents on calls','Set by giving an agent a number that may call, on the Agents page.',
+      onCalls.length?pill(onCalls.join(' and '),'ok'):pill('Nobody yet','warn')));
     rows.append(row('Google Voice window','Persistent WebView2 profile owned by FlipAi.',runtimePill(rt)));
     rows.append(row('Edge WebView2 runtime','Windows component FlipAi needs to show Google Voice.',
       snapshot.webView2?pill(snapshot.webView2,'ok'):pill('Not installed','warn')));
@@ -117,6 +124,11 @@ const voiceDesktopInitScript = `
     if(rt.lastError){
       const c=E('p','callout');
       c.append(E('b','','Google Voice window: '),document.createTextNode(rt.lastError));
+      body.append(c);
+    }
+    if(!onCalls.length){
+      const c=E('p','callout');
+      c.append(E('b','','No agent can take a call yet. '),document.createTextNode('Open the Agents page, add your phone number under the agent you want to talk to, and set that number to "Texts and calls" or "Calls only". Until then a call reaches FlipAi and is left unanswered.'));
       body.append(c);
     }
     if(rt.blocked){
@@ -148,7 +160,7 @@ const voiceDesktopInitScript = `
       c.append(E('b','','Microsoft Edge WebView2 Runtime is not installed. '),document.createTextNode('FlipAi cannot show the Google Voice window without it. Install Microsoft\u2019s free Evergreen Standalone Installer, then press Open Google Voice again.'));
       body.append(c);
     }
-    body.append(toggle('vc-enabled','Enable phone voice','Starts the dedicated Google Voice window automatically after this Windows user signs in and keeps it alive while the PC is locked.',cfg.enabled));
+    body.append(toggle('vc-enabled','Keep Google Voice running','Opens the Google Voice window automatically at Windows sign-in, keeps it alive while the PC is locked, and reopens it if it is closed. Leave this on and you never have to press Open again. It is also what allows a call to be answered at all.',cfg.enabled));
     body.append(toggle('vc-auto','Auto-answer authorized callers','Unknown or unparseable caller IDs are never auto-answered.',cfg.autoAnswer));
     body.append(field('Default voice agent',select('vc-default',[['C','ChatGPT / Codex'],['A','Claude Desktop']],cfg.defaultAgent),'If a caller is allowed for only one agent, that agent wins. If both allow the caller, this default wins.'));
     body.append(E('div','section-label','Audio bridge'));
@@ -164,7 +176,7 @@ const voiceDesktopInitScript = `
     body.append(E('div','section-label','Desktop apps'));
     for(const agent of ['C','A']){
       const isClaude=agent==='A', own=isClaude?cfg.claude:cfg.codex, p=isClaude?'vca':'vcc';
-      body.append(toggle(p+'-enabled','Allow calls to '+(isClaude?'Claude':'ChatGPT / Codex'),'Which numbers may call it is set with that agent on the Agents page.',own.enabled));
+      body.append(toggle(p+'-enabled','Allow calls to '+(isClaude?'Claude':'ChatGPT / Codex'),'Not needed once a number under that agent is set to "Texts and calls" or "Calls only" on the Agents page; that already allows it. Use this only to allow calls before any number is added.',own.enabled));
       const grid=E('div','grid-2');
       grid.append(field('Desktop window title contains',input(p+'-title',own.appTitle,isClaude?'Claude':'ChatGPT'),'FlipAi uses it to bring the right app forward when a call connects.'));
       grid.append(field('Voice shortcut (recommended)',input(p+'-shortcut',own.voiceShortcut,'Ctrl+Shift+V'),'The Voice shortcut set inside that desktop app. If blank, FlipAi tries its accessible Voice button.'));

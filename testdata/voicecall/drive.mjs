@@ -30,7 +30,7 @@ const browser = await chromium.launch({
   ],
 });
 
-async function scenario(name, config, body) {
+async function scenario(name, config, body, opts = {}) {
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['microphone'] });
   const page = await ctx.newPage();
   const calls = [];
@@ -77,6 +77,9 @@ async function scenario(name, config, body) {
       };
     } catch (_) {}
   });
+  // A scenario may need to change the environment the script under test runs
+  // in; this goes in before it so it is in place when the script installs.
+  if (opts.pre) await page.addInitScript(opts.pre);
   await page.addInitScript({ content: initScript });
 
   await post('configure', config);
@@ -215,6 +218,32 @@ await scenario('no-double-answer', baseConfig(), async ({ page, tick }) => {
   await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
   await tick(3);
   return { answered: true };
+});
+
+// 6b. FlipAi keeps this window minimized, and Chromium throttles timers in a
+//     window nobody is looking at -- to once a minute, while a call rings for
+//     far less than that. Answering therefore may not depend on the poll timer.
+//     Here the poll's own re-arm is dropped, killing the timer loop after its
+//     first run, and no tick is driven by hand: only the DOM change the ringing
+//     call itself makes can answer it.
+await scenario('answers-without-the-poll-timer', baseConfig(), async ({ page }) => {
+  await page.waitForTimeout(600);           // let the one surviving tick run and the loop die
+  await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 8000 })
+    .catch(() => { throw new Error('a ringing call was never answered once the poll timer stopped'); });
+  return { answered: true, pollTimers: await page.evaluate(() => window.__flipDroppedPollTimers || 0) };
+}, {
+  pre: () => {
+    // 700ms is the poll's re-arm delay and nothing else in either the page or
+    // the script uses it, so dropping exactly that one stops the loop and
+    // leaves every other timer alone.
+    const real = window.setTimeout;
+    window.__flipDroppedPollTimers = 0;
+    window.setTimeout = function (fn, ms, ...rest) {
+      if (ms === 700) { window.__flipDroppedPollTimers++; return 0; }
+      return real.call(window, fn, ms, ...rest);
+    };
+  },
 });
 
 // 7. The window must not become a general-purpose browser, and the page must not

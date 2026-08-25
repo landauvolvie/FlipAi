@@ -193,6 +193,12 @@ const googleVoiceInitScript = `
   // exist yet. Observing a null root throws, and the throw aborts the rest of
   // this script -- which is the entire call bridge. The observer therefore
   // waits for a root instead of assuming one.
+  //
+  // The observer also drives a tick. The poll below runs on a timer, and a
+  // timer is exactly what Chromium slows down in a window nobody is looking at
+  // -- and this window is deliberately minimized. A ring that arrives while the
+  // timer is throttled has to be noticed from the DOM change that carries it,
+  // or the call is simply never answered.
   let routeQueued = false;
   const observeDocument = () => {
     const root = document.documentElement || document.body;
@@ -200,7 +206,7 @@ const googleVoiceInitScript = `
     new MutationObserver(() => {
       if (routeQueued) return;
       routeQueued = true;
-      setTimeout(() => { routeQueued = false; routeAll(); }, 250);
+      setTimeout(() => { routeQueued = false; routeAll(); tick(); }, 250);
     }).observe(root, {childList: true, subtree: true});
     return true;
   };

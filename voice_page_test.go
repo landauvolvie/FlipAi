@@ -175,6 +175,7 @@ type driverReport struct {
 			Label    string `json:"label"`
 		} `json:"devices"`
 		Answered     bool              `json:"answered"`
+		PollTimers   int               `json:"pollTimers"`
 		Capabilities map[string]string `json:"capabilities"`
 		Observed     observedPage      `json:"observed"`
 		MidCall      observedPage      `json:"midCall"`
@@ -420,6 +421,22 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 			t.Errorf("flipVoiceAnswered called %d times for one call, want 1", n)
 		}
 		if acts, _ := h.scenario("no-double-answer").recorded(); len(acts) != 1 {
+			t.Errorf("agent activations = %v, want exactly one", acts)
+		}
+	})
+
+	// FlipAi runs this window minimized so calls are answered in the background,
+	// and Chromium slows a hidden window's timers to a crawl. A call that rings
+	// while the poll timer is throttled still has to be answered.
+	t.Run("a call is answered without the poll timer", func(t *testing.T) {
+		i := report.find(t, "answers-without-the-poll-timer")
+		if report.Scenarios[i].PollTimers == 0 {
+			t.Fatal("the poll timer was never stopped, so this scenario proves nothing")
+		}
+		if n := report.countCalls(i, "flipVoiceAnswered"); n != 1 {
+			t.Errorf("flipVoiceAnswered called %d times, want 1", n)
+		}
+		if acts, _ := h.scenario("answers-without-the-poll-timer").recorded(); len(acts) != 1 {
 			t.Errorf("agent activations = %v, want exactly one", acts)
 		}
 	})

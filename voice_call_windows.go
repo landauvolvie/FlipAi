@@ -301,6 +301,26 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 	}
 }
 
+// voiceBrowserArguments are the Chromium switches the Google Voice window is
+// created with.
+//
+// FlipAi keeps that window minimized, and a minimized window is one Chromium
+// treats as hidden: it counts as occluded, its renderer is backgrounded, and
+// its timers are first throttled to once a second and then, after a few
+// minutes, to once a minute. The bridge polls for a ringing call about once a
+// second, and a call stops ringing in well under a minute, so a window left
+// running in the background quietly stopped noticing calls at all. Autoplay is
+// relaxed for the same reason: the call audio element is started without a
+// click, in a window that never has focus.
+//
+// This binding passes no environment options to WebView2, and WebView2 reads
+// this variable when none are given, so it is how these switches get through.
+const voiceBrowserArguments = "--disable-background-timer-throttling " +
+	"--disable-backgrounding-occluded-windows " +
+	"--disable-renderer-backgrounding " +
+	"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling " +
+	"--autoplay-policy=no-user-gesture-required"
+
 func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	// A Win32 message pump only works on the thread that created the window.
 	// This currently runs inside init(), where the Go runtime happens to hold
@@ -312,6 +332,8 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		recordVoiceOpen(dataDir, "could not create the Google Voice browser profile folder", err)
 		return err
 	}
+	// Set on this process only, which exists to host this one window.
+	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", voiceBrowserArguments)
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,

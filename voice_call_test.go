@@ -197,10 +197,20 @@ func TestVoiceAudioBridgeRejectsSilentWiring(t *testing.T) {
 		t.Fatalf("a correctly wired pair of cables was rejected: %v", err)
 	}
 
+	// Absent endpoints must not stop the feature being switched on: the switch
+	// that keeps Google Voice running is the same one every call is checked
+	// against, so refusing to save it made calling unreachable on a PC with no
+	// cable driver. The call is answered and says it has no audio path instead.
 	missing := base()
-	missing.GoogleVoiceOutput = ""
-	if _, err := normalizeVoiceCallConfig(missing, true); err == nil {
-		t.Error("enabling calling without an audio path should be refused")
+	missing.GoogleVoiceOutput, missing.GoogleVoiceInput = "", ""
+	if _, err := normalizeVoiceCallConfig(missing, true); err != nil {
+		t.Errorf("enabling calling without an audio path was refused: %v", err)
+	}
+	if audioBridgeReady(missing) {
+		t.Error("a configuration with no endpoints must not report a working audio path")
+	}
+	if !audioBridgeReady(base()) {
+		t.Error("a fully wired configuration must report a working audio path")
 	}
 
 	shared := base()
@@ -293,7 +303,8 @@ func TestGoogleVoiceScriptIsSingleFlighted(t *testing.T) {
 // that text is the only thing the user ever sees.
 func TestOpenGoogleVoiceReportsFailureToTheButton(t *testing.T) {
 	dir := t.TempDir()
-	h := voiceControlHandler(dir, "127.0.0.1:8765", activityLogForStatePath(filepath.Join(dir, "state.json")))
+	h := voiceControlHandler(dir, "127.0.0.1:8765", func() Config { return voiceTestConfig(t) },
+		activityLogForStatePath(filepath.Join(dir, "state.json")))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
@@ -375,5 +386,102 @@ func TestVoiceOpenAttemptsLeaveAnExplanation(t *testing.T) {
 	// one as the cause of a missing window would explain nothing.
 	if got := lastVoiceOpenFailure(dir, started); got != "" {
 		t.Fatalf("a progress note was reported as a failure: %q", got)
+	}
+}
+
+// Switching phone voice on is what makes Google Voice start at sign-in and stay
+// running, and it is also what every incoming call is checked against. It must
+// not depend on hardware the user may not have yet.
+func TestPhoneVoiceCanBeEnabledWithoutAudioCables(t *testing.T) {
+	vc := defaultVoiceCallConfig()
+	vc.Enabled = true
+	vc.Codex.Enabled = true
+
+	saved, err := normalizeVoiceCallConfig(vc, true)
+	if err != nil {
+		t.Fatalf("phone voice could not be switched on without cables: %v", err)
+	}
+	if !saved.Enabled {
+		t.Fatal("the setting did not survive saving")
+	}
+
+	// And a call from an allowed number is accepted, rather than refused with
+	// "phone voice is turned off".
+	cfg := voiceTestConfig(t)
+	if d := decideVoiceCall(saved, cfg, "8455551000", ""); !d.Allowed || d.Agent != "C" {
+		t.Fatalf("an allowed caller was refused with no cables configured: %+v", d)
+	}
+
+	// Having nobody to hand a call to does not stop the window from being kept
+	// running either -- signing in to Google Voice is the step that comes first.
+	// The call itself is what says nothing would answer.
+	none := defaultVoiceCallConfig()
+	none.Enabled = true
+	if _, err := normalizeVoiceCallConfig(none, true); err != nil {
+		t.Errorf("keeping Google Voice running before any agent has a number was refused: %v", err)
+	}
+	if d := decideVoiceCall(none, defaultConfig(t.TempDir()), "8455551000", ""); d.Allowed ||
+		!strings.Contains(d.Reason, "Agents page") {
+		t.Errorf("a call with no agent on calls should be refused with directions, got %+v", d)
+	}
+}
+
+// Marking a number "Texts and calls" under an agent is the user saying that
+// agent takes calls. Making them also find a second switch elsewhere is how a
+// number that was plainly allowed to call still went unanswered.
+func TestAllowingANumberToCallPutsItsAgentOnCalls(t *testing.T) {
+	cfg := voiceTestConfig(t)
+	vc := defaultVoiceCallConfig()
+	vc.Enabled = true // and neither vc.Codex.Enabled nor vc.Claude.Enabled
+
+	if d := decideVoiceCall(vc, cfg, "8455551000", ""); !d.Allowed || d.Agent != "C" {
+		t.Fatalf("a number allowed to call ChatGPT was refused: %+v", d)
+	}
+	if d := decideVoiceCall(vc, cfg, "8455552000", ""); !d.Allowed || d.Agent != "A" {
+		t.Fatalf("a calls-only number under Claude was refused: %+v", d)
+	}
+	// An SMS-only number still may not call, and the reason has to say so.
+	if d := decideVoiceCall(vc, cfg, "8455554000", ""); d.Allowed ||
+		!strings.Contains(d.Reason, "not to call") {
+		t.Fatalf("an SMS-only number should not reach a call: %+v", d)
+	}
+	// A caller name approved for calls counts the same way.
+	named := defaultConfig(t.TempDir())
+	named.Claude.CallerNames = "Jane Appleseed"
+	if d := decideVoiceCall(vc, named, "", "Jane Appleseed"); !d.Allowed || d.Agent != "A" {
+		t.Fatalf("an approved caller name was refused: %+v", d)
+	}
+	// And the snapshot the desktop UI reads reports who can take a call.
+	snap := voiceSnapshot(t.TempDir(), func() Config { return cfg })
+	if len(snap.CallAgents) != 2 {
+		t.Errorf("both agents own a number that may call, snapshot said %v", snap.CallAgents)
+	}
+	if got := voiceSnapshot(t.TempDir(), func() Config { return defaultConfig(t.TempDir()) }); len(got.CallAgents) != 0 {
+		t.Errorf("a fresh install has nobody on calls, snapshot said %v", got.CallAgents)
+	}
+}
+
+func TestAnsweredCallSaysWhenItHasNoAudioPath(t *testing.T) {
+	dir := t.TempDir()
+	main := voiceTestConfig(t)
+	vc := defaultVoiceCallConfig()
+	vc.Enabled = true
+	vc.Codex.Enabled = true
+	if err := saveVoiceCallConfig(dir, vc); err != nil {
+		t.Fatal(err)
+	}
+	b := newVoiceBridge(dir, func() Config { return main },
+		func(VoiceCallConfig, string) error { return nil },
+		func(VoiceCallConfig, string) error { return nil })
+
+	if !b.Answered("8455551000", "") {
+		t.Fatal("an allowed caller was not bridged without cables")
+	}
+	st := loadVoiceRuntime(dir)
+	if st.LastEvent != "call-bridged" {
+		t.Fatalf("call was not bridged: %+v", st)
+	}
+	if !strings.Contains(st.LastError, "no audio path") {
+		t.Errorf("a silent call must say so, got %q", st.LastError)
 	}
 }

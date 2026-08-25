@@ -103,14 +103,29 @@ type voiceControlSnapshot struct {
 	// Google Voice window cannot be created, and it is worth saying so before
 	// the user clicks Open rather than after.
 	WebView2 string `json:"webView2,omitempty"`
+	// CallAgents names the agents a call can currently be handed to. It is
+	// derived rather than stored: an agent is on calls because somebody gave it
+	// a number that may call. Showing it is how the desktop UI can say "nothing
+	// would be answered yet" before a call is missed rather than after.
+	CallAgents []string `json:"callAgents,omitempty"`
 }
 
-func voiceSnapshot(dataDir string) voiceControlSnapshot {
-	return voiceControlSnapshot{
-		Config:   loadVoiceCallConfig(dataDir),
+func voiceSnapshot(dataDir string, mainConfig func() Config) voiceControlSnapshot {
+	vc := loadVoiceCallConfig(dataDir)
+	snap := voiceControlSnapshot{
+		Config:   vc,
 		Runtime:  loadVoiceRuntime(dataDir),
 		WebView2: platformWebView2Runtime(),
 	}
+	if mainConfig != nil {
+		cfg := mainConfig()
+		for _, agent := range []string{"C", "A"} {
+			if voiceAgentOnCalls(vc, cfg, agent) {
+				snap.CallAgents = append(snap.CallAgents, agentDisplayName(agent))
+			}
+		}
+	}
+	return snap
 }
 
 func defaultVoiceCallConfig() VoiceCallConfig {
@@ -125,6 +140,11 @@ func defaultVoiceCallConfig() VoiceCallConfig {
 			AppTitle: "Claude",
 		},
 	}
+}
+
+// audioBridgeReady reports whether a bridged call would actually carry sound.
+func audioBridgeReady(cfg VoiceCallConfig) bool {
+	return cfg.GoogleVoiceInput != "" && cfg.GoogleVoiceOutput != ""
 }
 
 func voiceConfigPath(dataDir string) string  { return filepath.Join(dataDir, "voice-call.json") }
@@ -176,10 +196,12 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 	if err := normalizeAgent(&cfg.Claude, "Claude"); err != nil {
 		return cfg, fmt.Errorf("Claude callers: %w", err)
 	}
+	// Whether any agent may take a call is deliberately not checked here. That
+	// answer lives with the agents, changes without this file being written, and
+	// refusing the save over it would keep the window from starting itself --
+	// which is the one thing this switch exists to do. A call that reaches no
+	// agent says so on the call, and the desktop UI says so before that.
 	if strict && cfg.Enabled {
-		if !cfg.Codex.Enabled && !cfg.Claude.Enabled {
-			return cfg, errors.New("enable phone voice for at least one agent")
-		}
 		if err := validateVoiceAudioBridge(cfg); err != nil {
 			return cfg, err
 		}
@@ -192,13 +214,16 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 // one carrying the caller to the AI app, one carrying the AI app back to the
 // caller. Pointing both ends of a direction at the same endpoint is the
 // classic setup error, and it produces a call in which nobody hears anything.
+// validateVoiceAudioBridge rejects wiring that is wrong, not wiring that is
+// merely absent.
+//
+// It used to refuse to save unless both virtual endpoints were chosen, which
+// made the whole feature unreachable on a PC with no cable driver installed:
+// the switch that keeps Google Voice running -- and the switch every call is
+// checked against -- could not be turned on at all. Missing endpoints are now
+// reported on the call itself, which is answered either way; only a
+// contradiction is refused.
 func validateVoiceAudioBridge(cfg VoiceCallConfig) error {
-	if cfg.GoogleVoiceOutput == "" {
-		return errors.New("choose the Google Voice speaker: the virtual cable that carries the caller toward the AI app")
-	}
-	if cfg.GoogleVoiceInput == "" {
-		return errors.New("choose the Google Voice microphone: the virtual cable that carries the AI app's voice back to the caller")
-	}
 	if cfg.AgentOutput != "" && strings.EqualFold(cfg.AgentOutput, cfg.GoogleVoiceOutput) {
 		return errors.New("Google Voice and the AI app cannot share one speaker endpoint; each direction of the conversation needs its own virtual cable")
 	}
@@ -288,6 +313,34 @@ func allowedCallerLabel(raw, label string) bool {
 	return false
 }
 
+// voiceAgentOnCalls reports whether an agent may take phone calls at all.
+//
+// The per-agent switch on the voice card is not the only way to say yes: giving
+// an agent a number marked "Texts and calls" or "Calls only" is the same
+// statement, made on the page where numbers actually live. Requiring both was a
+// hidden second gate, so a number the user had explicitly allowed to call still
+// produced "No agent is allowed on phone calls yet". Either one is enough now.
+func voiceAgentOnCalls(vc VoiceCallConfig, cfg Config, agent string) bool {
+	own := vc.Codex
+	if agent == "A" {
+		own = vc.Claude
+	}
+	if own.Enabled {
+		return true
+	}
+	return agentTakesVoice(agentSettings(cfg, agent))
+}
+
+func agentTakesVoice(s AgentSettings) bool {
+	for _, p := range s.Phones {
+		if p.AllowsVoice() {
+			return true
+		}
+	}
+	names, _ := normalizeAllowedCallerLabels(s.CallerNames, false)
+	return len(names) > 0
+}
+
 func voiceAgentAccepts(cfg Config, agent, number, label string) bool {
 	settings := agentSettings(cfg, agent)
 	if number != "" {
@@ -316,13 +369,15 @@ func decideVoiceCall(vc VoiceCallConfig, cfg Config, caller, label string) voice
 	if !vc.Enabled {
 		return voiceCallDecision{Reason: "Phone voice is turned off in FlipAi settings."}
 	}
-	if !vc.Codex.Enabled && !vc.Claude.Enabled {
-		return voiceCallDecision{Reason: "No agent is allowed on phone calls yet."}
+	codexOn := voiceAgentOnCalls(vc, cfg, "C")
+	claudeOn := voiceAgentOnCalls(vc, cfg, "A")
+	if !codexOn && !claudeOn {
+		return voiceCallDecision{Reason: "No agent can take phone calls yet. On the Agents page, give an agent a phone number set to \"Texts and calls\" or \"Calls only\"."}
 	}
 	number := normalizeUSPhone(caller)
 	label = normalizeCallerLabel(label)
-	codexOK := vc.Codex.Enabled && voiceAgentAccepts(cfg, "C", number, label)
-	claudeOK := vc.Claude.Enabled && voiceAgentAccepts(cfg, "A", number, label)
+	codexOK := codexOn && voiceAgentAccepts(cfg, "C", number, label)
+	claudeOK := claudeOn && voiceAgentAccepts(cfg, "A", number, label)
 	switch {
 	case codexOK && claudeOK:
 		// A number belongs to one agent, so this only happens through a caller
@@ -452,7 +507,15 @@ func startVoiceControlServer(dataDir, mainConfigPath, statePath string) {
 	if err != nil {
 		mainCfg = defaultConfig(dataDir)
 	}
-	handler := voiceControlHandler(dataDir, mainCfg.Listen, activityLogForStatePath(statePath))
+	handler := voiceControlHandler(dataDir, mainCfg.Listen, func() Config {
+		// Reloaded per request: numbers are added on the Agents page while this
+		// server is running, and a stale copy would report the old answer.
+		cfg, err := loadConfig(mainConfigPath, dataDir)
+		if err != nil {
+			return defaultConfig(dataDir)
+		}
+		return cfg
+	}, activityLogForStatePath(statePath))
 	server := &http.Server{Addr: voiceControlListen, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -467,7 +530,7 @@ func startVoiceControlServer(dataDir, mainConfigPath, statePath string) {
 // voiceControlHandler is split out so the endpoints the desktop UI calls can be
 // exercised directly. The Open path in particular has to carry a failure back to
 // the button that started it, and that is only worth anything if it is tested.
-func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http.Handler {
+func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, activity *ActivityLog) http.Handler {
 	mux := http.NewServeMux()
 	withCORS := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -497,7 +560,7 @@ func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http
 			http.Error(w, "GET required", http.StatusMethodNotAllowed)
 			return
 		}
-		writeJSON(w, voiceSnapshot(dataDir))
+		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
 	}))
 	mux.HandleFunc("/config", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -514,7 +577,7 @@ func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http
 			return
 		}
 		platformVoiceConfigChanged(dataDir, loadVoiceCallConfig(dataDir))
-		writeJSON(w, voiceSnapshot(dataDir))
+		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
 	}))
 	mux.HandleFunc("/open", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -638,14 +701,21 @@ func (b *voiceBridge) Answered(caller, label string) bool {
 		return false
 	}
 	b.setAgent(d.Agent)
+	silent := !audioBridgeReady(cfg)
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 		s.InCall = true
 		s.Caller = number
 		s.CallerLabel = name
 		s.Agent = d.Agent
 		s.Blocked = ""
-		s.LastError = ""
 		s.LastEvent = "call-bridged"
+		if silent {
+			// The call is up and the agent is listening, but nothing carries the
+			// sound between them yet.
+			s.LastError = "The call was answered but no audio path is set up: choose the Google Voice microphone and speaker under Connections, and install a virtual audio cable if you have not."
+		} else {
+			s.LastError = ""
+		}
 	})
 	return true
 }
