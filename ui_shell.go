@@ -101,18 +101,21 @@ func uiBrand(name string) template.HTML {
 // Shared view model
 // ---------------------------------------------------------------------------
 
+// navEntry is one sidebar link. Group opens a labelled section above the link,
+// so the seven pages read as three short lists rather than one undifferentiated
+// column: what FlipAi is doing, what it is bridging, and the app itself.
 type navEntry struct {
 	Key, Href, Label, Icon string
-	Separated              bool
+	Group                  string
 }
 
 var uiNav = []navEntry{
 	{Key: "home", Href: "/", Label: "Home", Icon: "home"},
-	{Key: "connections", Href: "/connections", Label: "Connections", Icon: "link"},
+	{Key: "connections", Href: "/connections", Label: "Connections", Icon: "link", Group: "Bridge"},
 	{Key: "agents", Href: "/agents", Label: "Agents", Icon: "agent"},
 	{Key: "phone", Href: "/phone", Label: "Phone", Icon: "phone"},
 	{Key: "activity", Href: "/activity", Label: "Activity", Icon: "clock"},
-	{Key: "settings", Href: "/settings", Label: "Settings", Icon: "gear", Separated: true},
+	{Key: "settings", Href: "/settings", Label: "Settings", Icon: "gear", Group: "App"},
 	{Key: "advanced", Href: "/advanced", Label: "Advanced", Icon: "sliders"},
 }
 
@@ -302,7 +305,7 @@ const shellHTML = `{{define "shell"}}<!doctype html>
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark">F</span><span>FlipAi</span></div>
     <nav class="nav">
-      {{range .Shell.Items}}{{if .Separated}}<div class="nav-divider"></div>{{end}}<a href="{{.Href}}"{{if eq .Key $.Shell.Nav}} aria-current="page"{{end}}>{{icon .Icon}}<span>{{.Label}}</span></a>{{end}}
+      {{range .Shell.Items}}{{with .Group}}<div class="nav-label">{{.}}</div>{{end}}<a href="{{.Href}}"{{if eq .Key $.Shell.Nav}} aria-current="page"{{end}}>{{icon .Icon}}<span>{{.Label}}</span></a>{{end}}
     </nav>
     <div class="side-status">
       <b><span class="{{.Shell.DotClass}}"></span><span data-status="runningLabel">{{if .Shell.Paused}}FlipAi is paused{{else if .Shell.Running}}FlipAi is running{{else}}FlipAi is idle{{end}}</span></b>

@@ -74,6 +74,21 @@ type uiStatus struct {
 	ClaudeSessionMode      string
 	ClaudeSessionModeLabel string
 
+	// The SMS framing FlipAi puts after every command. SharedReplyStyle is the
+	// fallback both agents use; the two Custom flags say whether an agent has
+	// wording of its own, so the editor can show "Following shared default"
+	// rather than pretending an empty box means an empty instruction.
+	// The Effective values are what that agent actually sends today.
+	SharedReplyStyle          string
+	CodexReplyStyle           string
+	ClaudeReplyStyle          string
+	CodexReplyStyleCustom     bool
+	ClaudeReplyStyleCustom    bool
+	CodexReplyStyleEffective  string
+	ClaudeReplyStyleEffective string
+	DefaultReplyStyle         string
+	ReplyStyleMaxChars        int
+
 	// LiveActive reports whether live mode is not merely selected but actually
 	// running. The two differ whenever a preflight refused it, and the page has
 	// to show the mode that is really in use rather than the one chosen.
@@ -266,6 +281,18 @@ func (a *App) status() uiStatus {
 		AlertSound:             cfg.UI.AlertSound,
 		Update:                 loadUpdateState(a.statePath),
 	}
+	s.SharedReplyStyle = strings.TrimSpace(cfg.GoogleVoice.ReplyStyleHint)
+	if s.SharedReplyStyle == "" {
+		s.SharedReplyStyle = defaultReplyStyleHint
+	}
+	s.CodexReplyStyle = strings.TrimSpace(cfg.Codex.ReplyStyleHint)
+	s.ClaudeReplyStyle = strings.TrimSpace(cfg.Claude.ReplyStyleHint)
+	s.CodexReplyStyleCustom = s.CodexReplyStyle != ""
+	s.ClaudeReplyStyleCustom = s.ClaudeReplyStyle != ""
+	s.CodexReplyStyleEffective = cfg.replyStyleHintFor("C")
+	s.ClaudeReplyStyleEffective = cfg.replyStyleHintFor("A")
+	s.DefaultReplyStyle = defaultReplyStyleHint
+	s.ReplyStyleMaxChars = replyStyleHintMaxChars
 	s.CodexFound = executableExists(s.CodexResolved)
 	s.ClaudeFound = executableExists(s.ClaudeResolved)
 	s.CodexCwd = cfg.codexWorkingDir()

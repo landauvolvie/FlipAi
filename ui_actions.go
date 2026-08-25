@@ -353,6 +353,24 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 				*target = n
 			}
 		}
+		// SMS framing. Each agent may carry its own instruction; an empty box
+		// means "follow the shared line", which is what the Reset control posts.
+		// The shared line itself falls back to the built-in default when cleared,
+		// because every turn needs some framing and a blank one would silently
+		// stop telling the agent its answer becomes a text message.
+		if r.Form.Has("codexReplyStyle") {
+			cfg.Codex.ReplyStyleHint = normalizeReplyStyleHint(r.FormValue("codexReplyStyle"))
+		}
+		if r.Form.Has("claudeReplyStyle") {
+			cfg.Claude.ReplyStyleHint = normalizeReplyStyleHint(r.FormValue("claudeReplyStyle"))
+		}
+		if r.Form.Has("sharedReplyStyle") {
+			shared := normalizeReplyStyleHint(r.FormValue("sharedReplyStyle"))
+			if shared == "" {
+				shared = defaultReplyStyleHint
+			}
+			cfg.GoogleVoice.ReplyStyleHint = shared
+		}
 		if r.Form.Has("claudeSessionMode") {
 			// Anything unrecognised normalises to per-message, so a stale form
 			// post can never leave the bridge in a mode it does not implement.

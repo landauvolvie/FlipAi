@@ -15,12 +15,18 @@ import (
 	"time"
 )
 
-const version = "0.18.0"
+const version = "0.19.0"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
 // where to send anything — only that its answer travels as a text message.
 const defaultReplyStyleHint = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."
+
+// replyStyleHintMaxChars caps a hand-written instruction. FlipAi is a transport
+// between a phone and the agent the user already trusts, so this line is meant
+// to stay a line: a long preamble in front of every text changes what the agent
+// is rather than how its answer is shaped, and it is billed on every turn.
+const replyStyleHintMaxChars = 2000
 
 type Config struct {
 	CodexPath  string `json:"codexPath"`
@@ -126,6 +132,11 @@ type CodexConfig struct {
 	// on the Phone page, which is how every install behaved before agents could
 	// differ. See Config.progressInterval.
 	ProgressIntervalSeconds int `json:"progressIntervalSeconds,omitempty"`
+
+	// ReplyStyleHint overrides the shared SMS framing line for Codex only.
+	// Empty means follow GoogleVoice.ReplyStyleHint, which is how every install
+	// behaved before the two agents could be prompted differently.
+	ReplyStyleHint string `json:"replyStyleHint,omitempty"`
 }
 
 type ClaudeConfig struct {
@@ -142,6 +153,10 @@ type ClaudeConfig struct {
 	// ProgressIntervalSeconds overrides how often this agent texts a "still
 	// working" line during a long turn. Zero means follow the shared setting.
 	ProgressIntervalSeconds int `json:"progressIntervalSeconds,omitempty"`
+
+	// ReplyStyleHint overrides the shared SMS framing line for Claude only.
+	// Empty means follow GoogleVoice.ReplyStyleHint.
+	ReplyStyleHint string `json:"replyStyleHint,omitempty"`
 
 	// SessionMode selects how FlipAi drives Claude Code.
 	//
@@ -274,6 +289,11 @@ type Check struct {
 }
 
 func (c Check) Known() bool { return !c.At.IsZero() }
+
+// Ready reports a dependency that a test actually confirmed. OK on its own is
+// not enough: a Check with no timestamp was never run, so a page that keyed a
+// green badge off OK alone could call an untested agent ready.
+func (c Check) Ready() bool { return c.Known() && c.OK }
 
 func secureRandomToken(n int) (string, error) {
 	if n < 16 {
@@ -408,6 +428,38 @@ func (c Config) progressIntervalFor(agent string) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+// replyStyleHintFor resolves the one line of framing FlipAi puts after an SMS
+// command for a given agent: that agent's own instruction when it has one,
+// otherwise the shared default. An install that never opens the new editors
+// keeps behaving exactly as it did, because both overrides start empty.
+func (c Config) replyStyleHintFor(agent string) string {
+	var own string
+	switch agent {
+	case "A":
+		own = strings.TrimSpace(c.Claude.ReplyStyleHint)
+	case "C":
+		own = strings.TrimSpace(c.Codex.ReplyStyleHint)
+	}
+	if own != "" {
+		return own
+	}
+	if shared := strings.TrimSpace(c.GoogleVoice.ReplyStyleHint); shared != "" {
+		return shared
+	}
+	return defaultReplyStyleHint
+}
+
+// normalizeReplyStyleHint trims a hand-written instruction and folds it to a
+// single block of plain text. Blank means "follow the shared default", which is
+// what the Reset control on each agent posts.
+func normalizeReplyStyleHint(v string) string {
+	v = strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
+	if len(v) > replyStyleHintMaxChars {
+		v = strings.TrimSpace(v[:replyStyleHintMaxChars])
+	}
+	return v
+}
+
 func (c Config) claudeWorkingDir() string {
 	if v := strings.TrimSpace(c.ClaudeCwd); v != "" {
 		return v
@@ -463,6 +515,11 @@ func loadConfig(path, dataDir string) (Config, error) {
 	if strings.TrimSpace(cfg.GoogleVoice.ReplyStyleHint) == "" {
 		cfg.GoogleVoice.ReplyStyleHint = defaultReplyStyleHint
 	}
+	cfg.GoogleVoice.ReplyStyleHint = normalizeReplyStyleHint(cfg.GoogleVoice.ReplyStyleHint)
+	// Per-agent overrides stay blank when nobody set one; blank means "follow
+	// the shared line above".
+	cfg.Codex.ReplyStyleHint = normalizeReplyStyleHint(cfg.Codex.ReplyStyleHint)
+	cfg.Claude.ReplyStyleHint = normalizeReplyStyleHint(cfg.Claude.ReplyStyleHint)
 	if cfg.GoogleVoice.MaxReplyParts < 1 {
 		cfg.GoogleVoice.MaxReplyParts = 4
 	}

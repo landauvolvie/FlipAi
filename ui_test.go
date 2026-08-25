@@ -68,12 +68,12 @@ func TestDesktopPagesRender(t *testing.T) {
 	a := newTestApp(t)
 	pages := map[string][]string{
 		"/":            {"Bridge Google Voice SMS commands", "Recent activity", "Pause FlipAi"},
-		"/connections": {"Gmail / Google Voice", "Inbound sender settings", "Test message flow"},
-		"/agents":      {"Codex", "Claude", "Behavior", "Executable path"},
+		"/connections": {"Gmail / Google Voice", "End-to-end check", "Test message flow"},
+		"/agents":      {"Codex", "Claude", "Shared defaults", "Executable path"},
 		"/phone":       {"Allowed numbers", "Reply behavior", "Security code"},
 		"/activity":    {"All stages", "Search activity", "Privacy"},
-		"/settings":    {"Startup", "Appearance", "Notifications", "Diagnostics"},
-		"/advanced":    {"Executable paths", "Local service", "Advanced tools"},
+		"/settings":    {"Startup", "Appearance", "Notifications", "This install"},
+		"/advanced":    {"Local service", "Log files", "Service tools"},
 	}
 	for path, want := range pages {
 		rr := a.do(t, http.MethodGet, path, nil)

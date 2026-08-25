@@ -11,21 +11,67 @@ longer touches the layout.
 
 ## Navigation
 
-A fixed sidebar holds the whole app:
+A fixed sidebar holds the whole app, in three labelled groups so seven pages
+read as three short lists rather than one column:
 
-| Page | Route | What it is for |
-| --- | --- | --- |
-| Home | `/` | Live state, remaining setup steps, recent activity, pause/resume |
-| Connections | `/connections` | Gmail method, credentials, sender filtering, message-flow test |
-| Agents | `/agents` | Codex and Claude paths, working folders, tests, routing behaviour |
-| Phone | `/phone` | Allowed numbers, reply behaviour, SMS security code |
-| Activity | `/activity` | Filterable, paged event log with durations |
-| Settings | `/settings` | Startup, appearance, in-window alerts, diagnostics |
-| Advanced | `/advanced` | Executable paths, local service, logs, restart and quit |
+| Group | Page | Route | What it is for |
+| --- | --- | --- | --- |
+| — | Home | `/` | Live state, remaining setup steps, recent activity, pause/resume |
+| Bridge | Connections | `/connections` | Gmail method, credentials, subject filter, end-to-end test |
+| Bridge | Agents | `/agents` | Everything Codex and Claude each own, plus the few shared defaults |
+| Bridge | Phone | `/phone` | Allowed numbers, reply behaviour, SMS security code |
+| Bridge | Activity | `/activity` | Filterable, paged event log; export and clear |
+| App | Settings | `/settings` | Updates, startup, appearance, alerts, this install |
+| App | Advanced | `/advanced` | Loopback service, log files, restart and quit |
 
-The sidebar footer shows whether the bridge is running, paused, or idle, plus
-the installed version. Settings and Advanced sit below a divider because they
-are configuration rather than operation.
+## One home for every setting
+
+A setting lives on exactly one page, and that page is the one it belongs to.
+
+- **Anything an agent owns lives with that agent.** Executable path, working
+  folder, SMS shortcut, permission mode, Chrome, session mode, conversation
+  reset, progress cadence, and the SMS instruction are all inside the Codex or
+  Claude pane. Advanced carries none of them, and links there instead.
+- **The shared pane holds only what is genuinely shared**: the default agent,
+  the new-conversation keyword, the turn timeout, the fallback working folder,
+  and the shared SMS instruction. The keyword used to be repeated in all three
+  panes; it now appears once.
+- **Logs are read where logs are read.** Export and clear live on Activity;
+  Advanced keeps the folder link and the last error. Settings no longer
+  duplicates either.
+- **Senders are configured on Phone.** Connections links to Phone rather than
+  offering a second copy of the allowlist and the security code.
+- **Windows startup is on Settings**, including the startup-entry repair that
+  used to sit under Advanced tools.
+
+A test asserts these boundaries: each agent field renders exactly once on the
+Agents page, and not at all on any other page.
+
+## Agents is a workbench
+
+The Agents screen is a master/detail: a rail listing Codex, Claude, and Shared
+defaults, and one pane each. The pane switch is three hidden radio inputs and
+CSS sibling selectors, so choosing an agent needs no script and no round trip.
+Each pane is a stack of cards — Routing & workspace, SMS instruction,
+Conversation, Access, Connection — and each pane posts to the same validated
+`/agents/save` handler, so the screen cannot advertise a control the bridge does
+not support.
+
+## The SMS instruction
+
+FlipAi is a transport between a phone and the agent the user already runs, so
+the prompt it builds is the user's own text inside an `<sms_command>` fence,
+followed by exactly one instruction explaining that the answer travels as a text
+message. That instruction is editable:
+
+- Codex and Claude each have their own, because they answer a text differently.
+- An empty box means "follow the shared instruction" rather than "send no
+  framing", and the editor shows the shared wording as its placeholder.
+- Clearing the shared instruction restores the wording FlipAi ships with, since
+  every turn needs some framing.
+- The editor shows a live character count and a preview of the exact prompt the
+  agent receives, and each instruction is capped so a pasted document cannot
+  ride along on every text.
 
 ## Product marks and event vocabulary
 
@@ -42,21 +88,29 @@ so a page still submits correctly if the script never runs.
 
 ## Visual language
 
-- Neutral surface, dark ink, violet accent, green healthy, amber attention, red
-  failure. Light and dark palettes are both defined; the theme follows the
-  Settings choice, or Windows when set to "Match Windows".
+- One token scale for colour, space, radius, and elevation, defined once at the
+  top of the stylesheet. Every control is built from it, so an input, a select
+  button and a push button are never subtly different shapes or greys.
+- Neutral surface, dark ink, indigo-violet accent, green healthy, amber
+  attention, red failure. Light and dark palettes are both complete; the theme
+  follows the Settings choice, or Windows when set to "Match Windows".
+- Page rhythm: page head, a row of stat tiles, then cards — either state rows
+  (label left, value right) or a form. Cards use a hairline border and a soft
+  shadow that lifts on hover, not a heavy box.
+- Icons are inline SVG on a shared 20×20 grid, drawn with `currentColor`.
+- Motion is short and functional (menus, dropdowns, toasts) and disabled under
+  `prefers-reduced-motion`.
+- Compact mode tightens the whole scale — spacing, radii, control height, and
+  the sidebar — rather than only the padding.
 - One stylesheet and one script served from `/assets/`, both versioned by the
   build so a new release cannot be served a stale cache.
-- Status tiles across the top of each page, then cards: either state rows
-  (label on the left, value on the right) or a form.
-- Icons are inline SVG on a shared 20×20 grid, drawn with `currentColor`.
-- Compact mode tightens spacing for smaller windows.
 
 ## Rules the UI follows
 
 - **Only report verified state.** A tile says an agent is "Ready" because a test
-  actually succeeded, and says "Not tested yet" otherwise. Dependency checks are
-  stored in `state.json` with their timestamp.
+  actually succeeded, and says "Not tested yet" otherwise. `Check.Ready()`
+  requires a timestamp as well as a pass, so an untested agent can never render
+  green. Dependency checks are stored in `state.json` with their timestamp.
 - **Partial forms never clear settings they do not show.** Every action applies
   a mutation to the current config, so a card can save just its own fields.
 - **Actions are POSTs.** Pages are GET; anything that changes state is a form
@@ -82,3 +136,10 @@ an Install button, and Settings carries the full picture: installed version,
 latest release, when it was last checked, and what installing does. The banner
 says plainly that installing keeps existing settings, because the complaint it
 answers is an update that looked like a fresh install.
+
+## Previewing the UI while working on it
+
+`FLIPAI_PREVIEW_DIR=/some/dir go test -run TestDumpPreview .` writes every page
+plus the stylesheet and script to that directory, so the redesign can be opened
+in a browser on any platform. The test is skipped when the variable is unset, so
+a normal `go test ./...` produces no files.

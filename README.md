@@ -60,14 +60,18 @@ The window has a sidebar with seven pages:
 | --- | --- |
 | **Home** | Live status of Gmail, both agents, the allowlist, and security; recent activity; **Pause FlipAi**, which leaves incoming texts unread in Gmail until you resume |
 | **Connections** | Gmail method and credentials, subject-phrase matching, and a message-flow test that checks the whole inbound path |
-| **Agents** | Codex and Claude executables, a working folder per agent, real background tests, default agent, turn timeout, Claude permission mode, the Claude Chrome toggle, the Claude conversation mode, and the command that reopens the Claude SMS conversation |
+| **Agents** | A pane per agent holding everything that agent owns — executable, working folder, SMS shortcut, access, conversation, progress cadence, and the instruction sent with every text — plus a shared pane for the default agent, the new-conversation keyword, the turn timeout, and the fallback folder |
 | **Phone** | Allowed numbers with labels, reply length and split limits, acknowledgement and progress texts, and the SMS security code |
-| **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took |
-| **Settings** | Updates, start with Windows, **start before sign-in**, close to tray, light/dark/system theme, compact layout, in-window error alerts, log export, and reset |
-| **Advanced** | Executable paths with a live "found" check, loopback service state, health check, log tools, restart, and quit |
+| **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took; export and clear |
+| **Settings** | Updates, start with Windows, **start before sign-in**, startup repair, close to tray, light/dark/system theme, compact layout, in-window error alerts, data folder, and reset |
+| **Advanced** | Loopback service state, health check, log files, the last error, restart, and quit |
 
 Everything the UI reports is real state: an agent tile says **Ready** only
 because a test actually succeeded, and says **Not tested yet** otherwise.
+
+Every setting lives on exactly one page. Anything that belongs to one agent is
+inside that agent's pane rather than repeated under Advanced or Settings, and
+the pages that no longer own a setting link to the page that does.
 
 ## Updating
 
@@ -358,6 +362,31 @@ Two optional status texts are on by default and can be turned off in Settings:
 - **Text me progress while it works** — periodic updates during a long turn, naming the current step when the agent reports one.
 
 `STATUS` is answered directly by the bridge without involving an agent, so it stays instant even while a long turn is running. Commands that arrive during a turn are queued and run in order.
+
+## What the agent is told about SMS
+
+FlipAi adds exactly one instruction to your text before handing it over: your
+own words inside an `<sms_command>` fence, then a single line explaining that
+the answer is delivered as a text message. That line is why an answer comes back
+phone-sized instead of terminal-sized.
+
+It ships as:
+
+> Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text.
+
+Codex and Claude each have their own editable copy, on their pane of the
+**Agents** page:
+
+- Leave an agent's box empty and it follows the **shared instruction** on the
+  Agents → Shared defaults pane.
+- Clear the shared box and it returns to the wording above, because every turn
+  needs some framing.
+- The editor shows a live character count and a preview of the exact prompt the
+  agent receives, so there is no guessing about what was added.
+
+Nothing else is added. FlipAi never tells the agent to open a browser, find a
+conversation, or emit a delivery marker — delivery is decided in Go — so the
+agent behaves as it does when you are sitting in front of it.
 
 ## Runtime data
 

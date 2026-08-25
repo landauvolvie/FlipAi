@@ -45,7 +45,7 @@ func TestPerAgentProgressIntervalFallsBackToTheSharedSetting(t *testing.T) {
 func TestAgentsPageOffersPerAgentProgressInterval(t *testing.T) {
 	a := newTestApp(t)
 	body := a.do(t, "GET", "/agents", nil).Body.String()
-	for _, want := range []string{`name="claudeProgressInterval"`, `name="codexProgressInterval"`, "Follow shared setting"} {
+	for _, want := range []string{`name="claudeProgressInterval"`, `name="codexProgressInterval"`, "Follow the shared setting"} {
 		if !contains(body, want) {
 			t.Errorf("Agents page is missing %q", want)
 		}

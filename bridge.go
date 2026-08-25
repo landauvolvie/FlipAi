@@ -632,10 +632,12 @@ func (b *Bridge) statusLine() string {
 // when the user's own text asks for it.
 //
 // The command is fenced so untrusted SMS text is read as data rather than as
-// instructions, and exactly one configurable line explains that the answer
-// travels as a text message.
-func (b *Bridge) composePrompt(command string) string {
-	hint := strings.TrimSpace(b.cfg.GoogleVoice.ReplyStyleHint)
+// instructions, and exactly one configurable block explains that the answer
+// travels as a text message. Each agent can carry its own wording — Codex and
+// Claude answer a text differently — and an agent with no wording of its own
+// falls back to the shared line.
+func (b *Bridge) composePrompt(agent, command string) string {
+	hint := strings.TrimSpace(b.cfg.replyStyleHintFor(agent))
 	if hint == "" {
 		hint = defaultReplyStyleHint
 	}
@@ -895,7 +897,7 @@ func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string,
 	if b.claude == nil {
 		return "", errors.New("Claude Code unavailable")
 	}
-	prompt := b.composePrompt(command)
+	prompt := b.composePrompt("A", command)
 	sid, name := b.claudeSession()
 
 	// Live mode first when it is configured. Anything that stops it short of a
@@ -1032,7 +1034,7 @@ func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, 
 		tid = b.state.CodexThreadID
 		b.mu.Unlock()
 	}
-	params := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt(command)}}}
+	params := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt("C", command)}}}
 	if b.cfg.Codex.ApprovalPolicy != "" {
 		params["approvalPolicy"] = b.cfg.Codex.ApprovalPolicy
 	}
