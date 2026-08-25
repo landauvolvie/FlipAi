@@ -181,7 +181,10 @@ func platformOpenGoogleVoice(dataDir string, show bool) error {
 	if h == 0 {
 		reason := lastVoiceOpenFailure(dataDir, started)
 		if reason == "" {
-			reason = "the window process started but never created a window. The Microsoft Edge WebView2 Runtime is the usual cause; install it from Microsoft and try again."
+			reason = "the window process started but never created a window."
+			if platformWebView2Runtime() == "" {
+				reason += " The Microsoft Edge WebView2 Runtime is not installed on this PC, and FlipAi cannot show Google Voice without it. Install Microsoft's free Evergreen Standalone Installer, then try again."
+			}
 		}
 		err := fmt.Errorf("Google Voice did not open: %s", reason)
 		recordVoiceOpen(dataDir, "window never appeared", err)
@@ -324,6 +327,9 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		// NewWithOptions returns nil when the WebView2 environment could not be
 		// created, which in practice means the runtime is missing or blocked.
 		err := errors.New("Windows could not create the Google Voice browser window. Install the Microsoft Edge WebView2 Runtime (Microsoft distributes it free as the Evergreen Standalone Installer), then try again.")
+		if v := platformWebView2Runtime(); v != "" {
+			err = fmt.Errorf("Windows could not create the Google Voice browser window even though the Edge WebView2 Runtime %s is installed. Restarting Windows usually clears this; if it persists, repair the WebView2 Runtime from Installed apps.", v)
+		}
 		recordVoiceOpen(dataDir, "WebView2 could not create the window", err)
 		return err
 	}
@@ -650,3 +656,45 @@ exit 3`, hwnd, pattern)
 // numeric virtual-key names; it is also useful in debugger expressions and
 // avoids a separate platform helper for integer formatting.
 var _ = strconv.Itoa
+
+// platformWebView2Runtime reports the installed Microsoft Edge WebView2 Runtime
+// version, or "" when it is not installed. FlipAi's Google Voice window cannot
+// exist without it, and its absence otherwise shows up only as a window that
+// never appears, so the desktop UI states it up front.
+//
+// The runtime registers itself under a fixed product GUID, per-machine or
+// per-user. The read is cached because the settings page asks on every poll.
+var webView2Probe = newCachedBool(5*time.Minute, func() bool { return webView2Version() != "" })
+
+func platformWebView2Runtime() string {
+	if !webView2Probe.get() {
+		return ""
+	}
+	return webView2Version()
+}
+
+func webView2Version() string {
+	const clientKey = `Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`
+	for _, root := range []string{
+		`HKLM\SOFTWARE\WOW6432Node\` + clientKey,
+		`HKLM\SOFTWARE\` + clientKey,
+		`HKCU\SOFTWARE\` + clientKey,
+	} {
+		cmd := exec.Command("reg.exe", "QUERY", root, "/v", "pv")
+		hideWindow(cmd)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			fields := strings.Fields(line)
+			// pv    REG_SZ    <version>
+			if len(fields) >= 3 && strings.EqualFold(fields[0], "pv") {
+				if v := strings.TrimSpace(fields[len(fields)-1]); v != "" && v != "0.0.0.0" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
+}

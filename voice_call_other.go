@@ -11,3 +11,4 @@ func platformOpenGoogleVoice(dataDir string, show bool) error {
 func platformTestAgentVoice(cfg VoiceCallConfig, agent string) error {
 	return errors.New("agent voice calling is available only on Windows")
 }
+func platformWebView2Runtime() string { return "" }

@@ -291,7 +291,7 @@ func TestGoogleVoiceScriptIsSingleFlighted(t *testing.T) {
 
 // The Open button is a POST from the desktop UI to the local voice endpoint.
 // Whatever goes wrong behind it has to come back through that response, because
-// the response text is the only thing the user ever sees.
+// that text is the only thing the user ever sees.
 func TestOpenGoogleVoiceReportsFailureToTheButton(t *testing.T) {
 	dir := t.TempDir()
 	h := voiceControlHandler(dir, "127.0.0.1:8765", activityLogForStatePath(filepath.Join(dir, "state.json")))
@@ -320,17 +320,26 @@ func TestOpenGoogleVoiceReportsFailureToTheButton(t *testing.T) {
 		t.Fatalf("a foreign origin got %d, want 403", code)
 	}
 
-	// On this platform opening always fails, which is exactly the case that
-	// used to be swallowed: the endpoint must answer with the reason, not 200.
+	restore := openGoogleVoiceWindow
+	defer func() { openGoogleVoiceWindow = restore }()
+
+	// The case that used to be swallowed. Opening spans two processes, so the
+	// window can fail long after the click; the endpoint must answer with that
+	// reason rather than the success it used to report the moment a process
+	// had been launched.
+	const reason = "the window process started but never created a window"
+	openGoogleVoiceWindow = func(string, bool) error { return errors.New(reason) }
 	code, body := post("/open", "http://127.0.0.1:8765")
 	if code == http.StatusOK {
 		t.Fatal("a failed open reported success to the button")
 	}
-	if body == "" {
-		t.Fatal("a failed open gave the button nothing to show")
+	if body != reason {
+		t.Errorf("button would show %q, want %q", body, reason)
 	}
-	if want := platformOpenGoogleVoice(dir, true).Error(); body != want {
-		t.Errorf("button would show %q, want the real reason %q", body, want)
+
+	openGoogleVoiceWindow = func(string, bool) error { return nil }
+	if code, body := post("/open", "http://127.0.0.1:8765"); code != http.StatusOK {
+		t.Errorf("a successful open reported %d: %s", code, body)
 	}
 }
 

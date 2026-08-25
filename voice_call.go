@@ -87,6 +87,19 @@ type VoiceRuntimeState struct {
 type voiceControlSnapshot struct {
 	Config  VoiceCallConfig   `json:"config"`
 	Runtime VoiceRuntimeState `json:"runtime"`
+	// WebView2 is the installed Microsoft Edge WebView2 Runtime version, or
+	// empty when it is not installed. Its absence is the most common reason the
+	// Google Voice window cannot be created, and it is worth saying so before
+	// the user clicks Open rather than after.
+	WebView2 string `json:"webView2,omitempty"`
+}
+
+func voiceSnapshot(dataDir string) voiceControlSnapshot {
+	return voiceControlSnapshot{
+		Config:   loadVoiceCallConfig(dataDir),
+		Runtime:  loadVoiceRuntime(dataDir),
+		WebView2: platformWebView2Runtime(),
+	}
 }
 
 func defaultVoiceCallConfig() VoiceCallConfig {
@@ -365,6 +378,11 @@ func mutateVoiceRuntime(dataDir string, fn func(*VoiceRuntimeState)) {
 	}
 }
 
+// openGoogleVoiceWindow is indirected through a variable so the contract that
+// matters -- a failure reaching the button that started it -- can be tested
+// without launching a real window on the machine running the tests.
+var openGoogleVoiceWindow = platformOpenGoogleVoice
+
 // recordVoiceOpen leaves a trail for one step of opening the window. The window
 // lives in its own process, so the process handling the click cannot see why the
 // other one failed unless that one writes it down.
@@ -472,7 +490,7 @@ func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http
 			http.Error(w, "GET required", http.StatusMethodNotAllowed)
 			return
 		}
-		writeJSON(w, voiceControlSnapshot{Config: loadVoiceCallConfig(dataDir), Runtime: loadVoiceRuntime(dataDir)})
+		writeJSON(w, voiceSnapshot(dataDir))
 	}))
 	mux.HandleFunc("/config", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -488,16 +506,15 @@ func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		cfg = loadVoiceCallConfig(dataDir)
-		platformVoiceConfigChanged(dataDir, cfg)
-		writeJSON(w, voiceControlSnapshot{Config: cfg, Runtime: loadVoiceRuntime(dataDir)})
+		platformVoiceConfigChanged(dataDir, loadVoiceCallConfig(dataDir))
+		writeJSON(w, voiceSnapshot(dataDir))
 	}))
 	mux.HandleFunc("/open", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := platformOpenGoogleVoice(dataDir, true); err != nil {
+		if err := openGoogleVoiceWindow(dataDir, true); err != nil {
 			activity.Add("error", "voice", "Open Google Voice failed: "+truncate(err.Error(), 300), "", "", "")
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

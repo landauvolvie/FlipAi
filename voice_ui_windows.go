@@ -107,6 +107,8 @@ const voiceDesktopInitScript = `
     const body=E('div','card-body'),rows=E('div','rows');
     rows.append(row('Voice calling','Calls only. Existing SMS/Gmail routing is unchanged.',cfg.enabled?pill('Enabled','ok'):pill('Off')));
     rows.append(row('Google Voice window','Persistent WebView2 profile owned by FlipAi.',runtimePill(rt)));
+    rows.append(row('Edge WebView2 runtime','Windows component FlipAi needs to show Google Voice.',
+      snapshot.webView2?pill(snapshot.webView2,'ok'):pill('Not installed','warn')));
     rows.append(row('Current call','',rt.inCall?pill('Connected','ok'):pill('Idle')));
     if(rt.lastOpen) rows.append(row('Last open attempt','',E('span','',rt.lastOpen)));
     body.append(rows);
@@ -130,6 +132,11 @@ const voiceDesktopInitScript = `
     head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand')); actions.append(runtimePill(rt));
     const open=btn('Open Google Voice'),save=btn('Save voice settings','btn primary'); actions.append(open,save); card.append(head);
     const body=E('div','card-body');
+    if(!snapshot.webView2){
+      const c=E('p','callout');
+      c.append(E('b','','Microsoft Edge WebView2 Runtime is not installed. '),document.createTextNode('FlipAi cannot show the Google Voice window without it. Install Microsoft\u2019s free Evergreen Standalone Installer, then press Open Google Voice again.'));
+      body.append(c);
+    }
     body.append(toggle('vc-enabled','Enable phone voice','Starts the dedicated Google Voice window automatically after this Windows user signs in and keeps it alive while the PC is locked.',cfg.enabled));
     body.append(toggle('vc-auto','Auto-answer authorized callers','Unknown or unparseable caller IDs are never auto-answered.',cfg.autoAnswer));
     body.append(field('Default voice agent',select('vc-default',[['C','ChatGPT / Codex'],['A','Claude Desktop']],cfg.defaultAgent),'If a caller is allowed for only one agent, that agent wins. If both allow the caller, this default wins.'));
