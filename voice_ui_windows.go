@@ -60,7 +60,11 @@ const voiceDesktopInitScript = `
   }
   async function refresh(){ snapshot=await voiceFetch('/status'); return snapshot; }
   async function saveConfig(next){ snapshot=await voiceFetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)}); toast('Voice-call settings saved.'); return snapshot; }
-  async function openVoice(){ await voiceFetch('/open',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); toast('Google Voice is open. Sign in to your Google account in that window.'); }
+  async function openVoice(){
+    const r=await voiceFetch('/open',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(/behind other windows/i.test(r?.note||'')) toast('Google Voice opened behind this window. Find "FlipAi \u2014 Google Voice" in the taskbar and sign in there.');
+    else toast('Google Voice is open. Sign in to your Google account in that window.');
+  }
   // Opening waits for the window to actually exist, which on a first run means
   // waiting for WebView2 to initialize. The button has to say so rather than
   // look like it did nothing.

@@ -79,9 +79,12 @@ type VoiceRuntimeState struct {
 	// LastOpen is the outcome of the most recent attempt to put the Google
 	// Voice window on screen. Opening it spans two processes, so without this a
 	// click that produced nothing leaves nothing behind to explain itself.
-	LastOpen   string    `json:"lastOpen,omitempty"`
-	LastOpenAt time.Time `json:"lastOpenAt,omitempty"`
-	UpdatedAt  time.Time `json:"updatedAt,omitempty"`
+	LastOpen string `json:"lastOpen,omitempty"`
+	// LastOpenError is only ever set by a step that failed, so a progress note
+	// can never be mistaken for the reason a window did not appear.
+	LastOpenError string    `json:"lastOpenError,omitempty"`
+	LastOpenAt    time.Time `json:"lastOpenAt,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt,omitempty"`
 }
 
 type voiceControlSnapshot struct {
@@ -390,23 +393,23 @@ func recordVoiceOpen(dataDir, outcome string, err error) {
 	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 		s.LastOpen = outcome
 		s.LastOpenAt = time.Now()
+		s.LastOpenError = ""
 		if err != nil {
 			s.LastOpen = outcome + ": " + err.Error()
+			s.LastOpenError = s.LastOpen
 			s.LastError = err.Error()
 			s.LastEvent = "open-failed"
 		}
 	})
 }
 
-// lastVoiceOpenFailure returns what the window process last recorded, when it is
-// recent enough to be about the attempt in progress.
+// lastVoiceOpenFailure returns why the window process gave up, when that was
+// recorded during the attempt currently being waited on. Anything older belongs
+// to a previous attempt and would only mislead.
 func lastVoiceOpenFailure(dataDir string, since time.Time) string {
 	s := loadVoiceRuntime(dataDir)
-	if s.LastOpen != "" && !s.LastOpenAt.Before(since) {
-		return s.LastOpen
-	}
-	if s.LastError != "" && !s.UpdatedAt.Before(since) {
-		return s.LastError
+	if s.LastOpenError != "" && !s.LastOpenAt.Before(since) {
+		return s.LastOpenError
 	}
 	return ""
 }
@@ -520,7 +523,10 @@ func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http
 			return
 		}
 		activity.Add("info", "voice", "Google Voice window is open.", "", "", "")
-		writeJSON(w, map[string]bool{"ok": true})
+		// The note carries how it opened. Windows can refuse to bring a window
+		// forward for a background process, and a window that opened behind the
+		// one being looked at is indistinguishable from nothing happening.
+		writeJSON(w, map[string]any{"ok": true, "note": loadVoiceRuntime(dataDir).LastOpen})
 	}))
 	mux.HandleFunc("/test-agent", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

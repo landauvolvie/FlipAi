@@ -124,6 +124,80 @@ jobs:
           Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
           Wait-NoBridge
 
+      - name: Google Voice window opens on a real desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dataDir = Join-Path $env:RUNNER_TEMP 'FlipAi-Voice-Window'
+          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $env:LOCALAPPDATA = $dataDir
+          $env:AISMSBRIDGE_NO_BROWSER = '1'
+          $stateFile = Join-Path $dataDir 'AISMSBridge\voice-call-state.json'
+
+          function Show-VoiceState([string]$why) {
+            Write-Host "--- $why ---"
+            Write-Host "session id: $((Get-Process -Id $PID).SessionId)"
+            if (Test-Path $stateFile) { Get-Content $stateFile -Raw | Write-Host }
+            else { Write-Host 'voice-call-state.json was never written' }
+            @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue |
+              Select-Object Id,MainWindowTitle | Format-Table | Out-String) | Write-Host
+          }
+          function Wait-VoiceWindow([int]$seconds) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              $p = @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue |
+                     Where-Object { $_.MainWindowTitle -like '*Google Voice*' })
+              if ($p.Count -gt 0) { return $p[0] }
+              Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+            return $null
+          }
+
+          # 1. The window process on its own. This is what Open ultimately runs.
+          Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--google-voice','--visible'
+          $win = Wait-VoiceWindow 90
+          if (-not $win) {
+            Show-VoiceState 'no Google Voice window appeared'
+            throw 'FlipAi --google-voice did not create a window'
+          }
+          Write-Host "Google Voice window: '$($win.MainWindowTitle)' (pid $($win.Id))"
+          Show-VoiceState 'window is up'
+          Stop-Process -Id $win.Id -Force
+          Start-Sleep -Seconds 2
+
+          # 2. The path the Open button actually takes: the running app, the
+          #    loopback voice endpoint, and the same Origin the desktop UI sends.
+          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $launcher = Start-Process -FilePath '.\dist\FlipAi.exe' -PassThru
+          if (-not $launcher.WaitForExit(20000)) { throw 'launcher did not exit' }
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            try { if ((Invoke-WebRequest 'http://127.0.0.1:8765/health' -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200) { break } } catch {}
+            Start-Sleep -Milliseconds 250
+          } while ((Get-Date) -lt $deadline)
+
+          $open = $null
+          try {
+            $open = Invoke-WebRequest 'http://127.0.0.1:8771/open' -Method POST -UseBasicParsing -TimeoutSec 90 `
+              -Headers @{ Origin = 'http://127.0.0.1:8765'; 'Content-Type' = 'application/json' } -Body '{}'
+          } catch {
+            Show-VoiceState 'POST /open failed'
+            throw "POST /open failed: $($_.Exception.Message)"
+          }
+          if ($open.StatusCode -ne 200) { Show-VoiceState 'bad /open status'; throw "/open returned $($open.StatusCode)" }
+          $win = Wait-VoiceWindow 30
+          if (-not $win) {
+            Show-VoiceState '/open reported success with no window'
+            throw '/open reported success but no Google Voice window exists'
+          }
+          Write-Host "Open button path produced: '$($win.MainWindowTitle)'"
+          Show-VoiceState 'open button path succeeded'
+          Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
+          Start-Sleep -Seconds 3
+          Get-Process -Name FlipAi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
       - name: Microsoft Defender scan app (when available)
         shell: pwsh
         run: |

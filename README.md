@@ -433,6 +433,22 @@ in which nobody can hear anything.
    who may reach it.
 4. Back in Settings, turn **Enable phone voice** on.
 
+### If Open Google Voice does nothing
+
+The window is created by a second FlipAi process, so a failure used to happen
+out of sight of the button. Opening now waits for the window to exist and
+reports what stopped it; the reason appears as a banner on the page, on the
+Connections card, and in Activity.
+
+The usual cause is a missing **Microsoft Edge WebView2 Runtime** — FlipAi cannot
+draw the Google Voice window without it. Connections shows the installed
+version, and Settings says so plainly when it is absent. Microsoft distributes
+it free as the Evergreen Standalone Installer.
+
+If the message says another FlipAi Google Voice process is running without a
+window, quit FlipAi from the tray and start it again; that clears a wedged
+window process.
+
 ### Who is allowed to call
 
 Callers are listed per agent, separately from the SMS allowlist. Two kinds of
@@ -525,7 +541,10 @@ Before a Windows artifact is accepted, GitHub Actions verifies:
 - current-user startup registration;
 - Settings opener targeting the FlipAi localhost URL;
 - installed tray loading the branded icon;
-- real uninstaller cleanup of app files, Start Menu shortcut, uninstall registration, and startup entry.
+- real uninstaller cleanup of app files, Start Menu shortcut, uninstall registration, and startup entry;
+- the Google Voice window actually appearing on the runner's desktop, both from
+  `FlipAi.exe --google-voice` directly and through the loopback endpoint the
+  Open button calls, with the recorded diagnostics dumped when it does not.
 
 ### Call-bridge browser tests
 

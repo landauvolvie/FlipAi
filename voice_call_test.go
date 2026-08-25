@@ -368,7 +368,13 @@ func TestVoiceOpenAttemptsLeaveAnExplanation(t *testing.T) {
 	}
 
 	recordVoiceOpen(dir, "window opened", nil)
-	if st := loadVoiceRuntime(dir); st.LastOpen != "window opened" {
+	st := loadVoiceRuntime(dir)
+	if st.LastOpen != "window opened" {
 		t.Fatalf("successful open recorded as %q", st.LastOpen)
+	}
+	// Progress notes are shown to the user, but they are not reasons. Reporting
+	// one as the cause of a missing window would explain nothing.
+	if got := lastVoiceOpenFailure(dir, started); got != "" {
+		t.Fatalf("a progress note was reported as a failure: %q", got)
 	}
 }
