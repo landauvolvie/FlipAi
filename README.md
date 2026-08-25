@@ -292,7 +292,7 @@ Codex and Claude persist conversations differently, and FlipAi cannot paper over
 - **Codex** — FlipAi starts durable (non-ephemeral) threads and hands each one back with `thread/unsubscribe` once its turn completes, so the same conversation opens in Codex Desktop.
 - **Claude** — Claude Code has no equivalent handoff, and it deliberately keeps `claude -p` sessions **out of the interactive `/resume` picker**. The SMS conversation is a real, resumable session; it just is not in that list.
 
-**Agents → Claude → Advanced** shows the exact command to continue it:
+**Agents → Claude** shows the exact command to continue it:
 
 ```text
 claude --resume <session id>
@@ -384,10 +384,8 @@ It ships as:
 Codex and Claude each have their own editable copy, on their pane of the
 **Agents** page:
 
-- Leave an agent's box empty and it follows the **shared instruction** on the
-  Agents → Shared defaults pane.
-- Clear the shared box and it returns to the wording above, because every turn
-  needs some framing.
+- Leave an agent's box empty and it returns to the wording above, because every
+  turn needs some framing.
 - The editor shows a live character count and a preview of the exact prompt the
   agent receives, so there is no guessing about what was added.
 
@@ -430,15 +428,36 @@ once, inside that app's own audio settings. FlipAi refuses to save a
 configuration where both sides share an endpoint, because that produces a call
 in which nobody can hear anything.
 
+Not having the cables yet does not stop you setting the rest up. FlipAi will
+still keep Google Voice running and still answer an authorized call — the call
+simply has no sound, and says so.
+
 ### Setting it up
 
-1. Settings → **Google Voice phone bridge** → **Open Google Voice**, and sign in.
-   The endpoint pickers stay empty until this window exists, because Windows
+1. Connections → **Google Voice phone bridge** → **Open Google Voice**, and sign
+   in. The endpoint pickers stay empty until this window exists, because Windows
    only reveals endpoint names to a page that holds microphone permission.
-2. Choose the Google Voice microphone and speaker from the table above.
-3. Agents → pick the agent → **Phone voice**: allow the agent on calls and list
-   who may reach it.
-4. Back in Settings, turn **Enable phone voice** on.
+2. Turn **Keep Google Voice running** on. From then on the window opens by
+   itself at Windows sign-in, stays running in the background, and reopens if it
+   is closed — you never have to press Open again. This switch is also what
+   allows a call to be answered at all.
+3. Choose the Google Voice microphone and speaker from the table above.
+4. Agents → pick the agent → add your phone number and set it to **Texts and
+   calls** or **Calls only**. That is what puts the agent on calls; there is no
+   second switch to find. Connections says which agents can take a call.
+
+### It runs in the background
+
+The Google Voice window is minimized rather than closed, because a closed window
+cannot ring. Windows keeps it running while the PC is locked, and FlipAi starts
+it again if it disappears.
+
+A minimized window is one Chromium considers hidden, and Chromium slows a hidden
+window's timers down to once a minute — far longer than a call rings for. FlipAi
+therefore starts this window with background throttling, renderer backgrounding
+and occlusion detection switched off, and does not rely on a timer to notice a
+call in the first place: the page change a ringing call makes is what drives the
+check.
 
 ### If Open Google Voice does nothing
 
@@ -449,7 +468,7 @@ Connections card, and in Activity.
 
 The usual cause is a missing **Microsoft Edge WebView2 Runtime** — FlipAi cannot
 draw the Google Voice window without it. Connections shows the installed
-version, and Settings says so plainly when it is absent. Microsoft distributes
+version, and says so plainly when it is absent. Microsoft distributes
 it free as the Evergreen Standalone Installer.
 
 If the message says another FlipAi Google Voice process is running without a
