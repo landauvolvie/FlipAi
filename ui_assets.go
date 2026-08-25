@@ -477,6 +477,13 @@ td.who{color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
   font-size:13px;font-weight:540;margin-bottom:18px;border:1px solid transparent;
 }
 .banner.ok{background:var(--ok-soft);color:var(--ok);border-color:var(--ok-line)}
+/* A test answers where it was pressed rather than on a page of its own. */
+.banner.test-result{margin:10px 0 0;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.banner.test-result b{font-weight:650}
+.banner.test-result .btn{margin-left:auto}
+.btn.testing{opacity:.75;cursor:progress}
+.btn.testing::before{content:"";width:12px;height:12px;margin-right:7px;border-radius:50%;border:2px solid currentColor;border-top-color:transparent;display:inline-block;vertical-align:-2px;animation:flipspin .7s linear infinite}
+@keyframes flipspin{to{transform:rotate(360deg)}}
 .banner.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn-line)}
 .banner.bad{background:var(--bad-soft);color:var(--bad);border-color:var(--bad-line)}
 .banner svg{width:18px;height:18px;flex:0 0 auto}
@@ -984,6 +991,52 @@ const uiJS = `
     }).catch(function(){setOffline(true);});
   }
 
+  /* ---------------- inline tests ---------------- */
+
+  // A test used to be a link to a result page, so pressing it navigated away
+  // and the user had to find their way back. The button now asks the same
+  // endpoint for the answer and shows it where they are standing.
+  function testBanner(host, ok, title, message){
+    var old=host.parentNode.querySelector(".test-result");
+    if(old)old.remove();
+    var b=document.createElement("div");
+    b.className="banner test-result "+(ok?"ok":"bad");
+    var strong=document.createElement("b"); strong.textContent=title;
+    var text=document.createElement("span"); text.textContent=message?" "+message:"";
+    b.appendChild(strong); b.appendChild(text);
+    var close=document.createElement("button");
+    close.type="button"; close.className="btn small"; close.textContent="Dismiss";
+    close.addEventListener("click",function(){b.remove();});
+    b.appendChild(close);
+    host.parentNode.insertBefore(b,host.nextSibling);
+    b.scrollIntoView({block:"nearest"});
+  }
+
+  function initInlineTests(){
+    document.addEventListener("click",function(e){
+      var btn=e.target.closest("[data-test]");
+      if(!btn)return;
+      e.preventDefault();
+      if(btn.disabled)return;
+      var url=btn.getAttribute("data-test");
+      var label=btn.innerHTML;
+      btn.disabled=true;
+      btn.classList.add("testing");
+      btn.textContent=(btn.getAttribute("data-test-busy")||"Testing")+"\u2026";
+      fetch(url,{method:btn.getAttribute("data-test-method")||"GET",
+                 headers:{"X-FlipAi-Inline":"1"},
+                 cache:"no-store",credentials:"same-origin"})
+        .then(function(res){
+          return res.json().catch(function(){
+            return {ok:res.ok,title:res.ok?"Done":"That did not work",message:"The local service returned "+res.status+"."};
+          });
+        })
+        .then(function(d){ testBanner(btn,!!d.ok,d.title||(d.ok?"Done":"That did not work"),d.message||""); })
+        .catch(function(err){ testBanner(btn,false,"That did not work",String(err&&err.message||err)); })
+        .finally(function(){ btn.disabled=false; btn.classList.remove("testing"); btn.innerHTML=label; });
+    });
+  }
+
   /* ---------------- confirmations, menus, folder picker ---------------- */
 
   function initConfirms(){
@@ -1262,6 +1315,7 @@ const uiJS = `
     initSelects();
     initFeeds();
     initConfirms();
+    initInlineTests();
     initAutoSubmit();
     initMenus();
     initPicker();

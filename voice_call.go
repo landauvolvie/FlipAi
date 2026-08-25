@@ -81,6 +81,12 @@ type VoiceRuntimeState struct {
 	// LastOpen is the outcome of the most recent attempt to put the Google
 	// Voice window on screen. Opening it spans two processes, so without this a
 	// click that produced nothing leaves nothing behind to explain itself.
+	// Controls is what the Google Voice page currently offers, and LastRingAt is
+	// when an answer control was last seen. Together they answer "is a call even
+	// reaching this window", which is otherwise invisible.
+	Controls   string    `json:"controls,omitempty"`
+	LastRingAt time.Time `json:"lastRingAt,omitempty"`
+
 	LastOpen string `json:"lastOpen,omitempty"`
 	// LastOpenError is only ever set by a step that failed, so a progress note
 	// can never be mistaken for the reason a window did not appear.
@@ -583,6 +589,7 @@ func (b *voiceBridge) Incoming(caller, label string) bool {
 	cfg := loadVoiceCallConfig(b.dataDir)
 	d := decideVoiceCall(cfg, b.mainConfig(), caller, label)
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+		s.LastRingAt = time.Now()
 		s.Caller = normalizeUSPhone(caller)
 		s.CallerLabel = normalizeCallerLabel(label)
 		s.Agent = d.Agent
@@ -688,11 +695,15 @@ func (b *voiceBridge) Devices(raw string) {
 	})
 }
 
-func (b *voiceBridge) Page(href string, signedIn bool) {
+func (b *voiceBridge) Page(href string, signedIn bool, controls string) {
+	if len(controls) > 2000 {
+		controls = controls[:2000]
+	}
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 		s.BrowserRunning = true
 		s.Page = href
 		s.SignedIn = signedIn
+		s.Controls = controls
 		if s.LastEvent == "" || s.LastEvent == "browser-starting" {
 			s.LastEvent = "browser-ready"
 		}

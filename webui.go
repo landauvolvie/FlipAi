@@ -71,7 +71,22 @@ func gmailMethodLabel(v string) string {
 
 var resultTemplate = template.Must(template.New("result").Funcs(uiFuncs).Parse(resultHTML))
 
+// wantsInlineResult reports that the caller is the page itself, asking for the
+// answer rather than a page to land on. Every test used to reply with a whole
+// result page, which meant pressing Test navigated away and the user had to
+// find their way back.
+func wantsInlineResult(r *http.Request) bool {
+	return r != nil && r.Header.Get("X-FlipAi-Inline") == "1"
+}
+
 func renderResult(w http.ResponseWriter, r *http.Request, status int, ok bool, title, message string) {
+	if wantsInlineResult(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": ok, "title": title, "message": message})
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)

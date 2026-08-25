@@ -239,7 +239,7 @@ const connectionsHTML = `{{define "content"}}
   </div>
   <div class="page-actions">
     <a class="btn" href="/connections">{{icon "refresh"}}Refresh</a>
-    <a class="btn accent" href="/gmail/test">{{icon "send"}}Test Gmail</a>
+    <button class="btn accent" type="button" data-test="/gmail/test" data-test-busy="Checking Gmail">{{icon "send"}}Test Gmail</button>
   </div>
 </div>
 
@@ -304,7 +304,7 @@ const connectionsHTML = `{{define "content"}}
             <div class="form-actions">
               <button class="btn primary" type="submit">Save connection</button>
               {{if eq .S.GmailMethod "oauth"}}{{if .HasCredentials}}<a class="btn" href="/oauth/google/start">Connect Google account</a>{{end}}{{end}}
-              <a class="btn" href="/gmail/test">Test Gmail</a>
+              <button class="btn" type="button" data-test="/gmail/test" data-test-busy="Checking Gmail">Test Gmail</button>
             </div>
           </div>
         </details>
@@ -319,7 +319,7 @@ const connectionsHTML = `{{define "content"}}
       <span class="mark shield">{{icon "send"}}</span>
       <div><h2>End-to-end check</h2><p>Walks the whole path — read the mailbox, route the text, answer the Voice thread — and reports where it stops.</p></div>
     </div>
-    <div class="head-actions"><form method="post" action="/connections/flowtest"><button class="btn accent" type="submit">{{icon "send"}}Test message flow</button></form></div>
+    <div class="head-actions"><button class="btn accent" type="button" data-test="/connections/flowtest" data-test-method="POST" data-test-busy="Running the check">{{icon "send"}}Test message flow</button></div>
   </div>
   <div class="card-body">
     <div class="rows">

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
@@ -362,6 +363,18 @@ func (a *App) render(w http.ResponseWriter, name string, data any) {
 // redirectTo sends the browser back to a page with an optional flash key. It is
 // the standard post/redirect/get finish for every action in the desktop UI.
 func redirectTo(w http.ResponseWriter, r *http.Request, path, flash string) {
+	// A page that asked for the answer inline gets the answer, not somewhere to
+	// navigate to.
+	if wantsInlineResult(r) {
+		message := "Done."
+		if f, ok := uiFlashes[flash]; ok {
+			message = f[1]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "title": "Done", "message": message})
+		return
+	}
 	if flash != "" {
 		path += "?ok=" + flash
 	}

@@ -57,7 +57,7 @@ async function scenario(name, config, body) {
   await bind('flipVoiceAnswered', 'answered', (number, label) => ({ number, label }));
   await bind('flipVoiceEnded', 'ended', () => ({}));
   await bind('flipVoiceDevices', 'devices', (raw) => ({ raw }));
-  await bind('flipVoicePage', 'page', (href, signedIn) => ({ href, signedIn }));
+  await bind('flipVoicePage', 'page', (href, signedIn, controls) => ({ href, signedIn, controls }));
 
   // Recorded before FlipAi installs its own wrapper, so it observes the
   // constraints FlipAi produced rather than the ones the page asked for.

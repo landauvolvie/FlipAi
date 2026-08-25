@@ -27,3 +27,19 @@ func TestVoiceUIShowsServiceFailureInsteadOfDisappearing(t *testing.T) {
 		t.Fatal("desktop UI needs a fallback visibility warning")
 	}
 }
+
+func TestGoogleVoiceLivesOnlyOnConnections(t *testing.T) {
+	// Google Voice is a connection. Its controls used to be spread over
+	// Settings and both agent panes as well.
+	if !strings.Contains(voiceDesktopInitScript, "if(location.pathname==='/connections'){connectionsCard();settingsCard();}") {
+		t.Fatal("the voice controls must be installed on Connections")
+	}
+	for _, gone := range []string{"'/settings'", "agentCard(", "#codex-pane", "#claude-pane"} {
+		if strings.Contains(voiceDesktopInitScript, gone) {
+			t.Errorf("the voice UI still reaches into %s", gone)
+		}
+	}
+	if strings.Contains(voiceDesktopInitScript, "allowedCallers") || strings.Contains(voiceDesktopInitScript, "allowedLabels") {
+		t.Error("who may call is configured with the agent, not in the voice card")
+	}
+}

@@ -231,7 +231,7 @@ const agentsPageHTML = `
             </div>
           </div>
           <div class="agent-head-actions">
-            <button class="btn" type="button" data-test="/api/test/codex" data-test-label="Test Codex">{{icon "play"}}Test</button>
+            <button class="btn" type="button" data-test="/codex/test" data-test-busy="Asking Codex">{{icon "play"}}Test</button>
             {{if not .CodexAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="C" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Codex</button>
@@ -347,7 +347,7 @@ const agentsPageHTML = `
             {{else}}
             <button class="btn accent" type="submit" formaction="/claude/connect" formnovalidate>{{icon "link"}}Connect</button>
             {{end}}
-            <button class="btn" type="button" data-test="/api/test/claude" data-test-label="Test Claude">{{icon "play"}}Test</button>
+            <button class="btn" type="button" data-test="/claude/test" data-test-busy="Asking Claude">{{icon "play"}}Test</button>
             {{if not .ClaudeAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="A" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Claude</button>

@@ -43,9 +43,9 @@ const voiceVisibilityFallbackScript = `
 (() => {
   const showVoiceFailure = () => {
     if (!globalThis.__flipaiDesktop) return;
-    if (!['/connections','/settings','/agents'].includes(location.pathname)) return;
+    if (location.pathname !== '/connections') return;
     setTimeout(() => {
-      if (document.querySelector('#voice-call-connection-card,#voice-call-settings-card,#voice-call-agent-codex,#voice-call-agent-claude')) return;
+      if (document.querySelector('#voice-call-connection-card,#voice-call-settings-card')) return;
       if (document.querySelector('#voice-call-unavailable')) return;
       const content = document.querySelector('.content');
       if (!content) return;

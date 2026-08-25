@@ -228,8 +228,29 @@ const googleVoiceInitScript = `
   const visible = (el) => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const buttonName = (b) => ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || b.textContent || '')).trim();
   const buttons = () => Array.from(document.querySelectorAll('button,[role="button"]')).filter(visible);
-  const findAnswer = () => buttons().find(b => /^(answer|accept)(\s+call)?$/i.test(buttonName(b)) || /^answer\b/i.test(buttonName(b)));
-  const findHangup = () => buttons().find(b => /(hang\s*up|end\s+call|leave\s+call)/i.test(buttonName(b)));
+  const ANSWER_RE = /(^|\b)(answer|accept|pick\s*up|take\s+call)(\b|$)/i;
+  const DECLINE_RE = /(decline|reject|ignore|dismiss|voicemail|block|spam)/i;
+  const findAnswer = () => buttons().find(b => {
+    const name = buttonName(b);
+    if (!ANSWER_RE.test(name)) return false;
+    // "Decline" and "Send to voicemail" sit beside it; never click those.
+    return !DECLINE_RE.test(name);
+  });
+  const findHangup = () => buttons().find(b => /(hang\s*up|end\s+call|leave\s+call|end\s+the\s+call)/i.test(buttonName(b)));
+
+  // controlsSnapshot is what FlipAi can currently see. Whether a ring is even
+  // reaching this window is otherwise invisible: Google Voice only rings in a
+  // browser when "Receive calls on this device" is switched on in its own
+  // settings, and until then nothing at all happens here.
+  function controlsSnapshot() {
+    const names = [];
+    for (const b of buttons()) {
+      const name = buttonName(b).replace(/\s+/g, ' ').trim();
+      if (name && name.length <= 60 && names.indexOf(name) < 0) names.push(name);
+      if (names.length >= 40) break;
+    }
+    return names.join(' | ');
+  }
 
   // scopeText reads a container the way a person reads the ringing card: the
   // words describing the caller, without the text on the buttons. It walks text
@@ -333,7 +354,7 @@ const googleVoiceInitScript = `
       }
       const bodyText = (document.body && document.body.innerText || '').slice(0, 2500);
       const signedIn = location.hostname === 'voice.google.com' && !/sign\s*in/i.test(bodyText);
-      try { await window.flipVoicePage(href, signedIn); } catch (_) {}
+      try { await window.flipVoicePage(href, signedIn, controlsSnapshot()); } catch (_) {}
 
       await refreshEndpoints();
       routeAll();

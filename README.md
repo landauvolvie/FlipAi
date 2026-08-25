@@ -54,24 +54,23 @@ Afterward, open FlipAi from either the **Start Menu** or the **system tray**.
 
 ## The FlipAi app
 
-The window has a sidebar with seven pages:
+The window has a sidebar with five pages:
 
 | Page | What it does |
 | --- | --- |
-| **Home** | Live status of Gmail, both agents, the allowlist, and security; recent activity; **Pause FlipAi**, which leaves incoming texts unread in Gmail until you resume |
-| **Connections** | Gmail method and credentials, subject-phrase matching, and a message-flow test that checks the whole inbound path |
-| **Agents** | A pane per agent holding everything that agent owns — executable, working folder, SMS shortcut, access, conversation, progress cadence, and the instruction sent with every text — plus a shared pane for the default agent, the new-conversation keyword, the turn timeout, and the fallback folder |
-| **Phone** | Allowed numbers with labels, reply length and split limits, acknowledgement and progress texts, and the SMS security code |
+| **Home** | Live status of Gmail, both agents, and the allowlist; recent activity; **Pause FlipAi**, which leaves incoming texts unread in Gmail until you resume |
+| **Connections** | Gmail method and credentials, subject-phrase matching, a message-flow test that checks the whole inbound path, and Google Voice calling |
+| **Agents** | A pane per agent holding everything that agent owns — the numbers allowed to reach it and what each may do, its security code, its executable, working folder, SMS shortcut, access, conversation, reply behaviour, and the instruction sent with every text |
 | **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took; export and clear |
-| **Settings** | Updates, start with Windows, **start before sign-in**, startup repair, close to tray, light/dark/system theme, compact layout, in-window error alerts, data folder, and reset |
-| **Advanced** | Loopback service state, health check, log files, the last error, restart, and quit |
+| **Settings** | Updates, start with Windows, **start before sign-in**, startup repair, close to tray, theme, compact layout, alerts, shared message routing, the local service, log files, and reset |
 
-Everything the UI reports is real state: an agent tile says **Ready** only
-because a test actually succeeded, and says **Not tested yet** otherwise.
+Everything the UI reports is real state: an agent says **Ready** only because a
+test actually succeeded, and says **Not tested yet** otherwise.
 
 Every setting lives on exactly one page. Anything that belongs to one agent is
-inside that agent's pane rather than repeated under Advanced or Settings, and
-the pages that no longer own a setting link to the page that does.
+inside that agent's pane, and the pages that no longer own a setting link to the
+one that does. Pressing any **Test** answers where you pressed it rather than
+sending you to a page of its own.
 
 ## Updating
 
@@ -134,20 +133,28 @@ Two things to know:
 
 ## SMS routing and allowed numbers
 
-Every remote command must come from an exact allowed Google Voice sender and begin with the configured SMS security code.
+**A phone number belongs to one agent.** You add it under Codex or under Claude
+on the Agents page, and it reaches that agent — the number decides, not a prefix.
+Each number also carries what it may do: **texts and calls**, **texts only**, or
+**calls only**. The same list decides who may phone the agent, so access is
+answered in one place.
+
+If you use one phone and want to reach both agents by text, you need a second
+number: one number cannot be on both.
 
 ```text
-482913 C: check GitHub and fix the failed build
-482913 A: check Gmail and summarize today's messages
-482913 C NEW
-482913 A NEW
-482913 STATUS
+check GitHub and fix the failed build
+NEW
+STATUS
 ```
 
-- `C:` routes to Codex.
-- `A:` routes to Claude.
-- No prefix uses the configured default agent.
-- `C NEW` / `A NEW` start a fresh conversation for that agent. Every later text to that agent continues the new conversation until you send `NEW` again. The active conversation is stored on disk, so it survives closing FlipAi, restarting it, and rebooting Windows.
+- The sending number picks the agent.
+- A `C:` or `A:` prefix still works, but only when it names the agent that
+  number already reaches. Naming the other one is refused with an explanation.
+- `NEW` starts a fresh conversation with that agent. Every later text continues it until you send `NEW` again. The active conversation is stored on disk, so it survives closing FlipAi, restarting it, and rebooting Windows.
+- A security code is optional, off on a new install, and set per agent on that
+  agent's pane. When it is on, put it in front of the message:
+  `482913 check the build`.
 - US/Canada numbers are normalized to 10 digits; `+1`, spaces, parentheses, and hyphens are accepted during setup.
 - A sender not on the allowlist is ignored even if the SMS body contains an allowed number.
 
@@ -449,17 +456,29 @@ If the message says another FlipAi Google Voice process is running without a
 window, quit FlipAi from the tray and start it again; that clears a wedged
 window process.
 
+### Google Voice has to be set to ring in the browser
+
+**FlipAi cannot answer a call that never rings in its window.** Google Voice only
+rings in a browser when you have switched that on in Google Voice itself: open
+Google Voice, go to **Settings → Calls**, and turn on receiving calls on this
+device. Until then an incoming call goes to your forwarding phones and never
+reaches FlipAi.
+
+Connections shows whether a call has ever rung in the window, and can list what
+FlipAi can currently see on the page, so "nothing happens when I call" is
+something you can look at rather than guess about.
+
 ### Who is allowed to call
 
-Callers are listed per agent, separately from the SMS allowlist. Two kinds of
-entry are accepted:
+The same numbers that may text an agent may call it, on the Agents page, as long
+as the number is set to **Texts and calls** or **Calls only**. A number set to
+**Texts only** is refused with a message saying so.
 
-- **Allowed callers** — 10-digit US/Canada numbers.
-- **Allowed caller names** — the exact text Google Voice displays. You need this
-  whenever the caller is in your Google Contacts, because Google Voice then
-  shows a name and there is no number for FlipAi to match. Placeholders such as
-  "Unknown" or "Private" are refused, since accepting one would let any
-  anonymous call through.
+One extra entry exists for calls: **Allowed caller names** — the exact text
+Google Voice displays. You need it whenever the caller is in your Google
+Contacts, because Google Voice then shows a name and there is no number for
+FlipAi to match. Placeholders such as "Unknown" or "Private" are refused, since
+accepting one would let any anonymous call through.
 
 When a call is refused, Connections shows what Google Voice displayed and why it
 was not connected, and the agent's Phone voice card offers to add that name to
@@ -542,6 +561,7 @@ Before a Windows artifact is accepted, GitHub Actions verifies:
 - Settings opener targeting the FlipAi localhost URL;
 - installed tray loading the branded icon;
 - real uninstaller cleanup of app files, Start Menu shortcut, uninstall registration, and startup entry;
+- Quit stopping every FlipAi process, the Google Voice window included;
 - the Google Voice window actually appearing on the runner's desktop, both from
   `FlipAi.exe --google-voice` directly and through the loopback endpoint the
   Open button calls, with the recorded diagnostics dumped when it does not.

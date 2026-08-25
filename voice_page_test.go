@@ -150,7 +150,7 @@ func (h *callHarness) shimHandler() http.Handler {
 	mux.HandleFunc("/devices", call(func(b *voiceBridge, p map[string]any) any { b.Devices(str(p, "raw")); return nil }))
 	mux.HandleFunc("/page", call(func(b *voiceBridge, p map[string]any) any {
 		signedIn, _ := p["signedIn"].(bool)
-		b.Page(str(p, "href"), signedIn)
+		b.Page(str(p, "href"), signedIn, str(p, "controls"))
 		return nil
 	}))
 	return mux

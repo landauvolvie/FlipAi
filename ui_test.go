@@ -803,3 +803,49 @@ func TestSettingsOffersStartupChoices(t *testing.T) {
 		}
 	}
 }
+
+// Pressing a test must answer where it was pressed. Every one of them used to
+// render a whole result page, so testing anything navigated away from the
+// settings the user was in the middle of.
+func TestTestsAnswerInlineRatherThanNavigatingAway(t *testing.T) {
+	a := newTestApp(t)
+
+	for _, page := range []string{"/connections", "/agents", "/settings"} {
+		body := a.do(t, http.MethodGet, page, nil).Body.String()
+		for _, gone := range []string{`href="/gmail/test"`, `href="/codex/test"`, `href="/claude/test"`,
+			`action="/connections/flowtest"`, `action="/health/check"`} {
+			if strings.Contains(body, gone) {
+				t.Errorf("%s still reaches a test through %s instead of running it in place", page, gone)
+			}
+		}
+	}
+
+	agents := a.do(t, http.MethodGet, "/agents", nil).Body.String()
+	for _, want := range []string{`data-test="/codex/test"`, `data-test="/claude/test"`} {
+		if !strings.Contains(agents, want) {
+			t.Errorf("Agents page is missing the inline test control %s", want)
+		}
+	}
+
+	// The same endpoint answers with JSON when the page asks for the result
+	// rather than for somewhere to land.
+	req := httptest.NewRequest(http.MethodGet, "/gmail/test", nil)
+	req.Header.Set("X-FlipAi-Inline", "1")
+	req.AddCookie(&http.Cookie{Name: "aisms_session", Value: a.cfg.LocalToken})
+	rr := httptest.NewRecorder()
+	a.handler().ServeHTTP(rr, req)
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("an inline test replied with %q, want JSON", ct)
+	}
+	var out struct {
+		OK      bool   `json:"ok"`
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("inline result is not JSON: %v (%s)", err, rr.Body.String())
+	}
+	if out.Title == "" {
+		t.Errorf("an inline result must carry something to show: %s", rr.Body.String())
+	}
+}
