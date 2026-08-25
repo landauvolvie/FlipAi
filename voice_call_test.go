@@ -135,8 +135,11 @@ func TestVoiceCallerNameAllowlistRejectsPlaceholders(t *testing.T) {
 	// "Unknown" is what the network supplies when there is no caller ID at all,
 	// so allowing it would authorize every anonymous call.
 	for _, name := range []string{"Unknown", "unknown caller", "Private Number", "Anonymous"} {
-		if _, err := normalizeAllowedCallerLabels(name); err == nil {
+		if _, err := normalizeAllowedCallerLabels(name, true); err == nil {
 			t.Errorf("%q was accepted as an allowed caller name", name)
+		}
+		if got, err := normalizeAllowedCallerLabels(name, false); err != nil || len(got) != 0 {
+			t.Errorf("loading a stored %q should drop it quietly, got %v %v", name, got, err)
 		}
 	}
 	cfg := defaultVoiceCallConfig()

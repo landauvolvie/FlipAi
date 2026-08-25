@@ -147,7 +147,7 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 			}
 			agent.AllowedCallers = strings.Join(numbers, "\n")
 		}
-		labels, err := normalizeAllowedCallerLabels(agent.AllowedLabels)
+		labels, err := normalizeAllowedCallerLabels(agent.AllowedLabels, strict)
 		if err != nil {
 			return err
 		}
@@ -232,7 +232,10 @@ func normalizeCallerLabel(v string) string {
 	return strings.Join(strings.Fields(strings.ReplaceAll(v, "\u00a0", " ")), " ")
 }
 
-func normalizeAllowedCallerLabels(raw string) ([]string, error) {
+// normalizeAllowedCallerLabels rejects placeholder names when saving, but only
+// drops them when loading: a hand-edited file must never stop the rest of the
+// configuration from being read.
+func normalizeAllowedCallerLabels(raw string, strict bool) ([]string, error) {
 	seen := map[string]bool{}
 	out := []string{}
 	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", "\n"), "\n") {
@@ -245,7 +248,10 @@ func normalizeAllowedCallerLabels(raw string) ([]string, error) {
 		}
 		key := strings.ToLower(name)
 		if genericCallerLabels[key] {
-			return nil, fmt.Errorf("%q is what Google Voice shows when there is no caller ID, so it cannot be an allowed caller name", name)
+			if strict {
+				return nil, fmt.Errorf("%q is what Google Voice shows when there is no caller ID, so it cannot be an allowed caller name", name)
+			}
+			continue
 		}
 		if seen[key] {
 			continue
