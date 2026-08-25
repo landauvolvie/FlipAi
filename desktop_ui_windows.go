@@ -12,7 +12,20 @@ package main
 // without changing the server-rendered SMS UI.
 const baseDesktopInitScript = `
 (() => {
-  document.documentElement.dataset.flipaiDesktop = "1";
+  // WebView2 runs this script at document-created time, before the HTML parser
+  // is guaranteed to have created <html>. v0.20.0 touched documentElement
+  // immediately, which could throw here and prevent the entire voice UI script
+  // appended below from ever running. Mark the window on globalThis first, then
+  // mirror the marker onto <html> once it exists.
+  globalThis.__flipaiDesktop = true;
+  const markDesktop = () => {
+    if (document.documentElement) document.documentElement.dataset.flipaiDesktop = "1";
+  };
+  markDesktop();
+  if (!document.documentElement) {
+    addEventListener("DOMContentLoaded", markDesktop, {once:true});
+  }
+
   // The window has no address bar or back button, so a stray swipe or
   // backspace must not navigate away from the app shell.
   addEventListener("keydown", (e) => {
@@ -23,4 +36,31 @@ const baseDesktopInitScript = `
 })();
 `
 
-const desktopInitScript = baseDesktopInitScript + voiceDesktopInitScript
+// If the optional voice-control service itself cannot answer, keep the feature
+// discoverable instead of failing silently. The full controls normally appear
+// well before this timer fires; this banner is only the failure state.
+const voiceVisibilityFallbackScript = `
+(() => {
+  const showVoiceFailure = () => {
+    if (!globalThis.__flipaiDesktop) return;
+    if (!['/connections','/settings','/agents'].includes(location.pathname)) return;
+    setTimeout(() => {
+      if (document.querySelector('#voice-call-connection-card,#voice-call-settings-card,#voice-call-agent-codex,#voice-call-agent-claude')) return;
+      if (document.querySelector('#voice-call-unavailable')) return;
+      const content = document.querySelector('.content');
+      if (!content) return;
+      const banner = document.createElement('div');
+      banner.id = 'voice-call-unavailable';
+      banner.className = 'banner warn';
+      const text = document.createElement('span');
+      text.textContent = 'Google Voice calling is installed, but its local voice service is not responding. Restart FlipAi; if it remains unavailable, check Activity for the voice-service error.';
+      banner.append(text);
+      content.prepend(banner);
+    }, 4000);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', showVoiceFailure, {once:true});
+  else showVoiceFailure();
+})();
+`
+
+const desktopInitScript = baseDesktopInitScript + voiceDesktopInitScript + voiceVisibilityFallbackScript
