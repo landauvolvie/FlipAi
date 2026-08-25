@@ -9,156 +9,120 @@ package main
 const voiceDesktopInitScript = `
 (() => {
   const VOICE = 'http://127.0.0.1:8771';
-  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const q = (s, root=document) => root.querySelector(s);
   const checked = (id) => !!q('#'+id)?.checked;
   const value = (id) => q('#'+id)?.value || '';
   let snapshot = null;
 
+  function E(tag, cls, text) {
+    const e=document.createElement(tag);
+    if(cls) e.className=cls;
+    if(text!==undefined) e.textContent=text;
+    return e;
+  }
+  function pill(text, tone) { return E('span','pill'+(tone?' '+tone:''),text); }
+  function btn(text, cls='btn') { const b=E('button',cls,text); b.type='button'; return b; }
+  function input(id, val, placeholder='') { const x=E('input'); x.id=id; x.value=val||''; x.placeholder=placeholder; return x; }
+  function textarea(id, val, placeholder='') { const x=E('textarea'); x.id=id; x.rows=3; x.value=val||''; x.placeholder=placeholder; return x; }
+  function select(id, items, selected) {
+    const s=E('select'); s.id=id;
+    for(const item of items){ const o=E('option','',item[1]); o.value=item[0]; if(item[0]===selected)o.selected=true; s.append(o); }
+    return s;
+  }
+  function field(label, control, hint) {
+    const f=E('div','field'); const l=E('label','',label); if(control.id)l.htmlFor=control.id; f.append(l,control);
+    if(hint) f.append(E('p','hint',hint)); return f;
+  }
+  function toggle(id, label, hint, on) {
+    const row=E('div','toggle'); const lab=E('div','label',label); if(hint)lab.append(E('span','',hint));
+    const sw=E('label','switch'); const x=E('input'); x.type='checkbox'; x.id=id; x.checked=!!on; sw.append(x,E('span','slider')); row.append(lab,sw); return row;
+  }
+  function sectionHead(title, desc) {
+    const head=E('div','card-head divided'); const wrap=E('div'); wrap.append(E('h2','',title),E('p','',desc)); const actions=E('div','head-actions'); head.append(wrap,actions); return [head,actions];
+  }
+  function row(label, sub, valueNode) {
+    const r=E('div','row'); const l=E('div','label',label); if(sub)l.append(E('span','',sub)); const v=E('div','value'); v.append(valueNode); r.append(l,v); return r;
+  }
+  function toast(message,bad=false) {
+    q('#voice-call-toast')?.remove(); const b=E('div','banner '+(bad?'bad':'ok')); b.id='voice-call-toast'; b.append(E('span','',message)); q('.content')?.prepend(b); setTimeout(()=>b.remove(),5500);
+  }
   async function voiceFetch(path, options={}) {
-    const r = await fetch(VOICE + path, Object.assign({cache:'no-store'}, options));
-    if (!r.ok) throw new Error((await r.text()).trim() || ('Voice service returned ' + r.status));
+    const r=await fetch(VOICE+path,Object.assign({cache:'no-store'},options));
+    if(!r.ok) throw new Error((await r.text()).trim()||('Voice service returned '+r.status));
     return r.json();
   }
-  async function refresh() {
-    snapshot = await voiceFetch('/status');
-    return snapshot;
-  }
-  const statusPill = (runtime) => {
-    if (!runtime || !runtime.browserRunning) return '<span class="pill warn">Not open</span>';
-    if (runtime.signedIn) return '<span class="pill ok">Google Voice ready</span>';
-    return '<span class="pill warn">Sign-in needed</span>';
-  };
-  function deviceOptions(kind, selected) {
-    const devices = (snapshot?.runtime?.devices || []).filter(d => d.kind === kind);
-    const seen = new Set();
-    let out = '<option value="">Choose a device…</option>';
-    for (const d of devices) {
-      if (!d.label || seen.has(d.label)) continue;
-      seen.add(d.label);
-      out += '<option value="'+esc(d.label)+'"'+(d.label===selected?' selected':'')+'>'+esc(d.label)+'</option>';
-    }
-    if (selected && !seen.has(selected)) out += '<option value="'+esc(selected)+'" selected>'+esc(selected)+' (not currently found)</option>';
-    return out;
-  }
-  function toast(message, bad=false) {
-    const old = q('#voice-call-toast'); if (old) old.remove();
-    const b = document.createElement('div');
-    b.id='voice-call-toast'; b.className='banner '+(bad?'bad':'ok');
-    b.innerHTML='<span>'+esc(message)+'</span>';
-    q('.content')?.prepend(b);
-    setTimeout(()=>b.remove(), 5500);
-  }
-  async function saveConfig(next) {
-    snapshot = await voiceFetch('/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(next)});
-    toast('Voice-call settings saved.');
-    return snapshot;
-  }
-  async function openVoice() {
-    await voiceFetch('/open', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
-    toast('Google Voice opened in FlipAi.');
+  async function refresh(){ snapshot=await voiceFetch('/status'); return snapshot; }
+  async function saveConfig(next){ snapshot=await voiceFetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)}); toast('Voice-call settings saved.'); return snapshot; }
+  async function openVoice(){ await voiceFetch('/open',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); toast('Google Voice opened in FlipAi.'); }
+  function runtimePill(rt){ if(!rt?.browserRunning)return pill('Not open','warn'); return rt.signedIn?pill('Google Voice ready','ok'):pill('Sign-in needed','warn'); }
+  function deviceSelect(id,kind,selected){
+    const items=[['','Choose a device...']]; const seen=new Set();
+    for(const d of (snapshot?.runtime?.devices||[])){ if(d.kind!==kind||!d.label||seen.has(d.label))continue; seen.add(d.label); items.push([d.label,d.label]); }
+    if(selected&&!seen.has(selected))items.push([selected,selected+' (not currently found)']);
+    return select(id,items,selected||'');
   }
 
-  function connectionsCard() {
-    const cfg=snapshot.config, rt=snapshot.runtime;
-    const card=document.createElement('section'); card.className='card'; card.id='voice-call-connection-card';
-    card.innerHTML=`
-      <div class="card-head divided">
-        <div class="card-title-row"><span class="bmark lg voice">${document.querySelector('#brand-voice')?.innerHTML || ''}</span><div>
-          <h2>Google Voice calls <span class="pill brand">Experimental</span></h2>
-          <p>A dedicated Google Voice window kept alive by FlipAi for phone conversations with desktop voice.</p>
-        </div></div>
-        <div class="head-actions"><button class="btn accent" type="button" id="voice-open-google">Open Google Voice</button></div>
-      </div>
-      <div class="card-body"><div class="rows">
-        <div class="row"><div class="label">Voice calling<span>This affects calls only. Your existing SMS/Gmail bridge is unchanged.</span></div><div class="value">${cfg.enabled?'<span class="pill ok">Enabled</span>':'<span class="pill">Off</span>'}</div></div>
-        <div class="row"><div class="label">Google Voice window<span>Uses its own persistent WebView2 profile inside FlipAi.</span></div><div class="value">${statusPill(rt)}</div></div>
-        <div class="row"><div class="label">Current call</div><div class="value">${rt.inCall?'<span class="pill ok">Connected</span><b>'+esc(rt.caller||'caller')+'</b>':'<span class="pill">Idle</span>'}</div></div>
-      </div><p class="hint">Configure audio routing under Settings and caller access separately under each agent.</p></div>`;
-    q('.tiles')?.after(card);
-    q('#voice-open-google')?.addEventListener('click', ()=>openVoice().catch(e=>toast(e.message,true)));
+  function connectionsCard(){
+    const cfg=snapshot.config,rt=snapshot.runtime,card=E('section','card'); card.id='voice-call-connection-card';
+    const [head,actions]=sectionHead('Google Voice calls','Dedicated Google Voice inside FlipAi for phone conversations with desktop voice.');
+    head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand'));
+    const open=btn('Open Google Voice','btn accent'); actions.append(open); card.append(head);
+    const body=E('div','card-body'),rows=E('div','rows');
+    rows.append(row('Voice calling','Calls only. Existing SMS/Gmail routing is unchanged.',cfg.enabled?pill('Enabled','ok'):pill('Off')));
+    rows.append(row('Google Voice window','Persistent WebView2 profile owned by FlipAi.',runtimePill(rt)));
+    rows.append(row('Current call','',rt.inCall?pill('Connected','ok'):pill('Idle')));
+    body.append(rows,E('p','hint','Audio routing lives under Settings. Caller access is configured separately under each agent.')); card.append(body);
+    q('.tiles')?.after(card); open.addEventListener('click',()=>openVoice().catch(e=>toast(e.message,true)));
   }
 
-  function settingsCard() {
-    const cfg=snapshot.config, rt=snapshot.runtime;
-    const card=document.createElement('section'); card.className='card'; card.id='voice-call-settings-card';
-    card.innerHTML=`
-      <div class="card-head divided"><div class="card-title-row"><span class="mark shield">${document.querySelector('#icon-phone')?.innerHTML || ''}</span><div>
-        <h2>Google Voice phone bridge <span class="pill brand">Experimental</span></h2>
-        <p>Keep Google Voice listening and route a call through virtual audio to the selected desktop voice app.</p>
-      </div></div><div class="head-actions">${statusPill(rt)}<button class="btn" type="button" id="vc-open">Open Google Voice</button><button class="btn primary" type="button" id="vc-save">Save voice settings</button></div></div>
-      <div class="card-body">
-        <div class="toggle"><div class="label">Enable phone voice<span>Starts the dedicated Google Voice window automatically after this Windows user signs in and keeps it alive while the PC is locked.</span></div><label class="switch"><input id="vc-enabled" type="checkbox"${cfg.enabled?' checked':''}><span class="slider"></span></label></div>
-        <div class="toggle"><div class="label">Auto-answer authorized callers<span>Unknown or unparseable callers are never auto-answered.</span></div><label class="switch"><input id="vc-auto" type="checkbox"${cfg.autoAnswer?' checked':''}><span class="slider"></span></label></div>
-        <div class="field"><label for="vc-default">Default voice agent</label><select id="vc-default"><option value="C"${cfg.defaultAgent==='C'?' selected':''}>ChatGPT / Codex</option><option value="A"${cfg.defaultAgent==='A'?' selected':''}>Claude Desktop</option></select><p class="hint">If a caller is allowed for only one agent, FlipAi routes to that agent automatically. If both allow the caller, this default wins.</p></div>
-        <div class="section-label">Audio bridge</div>
-        <div class="grid-2">
-          <div class="field"><label for="vc-gv-in">Google Voice microphone</label><select id="vc-gv-in">${deviceOptions('audioinput',cfg.googleVoiceInput)}</select><p class="hint">Choose the virtual capture endpoint that receives the AI app's speaker audio.</p></div>
-          <div class="field"><label for="vc-gv-out">Google Voice speaker</label><select id="vc-gv-out">${deviceOptions('audiooutput',cfg.googleVoiceOutput)}</select><p class="hint">Choose the virtual render endpoint that carries the caller toward the AI app's microphone.</p></div>
-          <div class="field"><label for="vc-agent-in">AI app microphone</label><select id="vc-agent-in">${deviceOptions('audioinput',cfg.agentInput)}</select><p class="hint">Select this same paired endpoint once in ChatGPT/Claude voice settings.</p></div>
-          <div class="field"><label for="vc-agent-out">AI app speaker</label><select id="vc-agent-out">${deviceOptions('audiooutput',cfg.agentOutput)}</select><p class="hint">Select this same paired endpoint once in ChatGPT/Claude voice settings.</p></div>
-        </div>
-        <div class="field"><label for="vc-ring">Ringing device (optional)</label><select id="vc-ring">${deviceOptions('audiooutput',cfg.ringOutput)}</select><p class="hint">Optional physical speaker for hearing an incoming ring locally. It is not used for the conversation bridge.</p></div>
-        <p class="callout"><b>Two virtual audio cable paths are required.</b> FlipAi discovers the Windows audio endpoints and forces the Google Voice side automatically. The AI desktop app must be set to the paired microphone/speaker endpoints in its own voice settings. FlipAi does not silently install or redistribute a third-party audio driver.</p>
-        ${rt.lastError?'<p class="callout"><b>Last voice error:</b> '+esc(rt.lastError)+'</p>':''}
-      </div>`;
-    const cards=q('.cards-2'); if(cards) cards.before(card); else q('.content')?.append(card);
-    q('#vc-open')?.addEventListener('click', ()=>openVoice().catch(e=>toast(e.message,true)));
-    q('#vc-save')?.addEventListener('click', async ()=>{
-      try {
-        const next=JSON.parse(JSON.stringify(snapshot.config));
-        next.enabled=checked('vc-enabled'); next.autoAnswer=checked('vc-auto'); next.defaultAgent=value('vc-default');
-        next.googleVoiceInput=value('vc-gv-in'); next.googleVoiceOutput=value('vc-gv-out'); next.agentInput=value('vc-agent-in'); next.agentOutput=value('vc-agent-out'); next.ringOutput=value('vc-ring');
-        await saveConfig(next);
-      } catch(e){toast(e.message,true)}
-    });
+  function settingsCard(){
+    const cfg=snapshot.config,rt=snapshot.runtime,card=E('section','card'); card.id='voice-call-settings-card';
+    const [head,actions]=sectionHead('Google Voice phone bridge','Keep Google Voice listening and route authorized calls through virtual audio to desktop voice.');
+    head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand')); actions.append(runtimePill(rt));
+    const open=btn('Open Google Voice'),save=btn('Save voice settings','btn primary'); actions.append(open,save); card.append(head);
+    const body=E('div','card-body');
+    body.append(toggle('vc-enabled','Enable phone voice','Starts the dedicated Google Voice window automatically after this Windows user signs in and keeps it alive while the PC is locked.',cfg.enabled));
+    body.append(toggle('vc-auto','Auto-answer authorized callers','Unknown or unparseable caller IDs are never auto-answered.',cfg.autoAnswer));
+    body.append(field('Default voice agent',select('vc-default',[['C','ChatGPT / Codex'],['A','Claude Desktop']],cfg.defaultAgent),'If a caller is allowed for only one agent, that agent wins. If both allow the caller, this default wins.'));
+    body.append(E('div','section-label','Audio bridge'));
+    const grid=E('div','grid-2');
+    grid.append(field('Google Voice microphone',deviceSelect('vc-gv-in','audioinput',cfg.googleVoiceInput),'Virtual capture endpoint receiving the AI app speaker.'));
+    grid.append(field('Google Voice speaker',deviceSelect('vc-gv-out','audiooutput',cfg.googleVoiceOutput),'Virtual render endpoint carrying the caller toward the AI app microphone.'));
+    grid.append(field('AI app microphone',deviceSelect('vc-agent-in','audioinput',cfg.agentInput),'Select this paired endpoint once in ChatGPT/Claude voice settings.'));
+    grid.append(field('AI app speaker',deviceSelect('vc-agent-out','audiooutput',cfg.agentOutput),'Select this paired endpoint once in ChatGPT/Claude voice settings.'));
+    body.append(grid);
+    body.append(field('Ringing device (optional)',deviceSelect('vc-ring','audiooutput',cfg.ringOutput),'Optional local speaker for the ring; it is not used for the conversation path.'));
+    const note=E('p','callout'); const bold=E('b','', 'Two virtual audio cable paths are required. '); note.append(bold,document.createTextNode('FlipAi discovers Windows endpoints and forces the Google Voice side automatically. Set the paired microphone/speaker once in the AI desktop app. FlipAi does not silently install or redistribute third-party audio drivers.')); body.append(note);
+    if(rt.lastError){const er=E('p','callout');er.append(E('b','', 'Last voice error: '),document.createTextNode(rt.lastError));body.append(er);}
+    card.append(body); const cards=q('.cards-2'); if(cards)cards.before(card); else q('.content')?.append(card);
+    open.addEventListener('click',()=>openVoice().catch(e=>toast(e.message,true)));
+    save.addEventListener('click',async()=>{try{const next=JSON.parse(JSON.stringify(snapshot.config));next.enabled=checked('vc-enabled');next.autoAnswer=checked('vc-auto');next.defaultAgent=value('vc-default');next.googleVoiceInput=value('vc-gv-in');next.googleVoiceOutput=value('vc-gv-out');next.agentInput=value('vc-agent-in');next.agentOutput=value('vc-agent-out');next.ringOutput=value('vc-ring');await saveConfig(next);}catch(e){toast(e.message,true)}});
   }
 
-  function agentCard(agent) {
-    const isClaude=agent==='A';
-    const own=isClaude?snapshot.config.claude:snapshot.config.codex;
-    const pane=q(isClaude?'#claude-pane':'#codex-pane'); if(!pane) return;
-    const card=document.createElement('section'); card.className='card'; card.id=isClaude?'voice-call-agent-claude':'voice-call-agent-codex';
-    const prefix=isClaude?'vca':'vcc';
-    card.innerHTML=`
-      <div class="card-head divided"><div><h2>Phone voice <span class="pill brand">Experimental</span></h2><p>${isClaude?'Let an authorized caller talk to Claude Desktop Voice. Claude Code itself currently has dictation rather than full two-way voice.':'Let an authorized caller talk to ChatGPT desktop Voice; Codex/Work voice can then control the agent from the conversation.'}</p></div><div class="head-actions"><button class="btn" type="button" id="${prefix}-test">Start voice test</button><button class="btn primary" type="button" id="${prefix}-save">Save phone voice</button></div></div>
-      <div class="card-body">
-        <div class="toggle"><div class="label">Allow this agent on phone calls<span>Caller authorization below is separate from the SMS allowlist.</span></div><label class="switch"><input id="${prefix}-enabled" type="checkbox"${own.enabled?' checked':''}><span class="slider"></span></label></div>
-        <div class="field"><label for="${prefix}-callers">Allowed callers</label><textarea id="${prefix}-callers" rows="3" placeholder="8455551234&#10;9145559876">${esc(own.allowedCallers||'')}</textarea><p class="hint">One US/Canada number per line. Caller ID that cannot be matched to one of these numbers is blocked from the agent bridge.</p></div>
-        <div class="grid-2">
-          <div class="field"><label for="${prefix}-title">Desktop window title contains</label><input id="${prefix}-title" value="${esc(own.appTitle||'')}"><p class="hint">Usually ${isClaude?'Claude':'ChatGPT'}. FlipAi uses this to focus the right desktop app.</p></div>
-          <div class="field"><label for="${prefix}-shortcut">Voice shortcut (recommended)</label><input id="${prefix}-shortcut" value="${esc(own.voiceShortcut||'')}" placeholder="Ctrl+Shift+V"><p class="hint">Use the Voice shortcut you configured in the desktop app. If blank, FlipAi tries the accessible Voice button.</p></div>
-        </div>
-        <div class="field"><label for="${prefix}-command">Launch command (optional)</label><input id="${prefix}-command" value="${esc(own.appCommand||'')}" placeholder="Path or app command"><p class="hint">Used only if the desktop window is not already open.</p></div>
-      </div>`;
-    pane.append(card);
-    q('#'+prefix+'-save')?.addEventListener('click', async ()=>{
-      try {
-        const next=JSON.parse(JSON.stringify(snapshot.config)); const target=isClaude?next.claude:next.codex;
-        target.enabled=checked(prefix+'-enabled'); target.allowedCallers=value(prefix+'-callers'); target.appTitle=value(prefix+'-title'); target.appCommand=value(prefix+'-command'); target.voiceShortcut=value(prefix+'-shortcut');
-        await saveConfig(next);
-      } catch(e){toast(e.message,true)}
-    });
-    q('#'+prefix+'-test')?.addEventListener('click', async ()=>{
-      try {
-        // Save first so the test uses exactly what is on screen.
-        const next=JSON.parse(JSON.stringify(snapshot.config)); const target=isClaude?next.claude:next.codex;
-        target.enabled=checked(prefix+'-enabled'); target.allowedCallers=value(prefix+'-callers'); target.appTitle=value(prefix+'-title'); target.appCommand=value(prefix+'-command'); target.voiceShortcut=value(prefix+'-shortcut');
-        await saveConfig(next);
-        await voiceFetch('/test-agent?agent='+agent,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-        toast((isClaude?'Claude':'ChatGPT')+' voice start requested.');
-      } catch(e){toast(e.message,true)}
-    });
+  function agentCard(agent){
+    const isClaude=agent==='A',own=isClaude?snapshot.config.claude:snapshot.config.codex,pane=q(isClaude?'#claude-pane':'#codex-pane'); if(!pane)return;
+    const p=isClaude?'vca':'vcc',card=E('section','card'); card.id=isClaude?'voice-call-agent-claude':'voice-call-agent-codex';
+    const desc=isClaude?'Allow approved callers to talk to Claude Desktop Voice. Claude Code itself currently provides dictation rather than a full two-way voice session.':'Allow approved callers to talk to ChatGPT desktop Voice; Work/Codex voice can then control the agent from the conversation.';
+    const [head,actions]=sectionHead('Phone voice',desc); head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand'));
+    const test=btn('Start voice test'),save=btn('Save phone voice','btn primary');actions.append(test,save);card.append(head);
+    const body=E('div','card-body'); body.append(toggle(p+'-enabled','Allow this agent on phone calls','Caller authorization here is separate from the SMS allowlist.',own.enabled));
+    body.append(field('Allowed callers',textarea(p+'-callers',own.allowedCallers,'8455551234\n9145559876'),'One US/Canada number per line. Unmatched or hidden caller ID cannot reach the agent bridge.'));
+    const grid=E('div','grid-2');
+    grid.append(field('Desktop window title contains',input(p+'-title',own.appTitle,isClaude?'Claude':'ChatGPT'),'Usually '+(isClaude?'Claude':'ChatGPT')+'. FlipAi uses it to focus the correct app.'));
+    grid.append(field('Voice shortcut (recommended)',input(p+'-shortcut',own.voiceShortcut,'Ctrl+Shift+V'),'Use the Voice shortcut configured in the desktop app. If blank, FlipAi tries the accessible Voice button.'));
+    body.append(grid,field('Launch command (optional)',input(p+'-command',own.appCommand,'Path or app command'),'Used only if the desktop window is not already open.'));card.append(body);pane.append(card);
+    const copyToConfig=()=>{const next=JSON.parse(JSON.stringify(snapshot.config)),target=isClaude?next.claude:next.codex;target.enabled=checked(p+'-enabled');target.allowedCallers=value(p+'-callers');target.appTitle=value(p+'-title');target.appCommand=value(p+'-command');target.voiceShortcut=value(p+'-shortcut');return next;};
+    save.addEventListener('click',async()=>{try{await saveConfig(copyToConfig())}catch(e){toast(e.message,true)}});
+    test.addEventListener('click',async()=>{try{await saveConfig(copyToConfig());await voiceFetch('/test-agent?agent='+agent,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});toast((isClaude?'Claude':'ChatGPT')+' voice start requested.')}catch(e){toast(e.message,true)}});
   }
 
-  async function install() {
-    if (!document.documentElement.dataset.flipaiDesktop) return;
-    try { await refresh(); } catch (_) { return; }
-    const path=location.pathname;
-    if(path==='/connections') connectionsCard();
-    if(path==='/settings') settingsCard();
-    if(path==='/agents'){agentCard('C');agentCard('A');}
+  async function install(){
+    if(!document.documentElement.dataset.flipaiDesktop)return;
+    try{await refresh()}catch(_){return}
+    if(location.pathname==='/connections')connectionsCard();
+    if(location.pathname==='/settings')settingsCard();
+    if(location.pathname==='/agents'){agentCard('C');agentCard('A');}
   }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',install,{once:true}); else install();
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
 })();
 `
