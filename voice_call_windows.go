@@ -37,6 +37,7 @@ var (
 	procVoiceGetWindowTextLength  = voiceUser32.NewProc("GetWindowTextLengthW")
 	procVoiceGetWindowText        = voiceUser32.NewProc("GetWindowTextW")
 	procVoiceGetForegroundWindow  = voiceUser32.NewProc("GetForegroundWindow")
+	procVoiceSetLastError         = voiceKernel32.NewProc("SetLastError")
 )
 
 const (
@@ -56,7 +57,7 @@ func init() {
 		return
 	}
 	mode := os.Args[1]
-	dataDir, cfgPath, _, _, err := appPaths()
+	dataDir, cfgPath, statePath, _, err := appPaths()
 	if err != nil {
 		return
 	}
@@ -64,10 +65,12 @@ func init() {
 	case "--google-voice":
 		_ = ensureDataDir(dataDir)
 		visible := len(os.Args) > 2 && os.Args[2] == "--visible"
-		_ = runGoogleVoiceProcess(dataDir, visible)
+		if err := runGoogleVoiceProcess(dataDir, visible); err != nil {
+			recordVoiceOpen(dataDir, "the Google Voice window process stopped", err)
+		}
 		os.Exit(0)
 	case "--host":
-		startVoiceControlServer(dataDir, cfgPath)
+		startVoiceControlServer(dataDir, cfgPath, statePath)
 		if voiceInteractiveSession() {
 			go superviseGoogleVoice(dataDir)
 		}
@@ -90,6 +93,12 @@ func voiceInteractiveSession() bool {
 
 func acquireGoogleVoiceInstance() (func(), bool) {
 	name, _ := syscall.UTF16PtrFromString(`Local\FlipAi-GoogleVoice`)
+	// Whether this process owns the window is decided by GetLastError, and
+	// CreateMutexW does not reset it on a clean creation. Without clearing it
+	// first, a leftover ERROR_ALREADY_EXISTS from any earlier call in this
+	// process makes a brand new instance believe another one already owns the
+	// window -- after which it exits without creating anything, silently.
+	procVoiceSetLastError.Call(0)
 	h, _, callErr := procVoiceCreateMutex.Call(0, 1, uintptr(unsafe.Pointer(name)))
 	if h == 0 {
 		return func() {}, false
@@ -104,32 +113,95 @@ func acquireGoogleVoiceInstance() (func(), bool) {
 	return func() { procVoiceCloseHandle.Call(h) }, true
 }
 
+// waitForGoogleVoiceWindow polls for the window because it is created by another
+// process: there is no handle to wait on, only its appearance.
+func waitForGoogleVoiceWindow(d time.Duration) uintptr {
+	deadline := time.Now().Add(d)
+	for {
+		if h := googleVoiceHWND(); h != 0 {
+			return h
+		}
+		if !time.Now().Before(deadline) {
+			return 0
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 func googleVoiceHWND() uintptr {
 	title, _ := syscall.UTF16PtrFromString(googleVoiceWindowTitle)
 	h, _, _ := procVoiceFindWindow.Call(0, uintptr(unsafe.Pointer(title)))
 	return h
 }
 
+// voiceWindowStartup is how long the window is given to appear. WebView2's
+// first run in a fresh profile unpacks and initializes before anything is drawn,
+// which on a cold machine is far slower than the steady-state case.
+const voiceWindowStartup = 40 * time.Second
+
+// platformOpenGoogleVoice does not return until the window is actually on screen
+// or it can say why it is not.
+//
+// It used to return as soon as a child process had been launched, which made
+// every later failure invisible: the window process could refuse to start,
+// fail to create a WebView, or exit immediately, and the click still reported
+// success. "Open Google Voice does nothing" was that gap.
 func platformOpenGoogleVoice(dataDir string, show bool) error {
+	started := time.Now()
 	if h := googleVoiceHWND(); h != 0 {
-		if show {
-			procVoiceShowWindow.Call(h, voiceSWRestore)
-			procVoiceSetForegroundWindow.Call(h)
+		if !show {
+			return nil
 		}
-		return nil
+		return revealGoogleVoiceWindow(dataDir, h)
 	}
 	if !voiceInteractiveSession() {
-		return errors.New("Google Voice needs a signed-in Windows desktop session; it cannot open at the Windows sign-in screen")
+		err := errors.New("Google Voice needs a signed-in Windows desktop session; it cannot open at the Windows sign-in screen or from a service")
+		recordVoiceOpen(dataDir, "no interactive desktop session", err)
+		return err
 	}
 	exe, err := os.Executable()
 	if err != nil {
+		recordVoiceOpen(dataDir, "could not locate FlipAi.exe", err)
 		return err
 	}
 	args := []string{"--google-voice"}
 	if show {
 		args = append(args, "--visible")
 	}
-	return spawnDetached(exe, args...)
+	recordVoiceOpen(dataDir, "starting the Google Voice window process", nil)
+	if err := spawnDetached(exe, args...); err != nil {
+		recordVoiceOpen(dataDir, "could not start the Google Voice window process", err)
+		return fmt.Errorf("could not start the Google Voice window process: %w", err)
+	}
+	if !show {
+		return nil
+	}
+
+	h := waitForGoogleVoiceWindow(voiceWindowStartup)
+	if h == 0 {
+		reason := lastVoiceOpenFailure(dataDir, started)
+		if reason == "" {
+			reason = "the window process started but never created a window. The Microsoft Edge WebView2 Runtime is the usual cause; install it from Microsoft and try again."
+		}
+		err := fmt.Errorf("Google Voice did not open: %s", reason)
+		recordVoiceOpen(dataDir, "window never appeared", err)
+		return err
+	}
+	return revealGoogleVoiceWindow(dataDir, h)
+}
+
+// revealGoogleVoiceWindow un-minimizes the window and puts it in front. Windows
+// often refuses a foreground change asked for by a background process, and it
+// refuses silently, so a window that only restored behind everything else is
+// reported rather than treated as a success.
+func revealGoogleVoiceWindow(dataDir string, hwnd uintptr) error {
+	procVoiceShowWindow.Call(hwnd, voiceSWRestore)
+	if bringToFront(hwnd) {
+		recordVoiceOpen(dataDir, "window opened", nil)
+		return nil
+	}
+	recordVoiceOpen(dataDir, "window opened behind other windows", nil)
+	return nil
 }
 
 func platformVoiceConfigChanged(dataDir string, cfg VoiceCallConfig) {
@@ -145,12 +217,17 @@ func platformVoiceConfigChanged(dataDir string, cfg VoiceCallConfig) {
 func superviseGoogleVoice(dataDir string) {
 	ticker := time.NewTicker(4 * time.Second)
 	defer ticker.Stop()
+	// A window takes a while to appear on a cold start, and the supervisor
+	// cannot see one until it does. Without this the supervisor would launch a
+	// fresh process every four seconds for the whole of that startup.
+	var lastAttempt time.Time
 	for range ticker.C {
 		if quitRequested(dataDir) {
 			return
 		}
 		cfg := loadVoiceCallConfig(dataDir)
-		if cfg.Enabled && googleVoiceHWND() == 0 {
+		if cfg.Enabled && googleVoiceHWND() == 0 && time.Since(lastAttempt) > voiceWindowStartup {
+			lastAttempt = time.Now()
 			_ = platformOpenGoogleVoice(dataDir, false)
 		}
 		if !cfg.Enabled {
@@ -164,13 +241,23 @@ func superviseGoogleVoice(dataDir string) {
 func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 	release, owner := acquireGoogleVoiceInstance()
 	if !owner {
-		if initiallyVisible {
-			if h := googleVoiceHWND(); h != 0 {
-				procVoiceShowWindow.Call(h, voiceSWRestore)
-				procVoiceSetForegroundWindow.Call(h)
-			}
+		// Another instance holds the window. A background respawn has nothing to
+		// do and nobody waiting on it, so it just stands down.
+		if !initiallyVisible {
+			return nil
 		}
-		return nil
+		// A user is waiting, though. The other instance normally has a window
+		// already, or is seconds away from one; if it never produces one it is
+		// wedged, and returning quietly here is what made repeated clicks on
+		// Open do nothing at all, forever -- the caller saw a process start and
+		// exit cleanly, with no window and no complaint.
+		h := waitForGoogleVoiceWindow(voiceWindowStartup)
+		if h == 0 {
+			err := errors.New("another FlipAi Google Voice process is already running but has not produced a window; quit FlipAi from the tray and start it again")
+			recordVoiceOpen(dataDir, "an existing window process is not responding", err)
+			return err
+		}
+		return revealGoogleVoiceWindow(dataDir, h)
 	}
 	defer release()
 
@@ -219,6 +306,7 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := os.MkdirAll(voiceProfilePath(dataDir), 0700); err != nil {
+		recordVoiceOpen(dataDir, "could not create the Google Voice browser profile folder", err)
 		return err
 	}
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
@@ -233,15 +321,15 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		},
 	})
 	if w == nil {
-		return errors.New("could not create the Google Voice window; Microsoft Edge WebView2 Runtime may be unavailable")
+		// NewWithOptions returns nil when the WebView2 environment could not be
+		// created, which in practice means the runtime is missing or blocked.
+		err := errors.New("Windows could not create the Google Voice browser window. Install the Microsoft Edge WebView2 Runtime (Microsoft distributes it free as the Evergreen Standalone Installer), then try again.")
+		recordVoiceOpen(dataDir, "WebView2 could not create the window", err)
+		return err
 	}
 	defer w.Destroy()
 	applyFlipAiWindowIcon(uintptr(w.Window()))
 	w.SetSize(760, 560, webview2.HintMin)
-	chromium := voiceChromium(w)
-	if chromium == nil {
-		return errors.New("could not reach the Google Voice browser control to grant microphone access")
-	}
 	// Per-kind permissions do not work with this WebView2 binding: its
 	// PermissionRequested handler passes the out-parameter of GetPermissionKind
 	// by value instead of by pointer, so every request reads back as kind 0 and
@@ -252,7 +340,19 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	// permissions FlipAi does not want are removed inside the page instead (see
 	// googleVoiceInitScript, which deletes camera, geolocation and clipboard
 	// access before Google Voice can ask for them).
-	chromium.SetGlobalPermission(edge.CoreWebView2PermissionStateAllow)
+	//
+	// Reaching the browser control means reading an unexported field of the
+	// WebView binding, so it can stop working when that package changes. Losing
+	// the microphone grant is not a reason to refuse to show the window: signing
+	// in to Google does not need a microphone, and a window that appears and
+	// vanishes is far worse than one that needs a permission click later.
+	if chromium := voiceChromium(w); chromium != nil {
+		chromium.SetGlobalPermission(edge.CoreWebView2PermissionStateAllow)
+	} else {
+		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+			s.LastError = "FlipAi could not pre-grant microphone access to Google Voice; if a call has no audio, allow the microphone in the Google Voice window when Windows asks."
+		})
+	}
 
 	bridge := newVoiceBridge(dataDir, activateAgentVoice, deactivateAgentVoice)
 	_ = w.Bind("flipVoiceAudioSettings", bridge.AudioSettings)
@@ -269,7 +369,13 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		s.LastEvent = "browser-starting"
 	})
 	w.Navigate(googleVoiceWebURL)
-	if !visible {
+	if visible {
+		// The window is created by a process the user did not click on, so it
+		// does not come forward by itself.
+		procVoiceShowWindow.Call(uintptr(w.Window()), voiceSWRestore)
+		bringToFront(uintptr(w.Window()))
+		recordVoiceOpen(dataDir, "window opened", nil)
+	} else {
 		procVoiceShowWindow.Call(uintptr(w.Window()), voiceSWMinimize)
 	}
 	w.Run()

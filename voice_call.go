@@ -73,10 +73,15 @@ type VoiceRuntimeState struct {
 	// DeviceLabelsHidden records that the browser returned endpoints with no
 	// names, which happens until the microphone permission is actually granted.
 	// Without it the settings page looks merely empty rather than blocked.
-	DeviceLabelsHidden bool      `json:"deviceLabelsHidden,omitempty"`
-	LastError          string    `json:"lastError,omitempty"`
-	LastEvent          string    `json:"lastEvent,omitempty"`
-	UpdatedAt          time.Time `json:"updatedAt,omitempty"`
+	DeviceLabelsHidden bool   `json:"deviceLabelsHidden,omitempty"`
+	LastError          string `json:"lastError,omitempty"`
+	LastEvent          string `json:"lastEvent,omitempty"`
+	// LastOpen is the outcome of the most recent attempt to put the Google
+	// Voice window on screen. Opening it spans two processes, so without this a
+	// click that produced nothing leaves nothing behind to explain itself.
+	LastOpen   string    `json:"lastOpen,omitempty"`
+	LastOpenAt time.Time `json:"lastOpenAt,omitempty"`
+	UpdatedAt  time.Time `json:"updatedAt,omitempty"`
 }
 
 type voiceControlSnapshot struct {
@@ -360,6 +365,34 @@ func mutateVoiceRuntime(dataDir string, fn func(*VoiceRuntimeState)) {
 	}
 }
 
+// recordVoiceOpen leaves a trail for one step of opening the window. The window
+// lives in its own process, so the process handling the click cannot see why the
+// other one failed unless that one writes it down.
+func recordVoiceOpen(dataDir, outcome string, err error) {
+	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+		s.LastOpen = outcome
+		s.LastOpenAt = time.Now()
+		if err != nil {
+			s.LastOpen = outcome + ": " + err.Error()
+			s.LastError = err.Error()
+			s.LastEvent = "open-failed"
+		}
+	})
+}
+
+// lastVoiceOpenFailure returns what the window process last recorded, when it is
+// recent enough to be about the attempt in progress.
+func lastVoiceOpenFailure(dataDir string, since time.Time) string {
+	s := loadVoiceRuntime(dataDir)
+	if s.LastOpen != "" && !s.LastOpenAt.Before(since) {
+		return s.LastOpen
+	}
+	if s.LastError != "" && !s.UpdatedAt.Before(since) {
+		return s.LastError
+	}
+	return ""
+}
+
 func voiceOriginAllowed(origin, mainListen string) bool {
 	origin = strings.TrimSpace(origin)
 	if origin == "" {
@@ -389,16 +422,32 @@ func voiceOriginAllowed(origin, mainListen string) bool {
 // Origin to be the authenticated local FlipAi UI. Google Voice itself therefore
 // cannot call these endpoints even though it is hosted by another WebView in
 // the same executable.
-func startVoiceControlServer(dataDir, mainConfigPath string) {
+func startVoiceControlServer(dataDir, mainConfigPath, statePath string) {
 	mainCfg, err := loadConfig(mainConfigPath, dataDir)
 	if err != nil {
 		mainCfg = defaultConfig(dataDir)
 	}
+	handler := voiceControlHandler(dataDir, mainCfg.Listen, activityLogForStatePath(statePath))
+	server := &http.Server{Addr: voiceControlListen, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+				s.LastError = "Voice settings service: " + err.Error()
+				s.LastEvent = "control-error"
+			})
+		}
+	}()
+}
+
+// voiceControlHandler is split out so the endpoints the desktop UI calls can be
+// exercised directly. The Open path in particular has to carry a failure back to
+// the button that started it, and that is only worth anything if it is tested.
+func voiceControlHandler(dataDir, mainListen string, activity *ActivityLog) http.Handler {
 	mux := http.NewServeMux()
 	withCORS := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if !voiceOriginAllowed(origin, mainCfg.Listen) {
+			if !voiceOriginAllowed(origin, mainListen) {
 				http.Error(w, "FlipAi voice control is local-only", http.StatusForbidden)
 				return
 			}
@@ -449,9 +498,11 @@ func startVoiceControlServer(dataDir, mainConfigPath string) {
 			return
 		}
 		if err := platformOpenGoogleVoice(dataDir, true); err != nil {
+			activity.Add("error", "voice", "Open Google Voice failed: "+truncate(err.Error(), 300), "", "", "")
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		activity.Add("info", "voice", "Google Voice window is open.", "", "", "")
 		writeJSON(w, map[string]bool{"ok": true})
 	}))
 	mux.HandleFunc("/test-agent", withCORS(func(w http.ResponseWriter, r *http.Request) {
@@ -471,15 +522,7 @@ func startVoiceControlServer(dataDir, mainConfigPath string) {
 		writeJSON(w, map[string]bool{"ok": true})
 	}))
 
-	server := &http.Server{Addr: voiceControlListen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-				s.LastError = "Voice settings service: " + err.Error()
-				s.LastEvent = "control-error"
-			})
-		}
-	}()
+	return mux
 }
 
 // voiceBridge holds every decision the injected Google Voice page asks FlipAi

@@ -1,10 +1,15 @@
 package main
 
 import (
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVoiceCallDefaultsAreOffAndRestrictedToGoogleVoice(t *testing.T) {
@@ -281,5 +286,80 @@ func TestGoogleVoiceScriptIsSingleFlighted(t *testing.T) {
 	}
 	if !strings.Contains(googleVoiceInitScript, "if (ticking) return;") {
 		t.Fatal("the poll needs a re-entrancy guard")
+	}
+}
+
+// The Open button is a POST from the desktop UI to the local voice endpoint.
+// Whatever goes wrong behind it has to come back through that response, because
+// the response text is the only thing the user ever sees.
+func TestOpenGoogleVoiceReportsFailureToTheButton(t *testing.T) {
+	dir := t.TempDir()
+	h := voiceControlHandler(dir, "127.0.0.1:8765", activityLogForStatePath(filepath.Join(dir, "state.json")))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	post := func(path, origin string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return res.StatusCode, strings.TrimSpace(string(b))
+	}
+
+	// Only FlipAi's own desktop window may drive these controls.
+	if code, _ := post("/open", "https://voice.google.com"); code != http.StatusForbidden {
+		t.Fatalf("a foreign origin got %d, want 403", code)
+	}
+
+	// On this platform opening always fails, which is exactly the case that
+	// used to be swallowed: the endpoint must answer with the reason, not 200.
+	code, body := post("/open", "http://127.0.0.1:8765")
+	if code == http.StatusOK {
+		t.Fatal("a failed open reported success to the button")
+	}
+	if body == "" {
+		t.Fatal("a failed open gave the button nothing to show")
+	}
+	if want := platformOpenGoogleVoice(dir, true).Error(); body != want {
+		t.Errorf("button would show %q, want the real reason %q", body, want)
+	}
+}
+
+func TestVoiceOpenAttemptsLeaveAnExplanation(t *testing.T) {
+	dir := t.TempDir()
+	started := time.Now()
+
+	// Nothing recorded yet: the caller must not invent a reason.
+	if got := lastVoiceOpenFailure(dir, started); got != "" {
+		t.Fatalf("unexpected recorded failure %q", got)
+	}
+
+	recordVoiceOpen(dir, "WebView2 could not create the window", errors.New("runtime missing"))
+	got := lastVoiceOpenFailure(dir, started)
+	if !strings.Contains(got, "WebView2") || !strings.Contains(got, "runtime missing") {
+		t.Fatalf("recorded failure = %q, want the step and the cause", got)
+	}
+	if st := loadVoiceRuntime(dir); st.LastEvent != "open-failed" || st.LastError == "" {
+		t.Fatalf("runtime state does not show the failed open: %+v", st)
+	}
+
+	// A record from an earlier attempt must not be reported as the outcome of a
+	// later one, or every future click inherits an old error.
+	if got := lastVoiceOpenFailure(dir, time.Now().Add(time.Second)); got != "" {
+		t.Fatalf("a stale record leaked into a new attempt: %q", got)
+	}
+
+	recordVoiceOpen(dir, "window opened", nil)
+	if st := loadVoiceRuntime(dir); st.LastOpen != "window opened" {
+		t.Fatalf("successful open recorded as %q", st.LastOpen)
 	}
 }

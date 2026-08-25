@@ -44,7 +44,14 @@ const voiceDesktopInitScript = `
     const r=E('div','row'); const l=E('div','label',label); if(sub)l.append(E('span','',sub)); const v=E('div','value'); v.append(valueNode); r.append(l,v); return r;
   }
   function toast(message,bad=false) {
-    q('#voice-call-toast')?.remove(); const b=E('div','banner '+(bad?'bad':'ok')); b.id='voice-call-toast'; b.append(E('span','',message)); q('.content')?.prepend(b); setTimeout(()=>b.remove(),5500);
+    q('#voice-call-toast')?.remove();
+    const b=E('div','banner '+(bad?'bad':'ok')); b.id='voice-call-toast'; b.append(E('span','',message));
+    q('.content')?.prepend(b);
+    // A failure explains what to do next and can be several lines long, so it
+    // stays until it is dismissed. Only the success note times itself out.
+    if(bad){ const x=btn('Dismiss'); x.addEventListener('click',()=>b.remove()); b.append(x); }
+    else setTimeout(()=>b.remove(),5500);
+    b.scrollIntoView({block:'nearest'});
   }
   async function voiceFetch(path, options={}) {
     const r=await fetch(VOICE+path,Object.assign({cache:'no-store'},options));
@@ -53,7 +60,19 @@ const voiceDesktopInitScript = `
   }
   async function refresh(){ snapshot=await voiceFetch('/status'); return snapshot; }
   async function saveConfig(next){ snapshot=await voiceFetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)}); toast('Voice-call settings saved.'); return snapshot; }
-  async function openVoice(){ await voiceFetch('/open',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); toast('Google Voice opened in FlipAi.'); }
+  async function openVoice(){ await voiceFetch('/open',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); toast('Google Voice is open. Sign in to your Google account in that window.'); }
+  // Opening waits for the window to actually exist, which on a first run means
+  // waiting for WebView2 to initialize. The button has to say so rather than
+  // look like it did nothing.
+  function wireOpen(b){
+    b.addEventListener('click',async()=>{
+      const label=b.textContent;
+      b.disabled=true; b.textContent='Opening Google Voice...';
+      try{ await openVoice(); }
+      catch(e){ toast(e.message,true); }
+      finally{ b.disabled=false; b.textContent=label; }
+    });
+  }
   function runtimePill(rt){ if(!rt?.browserRunning)return pill('Not open','warn'); return rt.signedIn?pill('Google Voice ready','ok'):pill('Sign-in needed','warn'); }
   function deviceSelect(id,kind,selected){
     const items=[['','Choose a device...']]; const seen=new Set();
@@ -89,14 +108,20 @@ const voiceDesktopInitScript = `
     rows.append(row('Voice calling','Calls only. Existing SMS/Gmail routing is unchanged.',cfg.enabled?pill('Enabled','ok'):pill('Off')));
     rows.append(row('Google Voice window','Persistent WebView2 profile owned by FlipAi.',runtimePill(rt)));
     rows.append(row('Current call','',rt.inCall?pill('Connected','ok'):pill('Idle')));
+    if(rt.lastOpen) rows.append(row('Last open attempt','',E('span','',rt.lastOpen)));
     body.append(rows);
+    if(rt.lastError){
+      const c=E('p','callout');
+      c.append(E('b','','Google Voice window: '),document.createTextNode(rt.lastError));
+      body.append(c);
+    }
     if(rt.blocked){
       const c=E('p','callout');
       c.append(E('b','','Last call was not connected: '),document.createTextNode(rt.blocked));
       body.append(c);
     }
     body.append(E('p','hint','Audio routing lives under Settings. Caller access is configured separately under each agent.')); card.append(body);
-    q('.tiles')?.after(card); open.addEventListener('click',()=>openVoice().catch(e=>toast(e.message,true)));
+    q('.tiles')?.after(card); wireOpen(open);
   }
 
   function settingsCard(){
@@ -124,7 +149,7 @@ const voiceDesktopInitScript = `
     const note=E('p','callout'); const bold=E('b','', 'Two virtual audio cables are required, one per direction. '); note.append(bold,document.createTextNode('Cable 1 carries the caller to the agent: set the Google Voice speaker to its input end and the AI app microphone to its output end. Cable 2 carries the agent back to the caller: set the AI app speaker to its input end and the Google Voice microphone to its output end. FlipAi applies the Google Voice side itself; the AI app side is chosen once inside ChatGPT or Claude. FlipAi does not install or redistribute third-party audio drivers.')); body.append(note);
     if(rt.lastError){const er=E('p','callout');er.append(E('b','', 'Last voice error: '),document.createTextNode(rt.lastError));body.append(er);}
     card.append(body); const cards=q('.cards-2'); if(cards)cards.before(card); else q('.content')?.append(card);
-    open.addEventListener('click',()=>openVoice().catch(e=>toast(e.message,true)));
+    wireOpen(open);
     save.addEventListener('click',async()=>{try{const next=JSON.parse(JSON.stringify(snapshot.config));next.enabled=checked('vc-enabled');next.autoAnswer=checked('vc-auto');next.defaultAgent=value('vc-default');next.googleVoiceInput=value('vc-gv-in');next.googleVoiceOutput=value('vc-gv-out');next.agentInput=value('vc-agent-in');next.agentOutput=value('vc-agent-out');next.ringOutput=value('vc-ring');await saveConfig(next);}catch(e){toast(e.message,true)}});
   }
 
