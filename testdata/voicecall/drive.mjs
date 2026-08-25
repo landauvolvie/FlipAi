@@ -160,6 +160,17 @@ await scenario('contact-name-allowed', baseConfig({
   return { answered: true };
 });
 
+// 3b. Google sometimes names the caller only on the Answer control itself.
+await scenario('caller-named-on-answer-button', baseConfig(), async ({ page, tick }) => {
+  await tick();
+  await page.evaluate(() =>
+    window.gv.ring('Incoming call', null, 'Answer call from (845) 555-1000'));
+  await tick();
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await tick();
+  return { answered: true };
+});
+
 // 4. A number that is not on the list must not be answered at all.
 await scenario('unauthorized-number', baseConfig(), async ({ page, tick }) => {
   await tick();

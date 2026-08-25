@@ -222,7 +222,7 @@ const googleVoiceInitScript = `
     return m ? normPhone(m[0]) : '';
   };
   // Lines the ringing UI shows that describe the call rather than the caller.
-  const CHROME_LINE = /^(answer|accept|decline|reject|ignore|dismiss|hang\s*up|end\s+call|leave\s+call|incoming\s+call|mute|unmute|keypad|hold|more|options|calling|google\s+voice|block|report\s+spam|send\s+to\s+voicemail|voicemail|\d{1,2}:\d{2}(:\d{2})?)$/i;
+  const CHROME_LINE = /^(answer|accept|decline|reject|ignore|dismiss|hang\s*up|end\s+call|leave\s+call|incoming\s+call|mute|unmute|keypad|hold|more|options|calling|google\s+voice|block|report\s+spam|send\s+to\s+voicemail|voicemail|mobile|work|home|cell|main|iphone|android|\d{1,2}:\d{2}(:\d{2})?)$/i;
   const FROM_RE = /(?:incoming\s+call\s+from|call\s+from|calling\s+from)\s+(.+?)\s*$/i;
 
   const visible = (el) => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
@@ -281,6 +281,18 @@ const googleVoiceInitScript = `
   }
 
   function callerIdentity() {
+    // The Answer button's own accessible name is the most direct statement of
+    // who is calling when Google provides one.
+    const answer = findAnswer();
+    if (answer) {
+      const said = (answer.getAttribute('aria-label') || '').match(FROM_RE);
+      if (said) {
+        const spoken = said[1].trim();
+        const n = phoneFrom(spoken);
+        if (n) return {number: n, label: ''};
+        if (spoken) return {number: '', label: spoken.slice(0, 120)};
+      }
+    }
     for (const scope of callerScopes()) {
       const aria = scope.getAttribute && scope.getAttribute('aria-label');
       const fromAria = aria && aria.match(FROM_RE);

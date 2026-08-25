@@ -363,6 +363,16 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 		}
 	})
 
+	t.Run("a caller named only on the answer control still matches", func(t *testing.T) {
+		i := report.find(t, "caller-named-on-answer-button")
+		if report.countCalls(i, "flipVoiceAnswered") == 0 {
+			t.Fatal("a caller identified by the Answer button's accessible name was not bridged")
+		}
+		if acts, _ := h.scenario("caller-named-on-answer-button").recorded(); len(acts) != 1 {
+			t.Errorf("agent activations = %v, want exactly one", acts)
+		}
+	})
+
 	t.Run("unknown number is never answered", func(t *testing.T) {
 		i := report.find(t, "unauthorized-number")
 		if report.Scenarios[i].Answered {

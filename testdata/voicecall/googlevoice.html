@@ -31,7 +31,7 @@ window.gv = {
   playCalled: false,
   playError: '',
 
-  ring(display, ariaLabel) {
+  ring(display, ariaLabel, answerLabel) {
     const area = document.getElementById('callarea');
     area.textContent = '';
     const dialog = document.createElement('div');
@@ -49,6 +49,7 @@ window.gv = {
 
     const answer = document.createElement('button');
     answer.textContent = 'Answer';
+    if (answerLabel) answer.setAttribute('aria-label', answerLabel);
     answer.addEventListener('click', () => window.gv.connect());
     const decline = document.createElement('button');
     decline.textContent = 'Decline';
