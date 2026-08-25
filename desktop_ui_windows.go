@@ -6,11 +6,11 @@ package main
 //
 // It used to rebuild the whole settings page in the browser: injecting a
 // stylesheet, moving nodes around, and hiding sections to fake a multi-page
-// app. The pages are now served that way by the local host itself, so all this
-// has left to do is tell the page it is running inside the desktop window
-// rather than a browser tab, and keep the window from offering browser-style
-// navigation gestures the frameless window cannot undo.
-const desktopInitScript = `
+// app. The pages are now served that way by the local host itself, so the base
+// script only marks the trusted desktop window and blocks browser navigation.
+// The voice-call feature appends its optional controls from voice_ui_windows.go
+// without changing the server-rendered SMS UI.
+const baseDesktopInitScript = `
 (() => {
   document.documentElement.dataset.flipaiDesktop = "1";
   // The window has no address bar or back button, so a stray swipe or
@@ -22,3 +22,5 @@ const desktopInitScript = `
   });
 })();
 `
+
+const desktopInitScript = baseDesktopInitScript + voiceDesktopInitScript
