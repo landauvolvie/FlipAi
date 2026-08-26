@@ -120,11 +120,14 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	}
 
 	var report struct {
-		Errors     []string `json:"errors"`
-		Steps      []string `json:"steps"`
-		Cards      []string `json:"cards"`
-		StateAfter string   `json:"stateAfter"`
-		SavedNote  string   `json:"savedNote"`
+		Errors             []string `json:"errors"`
+		Steps              []string `json:"steps"`
+		Cards              []string `json:"cards"`
+		StateAfter         string   `json:"stateAfter"`
+		SavedNote          string   `json:"savedNote"`
+		PanelWhileStarting string   `json:"panelWhileStarting"`
+		PanelWhenOff       string   `json:"panelWhenOff"`
+		PanelButtons       []string `json:"panelButtons"`
 	}
 	if err := json.Unmarshal([]byte(stdout.String()), &report); err != nil {
 		t.Fatalf("could not read the driver report: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
@@ -132,7 +135,7 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	if len(report.Errors) > 0 {
 		t.Fatalf("the card raised errors in the browser: %v", report.Errors)
 	}
-	for _, want := range []string{"card-rendered", "switch-applied", "dock-reported", "field-autosaved", "switch-reverted", "pending-save-flushed"} {
+	for _, want := range []string{"card-rendered", "switch-applied", "dock-reported", "field-autosaved", "switch-reverted", "panel-explains-and-retries", "panel-explains-off", "pending-save-flushed"} {
 		found := false
 		for _, got := range report.Steps {
 			if got == want {
@@ -168,6 +171,30 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	// to land, or "changes save as you make them" is not true.
 	if saved.Codex.AppTitle != "Saved On The Way Out" {
 		t.Errorf("a change made just before leaving the page was lost: %q", saved.Codex.AppTitle)
+	}
+
+	// The panel is the thing the user stares at when Google Voice does not
+	// appear. It has to say which of the several possible things is happening,
+	// and hand over something to press.
+	if strings.Contains(report.PanelWhileStarting, "Turn calling on above") {
+		t.Error("the panel still tells the user to turn on a switch that is already on")
+	}
+	// This machine has no WebView2 runtime, so that is the true reason Google
+	// Voice is not on screen and the panel has to be the one that says it.
+	if !strings.Contains(report.PanelWhileStarting, "WebView2") {
+		t.Errorf("the panel did not name the missing component: %q", report.PanelWhileStarting)
+	}
+	found := false
+	for _, b := range report.PanelButtons {
+		if b == "Retry" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the panel offered no way to try again: %v", report.PanelButtons)
+	}
+	if !strings.Contains(report.PanelWhenOff, "Calling is off") {
+		t.Errorf("with calling off the panel said: %q", report.PanelWhenOff)
 	}
 
 	if !sawPanel.Load() {

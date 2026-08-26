@@ -39,6 +39,7 @@ var (
 	procVoiceGetWindowText        = voiceUser32.NewProc("GetWindowTextW")
 	procVoiceGetForegroundWindow  = voiceUser32.NewProc("GetForegroundWindow")
 	procVoiceSetLastError         = voiceKernel32.NewProc("SetLastError")
+	procVoiceDestroyWindow        = voiceUser32.NewProc("DestroyWindow")
 )
 
 const (
@@ -295,7 +296,52 @@ func platformEnsureGoogleVoice(dataDir string) {
 	}
 	voiceEnsureAt = time.Now()
 	voiceEnsureMu.Unlock()
-	go func() { _ = platformOpenGoogleVoice(dataDir, false) }()
+	go startGoogleVoiceInBackground(dataDir)
+}
+
+// startGoogleVoiceInBackground starts the window nobody is waiting on, and then
+// waits on it anyway.
+//
+// A background start used to return the moment the process was launched, so
+// when Google Voice failed to load there was nothing to report and nothing to
+// look at: the panel simply stayed empty. The user is looking at that panel, so
+// the outcome has to reach it.
+func startGoogleVoiceInBackground(dataDir string) {
+	started := time.Now()
+	if err := platformOpenGoogleVoice(dataDir, false); err != nil {
+		return
+	}
+	if h := waitForGoogleVoiceWindow(voiceWindowStartup); h == 0 {
+		reason := lastVoiceOpenFailure(dataDir, started)
+		if reason == "" {
+			reason = "the Google Voice window process started but never created a window."
+			if platformWebView2Runtime() == "" {
+				reason += " The Microsoft Edge WebView2 Runtime is not installed on this PC, and FlipAi cannot show Google Voice without it."
+			}
+		}
+		recordVoiceOpen(dataDir, "window never appeared", errors.New(reason))
+		return
+	}
+	_ = confirmGoogleVoiceLoaded(dataDir, started)
+}
+
+// platformRestartGoogleVoice is the Retry the panel offers. It takes down
+// whatever is there -- a window that never loaded, or a process wedged behind
+// the single-instance mutex -- and starts again from nothing.
+func platformRestartGoogleVoice(dataDir string) {
+	if h := googleVoiceHWND(); h != 0 {
+		procVoicePostMessage.Call(h, voiceWMClose, 0, 0)
+		deadline := time.Now().Add(6 * time.Second)
+		for googleVoiceHWND() != 0 && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	// A retry is the user saying "try now", so the rate limit that keeps the
+	// page from starting a process four times a second does not apply.
+	voiceEnsureMu.Lock()
+	voiceEnsureAt = time.Time{}
+	voiceEnsureMu.Unlock()
+	go startGoogleVoiceInBackground(dataDir)
 }
 
 func platformVoiceConfigChanged(dataDir string, cfg VoiceCallConfig) {
@@ -412,6 +458,89 @@ const voiceBrowserArguments = "--disable-background-timer-throttling " +
 	"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling " +
 	"--autoplay-policy=no-user-gesture-required"
 
+// createGoogleVoiceWebView makes the window, and keeps trying when the first
+// way does not work.
+//
+// Creating a WebView2 fails as a single silent "no": the binding returns nil
+// whether the runtime is missing, the browser arguments were refused, or the
+// profile folder was still held by a copy of this process that had not quite
+// finished exiting. Those last two are recoverable, and a user watching an
+// empty panel has no way to tell any of them apart, so each is tried in turn
+// and what worked is written down.
+//
+// The binding creates and shows its Win32 frame before embedding the browser
+// into it, and does not take that frame away when embedding fails. Left alone,
+// the leftover frame answers to the window title FlipAi looks for, so the next
+// attempt would find "a window" that can never load anything. Each failed
+// attempt therefore destroys its own frame first -- from this thread, which is
+// the thread that created it.
+func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
+	attempts := []struct {
+		note string
+		args string
+		wait time.Duration
+	}{
+		// The window FlipAi wants: its own profile, and the switches that keep
+		// a background window noticing a call.
+		{note: "", args: voiceBrowserArguments},
+		// WebView2 refuses to start at all if it does not like a switch, and it
+		// does not say which. A window that throttles in the background is
+		// still a window that can be signed in and can take a call.
+		{note: "Google Voice started without its background-timer switches, because WebView2 refused them. A call should still be answered; if one is ever missed while FlipAi is in the background, this is the first thing to look at.", args: ""},
+		// A copy of this process that was killed a moment ago can still hold the
+		// browser profile for a second or two.
+		{note: "Google Voice started on the second attempt; the browser profile was still held by a previous FlipAi window.", args: voiceBrowserArguments, wait: 3 * time.Second},
+	}
+	var lastErr error
+	for i, attempt := range attempts {
+		if attempt.wait > 0 {
+			time.Sleep(attempt.wait)
+		}
+		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", attempt.args)
+		w := webview2.NewWithOptions(webview2.WebViewOptions{
+			Debug:     false,
+			AutoFocus: true,
+			DataPath:  voiceProfilePath(dataDir),
+			WindowOptions: webview2.WindowOptions{
+				Title:  googleVoiceWindowTitle,
+				Width:  1080,
+				Height: 760,
+				Center: true,
+			},
+		})
+		if w != nil {
+			if attempt.note != "" {
+				mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) { s.LastError = attempt.note })
+			}
+			return w, nil
+		}
+		destroyLeftoverGoogleVoiceFrame()
+		lastErr = webView2CreateFailure(i)
+	}
+	return nil, lastErr
+}
+
+// webView2CreateFailure says what a failed creation means in words the person
+// looking at an empty panel can act on.
+func webView2CreateFailure(attempt int) error {
+	v := platformWebView2Runtime()
+	if v == "" {
+		return errors.New("Windows could not create the Google Voice browser window: the Microsoft Edge WebView2 Runtime is not installed on this PC. Microsoft distributes it free as the Evergreen Standalone Installer; install it, then press Retry.")
+	}
+	if attempt < 2 {
+		return fmt.Errorf("Windows could not create the Google Voice browser window with the Edge WebView2 Runtime %s.", v)
+	}
+	return fmt.Errorf("Windows could not create the Google Voice browser window even though the Edge WebView2 Runtime %s is installed, and it did not work without FlipAi's browser switches or after waiting for a previous window to let go of the browser profile. Restarting Windows usually clears this; if it persists, repair the WebView2 Runtime from Installed apps.", v)
+}
+
+// destroyLeftoverGoogleVoiceFrame removes the empty frame a failed embedding
+// leaves behind, so it cannot be mistaken for a working Google Voice window.
+func destroyLeftoverGoogleVoiceFrame() {
+	if h := googleVoiceHWND(); h != 0 {
+		procVoiceDestroyWindow.Call(h)
+	}
+}
+
 func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	// A Win32 message pump only works on the thread that created the window.
 	// This currently runs inside init(), where the Go runtime happens to hold
@@ -423,26 +552,8 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		recordVoiceOpen(dataDir, "could not create the Google Voice browser profile folder", err)
 		return err
 	}
-	// Set on this process only, which exists to host this one window.
-	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", voiceBrowserArguments)
-	w := webview2.NewWithOptions(webview2.WebViewOptions{
-		Debug:     false,
-		AutoFocus: true,
-		DataPath:  voiceProfilePath(dataDir),
-		WindowOptions: webview2.WindowOptions{
-			Title:  googleVoiceWindowTitle,
-			Width:  1080,
-			Height: 760,
-			Center: true,
-		},
-	})
-	if w == nil {
-		// NewWithOptions returns nil when the WebView2 environment could not be
-		// created, which in practice means the runtime is missing or blocked.
-		err := errors.New("Windows could not create the Google Voice browser window. Install the Microsoft Edge WebView2 Runtime (Microsoft distributes it free as the Evergreen Standalone Installer), then try again.")
-		if v := platformWebView2Runtime(); v != "" {
-			err = fmt.Errorf("Windows could not create the Google Voice browser window even though the Edge WebView2 Runtime %s is installed. Restarting Windows usually clears this; if it persists, repair the WebView2 Runtime from Installed apps.", v)
-		}
+	w, err := createGoogleVoiceWebView(dataDir)
+	if err != nil {
 		recordVoiceOpen(dataDir, "WebView2 could not create the window", err)
 		return err
 	}

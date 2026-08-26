@@ -839,6 +839,24 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 		// one being looked at is indistinguishable from nothing happening.
 		writeJSON(w, map[string]any{"ok": true, "note": loadVoiceRuntime(dataDir).LastOpen})
 	}))
+	// /restart is the Retry on the empty panel. A window that failed to load
+	// leaves a process holding the single-instance mutex, so "try again" has to
+	// mean "take that one down first" rather than "ask the one that is stuck".
+	mux.HandleFunc("/restart", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		beginVoiceOpen(dataDir, "restarting the Google Voice window")
+		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+			s.BrowserRunning = false
+			s.Docked = false
+			s.LastError = ""
+		})
+		activity.Add("info", "voice", "Restarting the Google Voice window.", "", "", "")
+		platformRestartGoogleVoice(dataDir)
+		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
+	}))
 	mux.HandleFunc("/test-agent", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)

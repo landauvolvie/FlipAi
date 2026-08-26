@@ -46,7 +46,30 @@ await page.click('#vc-enabled');
 await page.waitForFunction(() => document.querySelector('#vcs-state')?.textContent?.includes('Off'), null, { timeout: 15000 });
 out.steps.push('switch-reverted');
 
-// 6. A change made and immediately navigated away from is still saved. The
+// 6. The panel says which state it is really in, and offers a way out of the
+//    ones a person can act on -- not the old single sentence telling the user
+//    to turn on a switch that was already on. Calling is off at this point.
+await page.waitForFunction(() => /Calling is off/.test(document.querySelector('#gv-embed-empty')?.textContent || ''), null, { timeout: 15000 });
+out.panelWhenOff = (await page.textContent('#gv-embed-empty')).trim();
+out.steps.push('panel-explains-off');
+
+//    Turn it back on: this machine has no WebView2, so that is the reason, and
+//    the panel has to name it and offer Retry.
+await page.click('#vc-enabled');
+await page.waitForFunction(() => document.querySelector('#vcs-state')?.textContent?.includes('On'), null, { timeout: 15000 });
+await page.waitForFunction(() => !/Calling is off/.test(document.querySelector('#gv-embed-empty')?.textContent || ''), null, { timeout: 15000 });
+out.panelWhileStarting = (await page.textContent('#gv-embed-empty')).trim();
+out.panelButtons = await page.$$eval('#gv-embed-empty button', (bs) => bs.map((b) => b.textContent.trim()));
+await page.click('#gv-embed-empty button');
+await page.waitForTimeout(800);
+out.panelAfterRetry = (await page.textContent('#gv-embed-empty')).trim();
+out.steps.push('panel-explains-and-retries');
+
+//    Leave it off for the save test below.
+await page.click('#vc-enabled');
+await page.waitForFunction(() => document.querySelector('#vcs-state')?.textContent?.includes('Off'), null, { timeout: 15000 });
+
+// 7. A change made and immediately navigated away from is still saved. The
 //    card promises that changes save as they are made, and a debounce that the
 //    page outlives by less than half a second would quietly break that promise.
 await page.evaluate(() => {

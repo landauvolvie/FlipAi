@@ -2,7 +2,10 @@
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestVoiceAppWindowSearchIgnoresBrowserTabs(t *testing.T) {
 	// A browser tab open on the agent's website carries the same words as the
@@ -67,5 +70,31 @@ func TestFlipAiWindowLookupIgnoresTheTrayHelperWindow(t *testing.T) {
 	}
 	if platformFlipAiWindowOpen() {
 		t.Fatal("reported a FlipAi window open with none open")
+	}
+}
+
+// A window that cannot be created has to say something a person can act on,
+// and the three attempts have to be distinguishable: the first failure is not
+// yet a reason to talk about repairing Windows.
+func TestWebView2FailureExplainsItself(t *testing.T) {
+	first := webView2CreateFailure(0).Error()
+	last := webView2CreateFailure(2).Error()
+	if first == last {
+		t.Fatal("the first attempt and the last say the same thing")
+	}
+	for _, msg := range []string{first, last} {
+		if !strings.Contains(msg, "Google Voice") {
+			t.Errorf("the failure does not say what failed: %q", msg)
+		}
+	}
+	if platformWebView2Runtime() == "" {
+		// The runtime is what is missing, so that is the whole answer.
+		if !strings.Contains(first, "WebView2 Runtime is not installed") {
+			t.Errorf("a missing runtime was not named: %q", first)
+		}
+		return
+	}
+	if !strings.Contains(last, "repair") {
+		t.Errorf("the last attempt offers no way forward: %q", last)
 	}
 }
