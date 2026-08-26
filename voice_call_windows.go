@@ -138,11 +138,6 @@ func googleVoiceHWND() uintptr {
 	return h
 }
 
-// voiceWindowStartup is how long the window is given to appear. WebView2's
-// first run in a fresh profile unpacks and initializes before anything is drawn,
-// which on a cold machine is far slower than the steady-state case.
-const voiceWindowStartup = 40 * time.Second
-
 // platformOpenGoogleVoice does not return until the window is actually on screen
 // or it can say why it is not.
 //
@@ -366,14 +361,9 @@ func superviseGoogleVoice(dataDir string) {
 			return
 		}
 		cfg := loadVoiceCallConfig(dataDir)
-		if cfg.Enabled && googleVoiceHWND() == 0 && time.Since(lastAttempt) > voiceWindowStartup {
+		if superviseVoiceShouldStart(cfg.Enabled, googleVoiceHWND() != 0, time.Since(lastAttempt)) {
 			lastAttempt = time.Now()
 			_ = platformOpenGoogleVoice(dataDir, false)
-		}
-		if !cfg.Enabled {
-			if h := googleVoiceHWND(); h != 0 {
-				procVoicePostMessage.Call(h, voiceWMClose, 0, 0)
-			}
 		}
 	}
 }

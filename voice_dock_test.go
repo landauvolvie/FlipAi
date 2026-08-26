@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -203,5 +204,51 @@ func TestSavingTheCardCannotTurnCallingOffBehindTheSwitch(t *testing.T) {
 	}
 	if loadVoiceCallConfig(dir).Enabled {
 		t.Error("the switch could not turn calling off")
+	}
+}
+
+// A window the user opened is not the supervisor's to close.
+//
+// The supervisor closed the Google Voice window on every tick where calling was
+// switched off. Opening it to sign in to Google -- which is what you have to do
+// before calling is any use -- therefore produced a window that vanished four
+// seconds later, with nothing said. That is "it opens a popup and it closes
+// right away", and it is a background loop doing it.
+func TestTheSupervisorNeverClosesAWindowSomebodyAskedFor(t *testing.T) {
+	// It starts one when calling is on and there is none.
+	if !superviseVoiceShouldStart(true, false, voiceWindowStartup+time.Second) {
+		t.Error("the supervisor did not start a missing window while calling was on")
+	}
+	// It does not stack a second one on top of a window that already exists.
+	if superviseVoiceShouldStart(true, true, voiceWindowStartup+time.Second) {
+		t.Error("the supervisor started a second window on top of one that exists")
+	}
+	// It does not start one every tick while the first is still coming up.
+	if superviseVoiceShouldStart(true, false, time.Second) {
+		t.Error("the supervisor started another window before the last had time to appear")
+	}
+	// And with calling off it does nothing at all -- neither starting a window
+	// nor, crucially, taking one away.
+	if superviseVoiceShouldStart(false, false, time.Hour) {
+		t.Error("the supervisor started a window while calling was off")
+	}
+
+	// The decision has no "close" in it. Turning calling off is what closes the
+	// window, at the moment it is turned off.
+	source, err := os.ReadFile("voice_call_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.ReplaceAll(string(source), "\r\n", "\n")
+	i := strings.Index(body, "func superviseGoogleVoice(")
+	if i < 0 {
+		t.Fatal("the supervisor is gone")
+	}
+	end := strings.Index(body[i:], "\n}\n")
+	if end < 0 {
+		t.Fatal("could not read the supervisor")
+	}
+	if strings.Contains(body[i:i+end], "voiceWMClose") {
+		t.Error("the supervisor still closes windows on a timer")
 	}
 }

@@ -570,6 +570,26 @@ func decideVoiceCall(vc VoiceCallConfig, cfg Config, caller, label string) voice
 	}
 }
 
+// voiceWindowStartup is how long the window is given to appear. WebView2's
+// first run in a fresh profile unpacks and initializes before anything is drawn,
+// which on a cold machine is far slower than the steady-state case.
+const voiceWindowStartup = 40 * time.Second
+
+// superviseVoiceShouldStart decides, on one tick, whether the supervisor should
+// start the Google Voice window.
+//
+// It is the whole decision, and it deliberately has no matching "should close".
+// The supervisor used to close the window on every tick where calling was
+// switched off -- which meant a window opened deliberately, to sign in to
+// Google before switching calling on, was shut four seconds later by a
+// background loop. From the user's side a window opened and closed by itself,
+// with nothing to explain it. Turning calling off already closes the window at
+// the moment it is turned off, which is the only moment that means anything;
+// the standing rule only ever destroyed windows somebody had asked for.
+func superviseVoiceShouldStart(enabled, hasWindow bool, sinceLastAttempt time.Duration) bool {
+	return enabled && !hasWindow && sinceLastAttempt > voiceWindowStartup
+}
+
 var voiceRuntimeMu sync.Mutex
 
 func loadVoiceRuntime(dataDir string) VoiceRuntimeState {
