@@ -412,15 +412,28 @@ func TestVoiceOpenAttemptsLeaveAnExplanation(t *testing.T) {
 		t.Fatalf("a stale record leaked into a new attempt: %q", got)
 	}
 
+	// Two processes write these notes: the one handling the click and the one
+	// that owns the window. A note from either must never erase the reason the
+	// other has just recorded -- that is how a window process which died on
+	// startup left "window opened" behind and nothing else, and the click
+	// reported success over a window that was already gone.
 	recordVoiceOpen(dir, "window opened", nil)
 	st := loadVoiceRuntime(dir)
 	if st.LastOpen != "window opened" {
 		t.Fatalf("successful open recorded as %q", st.LastOpen)
 	}
-	// Progress notes are shown to the user, but they are not reasons. Reporting
-	// one as the cause of a missing window would explain nothing.
-	if got := lastVoiceOpenFailure(dir, started); got != "" {
-		t.Fatalf("a progress note was reported as a failure: %q", got)
+	if got := lastVoiceOpenFailure(dir, started); !strings.Contains(got, "WebView2") {
+		t.Fatalf("a success note erased the reason the window process failed: %q", got)
+	}
+
+	// Only a new attempt clears it, because only then is the old reason spent.
+	next := time.Now()
+	beginVoiceOpen(dir, "starting the Google Voice window process")
+	if got := lastVoiceOpenFailure(dir, next); got != "" {
+		t.Fatalf("a new attempt inherited the previous failure: %q", got)
+	}
+	if st := loadVoiceRuntime(dir); st.LastOpen != "starting the Google Voice window process" {
+		t.Fatalf("a new attempt was not recorded: %+v", st)
 	}
 }
 

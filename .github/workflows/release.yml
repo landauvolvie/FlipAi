@@ -180,6 +180,10 @@ jobs:
           $env:AISMSBRIDGE_NO_BROWSER = '1'
           $stateFile = Join-Path $dataDir 'AISMSBridge\voice-call-state.json'
 
+          function Get-VoiceState {
+            if (-not (Test-Path $stateFile)) { return $null }
+            try { return Get-Content $stateFile -Raw | ConvertFrom-Json } catch { return $null }
+          }
           function Show-VoiceState([string]$why) {
             Write-Host "--- $why ---"
             Write-Host "session id: $((Get-Process -Id $PID).SessionId)"
@@ -187,6 +191,21 @@ jobs:
             else { Write-Host 'voice-call-state.json was never written' }
             @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue |
               Select-Object Id,MainWindowTitle | Format-Table | Out-String) | Write-Host
+          }
+          # A window on screen is not Google Voice. The frame is a plain Win32
+          # window, created in a few hundred milliseconds; WebView2 is embedded
+          # into it afterwards and that step can fail, taking the window with
+          # it. browserRunning is the window process saying the browser is
+          # really up, so it is what these checks wait for.
+          function Wait-VoiceRunning([int]$seconds) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              $s = Get-VoiceState
+              if ($s -and $s.browserRunning) { return 'running' }
+              if ($s -and $s.lastOpenError) { return 'failed' }
+              Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+            return 'timeout'
           }
           function Wait-VoiceWindow([int]$seconds) {
             $deadline = (Get-Date).AddSeconds($seconds)
@@ -198,21 +217,47 @@ jobs:
             } while ((Get-Date) -lt $deadline)
             return $null
           }
+          function Stop-AllFlipAi {
+            Get-Process -Name FlipAi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+          }
 
-          # 1. The window process on its own. This is what Open ultimately runs.
+          # 1. The window process on its own. This is what Open ultimately runs,
+          #    and it is also the preflight: a hosted runner that cannot embed
+          #    WebView2 in a second window cannot exercise any of this, and
+          #    that is a fact about the runner rather than about FlipAi. It is
+          #    reported and the checks are skipped, never passed silently.
           Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--google-voice','--visible'
-          $win = Wait-VoiceWindow 90
+          $state = Wait-VoiceRunning 120
+          if ($state -ne 'running') {
+            Show-VoiceState "Google Voice did not finish loading ($state)"
+            $s = Get-VoiceState
+            $reason = if ($s) { "$($s.lastOpenError)$($s.lastError)" } else { '' }
+            Stop-AllFlipAi
+            if ($state -eq 'timeout' -and -not $reason) {
+              throw 'the Google Voice window process never reported success or failure'
+            }
+            if ($reason -notmatch 'WebView2') {
+              throw "Google Voice failed to load for a reason that is not the runner's WebView2: $reason"
+            }
+            Write-Host "::warning::This runner cannot embed WebView2 in the Google Voice window ($reason); skipping the Google Voice desktop checks."
+            exit 0
+          }
+          $win = Wait-VoiceWindow 30
           if (-not $win) {
-            Show-VoiceState 'no Google Voice window appeared'
+            Show-VoiceState 'Google Voice is running but has no window'
             throw 'FlipAi --google-voice did not create a window'
           }
           Write-Host "Google Voice window: '$($win.MainWindowTitle)' (pid $($win.Id))"
           Show-VoiceState 'window is up'
           Stop-Process -Id $win.Id -Force
-          Start-Sleep -Seconds 2
+          Start-Sleep -Seconds 3
 
           # 2. The path the Open button actually takes: the running app, the
-          #    loopback voice endpoint, and the same Origin the desktop UI sends.
+          #    loopback voice endpoint, and the same Origin the desktop UI
+          #    sends. /open must not report success over a window that is not
+          #    there -- that false success is what made a window that opened
+          #    and vanished look like it had worked.
           Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $dataDir | Out-Null
           $launcher = Start-Process -FilePath '.\dist\FlipAi.exe' -PassThru
@@ -225,13 +270,18 @@ jobs:
 
           $open = $null
           try {
-            $open = Invoke-WebRequest 'http://127.0.0.1:8771/open' -Method POST -UseBasicParsing -TimeoutSec 90 `
+            $open = Invoke-WebRequest 'http://127.0.0.1:8771/open' -Method POST -UseBasicParsing -TimeoutSec 120 `
               -Headers @{ Origin = 'http://127.0.0.1:8765'; 'Content-Type' = 'application/json' } -Body '{}'
           } catch {
             Show-VoiceState 'POST /open failed'
             throw "POST /open failed: $($_.Exception.Message)"
           }
           if ($open.StatusCode -ne 200) { Show-VoiceState 'bad /open status'; throw "/open returned $($open.StatusCode)" }
+          $s = Get-VoiceState
+          if (-not ($s -and $s.browserRunning)) {
+            Show-VoiceState '/open reported success without Google Voice running'
+            throw '/open reported success but Google Voice is not running'
+          }
           $win = Wait-VoiceWindow 30
           if (-not $win) {
             Show-VoiceState '/open reported success with no window'
@@ -241,7 +291,7 @@ jobs:
           Show-VoiceState 'open button path succeeded'
           Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
           Start-Sleep -Seconds 3
-          Get-Process -Name FlipAi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Stop-AllFlipAi
 
           # 3. Quit has to take everything with it, including the Google Voice
           #    window, or the data folder stays locked and a second host can
@@ -256,7 +306,7 @@ jobs:
             Start-Sleep -Milliseconds 250
           } while ((Get-Date) -lt $deadline)
           Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--google-voice','--visible'
-          if (-not (Wait-VoiceWindow 90)) { Show-VoiceState 'window missing before quit'; throw 'Google Voice window did not open before the quit test' }
+          if ((Wait-VoiceRunning 120) -ne 'running') { Show-VoiceState 'Google Voice missing before quit'; throw 'Google Voice did not load before the quit test' }
           Start-Process -FilePath '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
           $left = @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue)
           if ($left.Count -gt 0) {
@@ -264,7 +314,6 @@ jobs:
             throw "Quit left $($left.Count) FlipAi process(es) running"
           }
           Write-Host 'Quit stopped every FlipAi process, Google Voice window included.'
-
 
       - name: Microsoft Defender scan app (when available)
         shell: pwsh

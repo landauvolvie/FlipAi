@@ -171,7 +171,7 @@ func platformOpenGoogleVoice(dataDir string, show bool) error {
 	if show {
 		args = append(args, "--visible")
 	}
-	recordVoiceOpen(dataDir, "starting the Google Voice window process", nil)
+	beginVoiceOpen(dataDir, "starting the Google Voice window process")
 	if err := spawnDetached(exe, args...); err != nil {
 		recordVoiceOpen(dataDir, "could not start the Google Voice window process", err)
 		return fmt.Errorf("could not start the Google Voice window process: %w", err)
@@ -193,7 +193,70 @@ func platformOpenGoogleVoice(dataDir string, show bool) error {
 		recordVoiceOpen(dataDir, "window never appeared", err)
 		return err
 	}
+	if err := confirmGoogleVoiceLoaded(dataDir, started); err != nil {
+		return err
+	}
 	return revealGoogleVoiceWindow(dataDir, h)
+}
+
+// confirmGoogleVoiceLoaded is the difference between a window and Google Voice.
+//
+// The frame is a plain Win32 window, created and shown in a few hundred
+// milliseconds; WebView2 is embedded into it afterwards, and that step can
+// fail. Anything watching only for the window therefore sees success almost
+// immediately -- and if the embed then fails, the window vanishes with the
+// process that owned it. That is precisely what "it opens a window, it closes
+// straight away, and then it says it is closed" was, with a success message on
+// top of it.
+//
+// So a window is not the answer on its own. This waits for the window process
+// to say Google Voice is actually running, for it to record why it could not,
+// or for it to be gone -- whichever happens first. A process that is simply
+// slow is not a failure: if it is still alive at the deadline, the window it
+// has already put on screen is taken at face value.
+func confirmGoogleVoiceLoaded(dataDir string, started time.Time) error {
+	deadline := started.Add(voiceWindowStartup)
+	for {
+		if reason := lastVoiceOpenFailure(dataDir, started); reason != "" {
+			return errors.New(reason)
+		}
+		if s := loadVoiceRuntime(dataDir); s.BrowserRunning {
+			return nil
+		}
+		if !googleVoiceProcessAlive() {
+			reason := lastVoiceOpenFailure(dataDir, started)
+			if reason == "" {
+				reason = "the Google Voice window process stopped before Google Voice finished loading."
+				if v := platformWebView2Runtime(); v == "" {
+					reason += " The Microsoft Edge WebView2 Runtime is not installed on this PC, and FlipAi cannot show Google Voice without it."
+				} else {
+					reason += " Windows could not embed the Edge WebView2 Runtime " + v + " in it. Restarting Windows usually clears this; if it persists, repair the WebView2 Runtime from Installed apps."
+				}
+			}
+			err := errors.New(reason)
+			recordVoiceOpen(dataDir, "window process stopped", err)
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			// Alive, with a window on screen, just slow. Nothing to report.
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// googleVoiceProcessAlive reports whether a window process still holds the
+// single-instance mutex. It is the one liveness answer available to a process
+// that did not create the child and so holds no handle to it.
+func googleVoiceProcessAlive() bool {
+	release, acquired := acquireGoogleVoiceInstance()
+	if acquired {
+		// Nobody held it, which means nobody is running. Let go again at once so
+		// the next window process is not locked out by this check.
+		release()
+		return false
+	}
+	return true
 }
 
 // revealGoogleVoiceWindow un-minimizes the window and puts it in front. Windows
