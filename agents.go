@@ -201,6 +201,7 @@ func normalizeAgentPhones(list []AgentPhone, claimedElsewhere map[string]string)
 // checked with both lists in hand.
 func normalizeAgents(cfg *Config) error {
 	claimed := map[string]string{}
+	claimedNames := map[string]string{}
 	for _, agent := range []string{"C", "A"} {
 		settings := agentSettings(*cfg, agent)
 		cleaned, err := normalizeAgentPhones(settings.Phones, claimed)
@@ -213,6 +214,19 @@ func normalizeAgents(cfg *Config) error {
 		names, err := normalizeAllowedCallerLabels(settings.CallerNames, true)
 		if err != nil {
 			return fmt.Errorf("%s caller names: %w", agentDisplayName(agent), err)
+		}
+		// A caller belongs to one agent, exactly as a number does. Allowing the
+		// same name on both agents would mean a caller reached whichever agent
+		// happened to be the default -- a permission granted on one agent
+		// silently deciding for the other, which is the one thing these lists
+		// exist to prevent.
+		for _, name := range names {
+			key := strings.ToLower(name)
+			if other, taken := claimedNames[key]; taken {
+				return fmt.Errorf("%s caller names: %q is already an allowed caller on %s; a caller can reach one agent only",
+					agentDisplayName(agent), name, agentDisplayName(other))
+			}
+			claimedNames[key] = agent
 		}
 		settings.Phones = cleaned
 		settings.CallerNames = strings.Join(names, "\n")
@@ -374,6 +388,7 @@ func verifyAgentCode(s AgentSettings, code string) bool {
 // refusing to load, and the first agent to claim a number keeps it.
 func salvageAgents(cfg *Config) {
 	claimed := map[string]bool{}
+	claimedNames := map[string]bool{}
 	for _, agent := range []string{"C", "A"} {
 		s := agentSettings(*cfg, agent)
 		kept := make([]AgentPhone, 0, len(s.Phones))
@@ -390,7 +405,20 @@ func salvageAgents(cfg *Config) {
 		sort.Slice(kept, func(i, j int) bool { return kept[i].Number < kept[j].Number })
 		s.Phones = kept
 		names, _ := normalizeAllowedCallerLabels(s.CallerNames, false)
-		s.CallerNames = strings.Join(names, "\n")
+		// A caller name claimed by an earlier agent is dropped here, exactly as
+		// a number is. Keeping it would leave a caller allowed on two agents,
+		// and a caller allowed on two agents is decided by a default rather
+		// than by anything the user granted.
+		keptNames := names[:0]
+		for _, name := range names {
+			key := strings.ToLower(name)
+			if claimedNames[key] {
+				continue
+			}
+			claimedNames[key] = true
+			keptNames = append(keptNames, name)
+		}
+		s.CallerNames = strings.Join(keptNames, "\n")
 		if s.CodeHash == "" {
 			s.RequireCode = false
 		}

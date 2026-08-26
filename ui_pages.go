@@ -313,22 +313,6 @@ const connectionsHTML = `{{define "content"}}
   </div>
 </section>
 
-<section class="card">
-  <div class="card-head divided">
-    <div class="card-title-row">
-      <span class="mark shield">{{icon "send"}}</span>
-      <div><h2>End-to-end check</h2><p>Walks the whole path — read the mailbox, route the text, answer the Voice thread — and reports where it stops.</p></div>
-    </div>
-    <div class="head-actions"><button class="btn accent" type="button" data-test="/connections/flowtest" data-test-method="POST" data-test-busy="Running the check">{{icon "send"}}Test message flow</button></div>
-  </div>
-  <div class="card-body">
-    <div class="rows">
-      <div class="row"><div class="label">Mailbox<span>FlipAi reads Google Voice notifications from this account.</span></div><div class="value"><b class="{{tone .S.GmailReady}}">{{if .S.GmailReady}}Reachable{{else}}Not connected{{end}}</b></div></div>
-      <div class="row"><div class="label">Senders<span>Who may reach an agent is configured on the Phone page.</span></div><div class="value"><b>{{if .S.AllowedCount}}{{.S.AllowedCount}} allowed{{else}}None yet{{end}}</b><a class="linky" href="/phone">Open Phone{{icon "chevron"}}</a></div></div>
-      <div class="row"><div class="label">Agents<span>Which agent answers is configured on the Agents page.</span></div><div class="value"><b>{{.S.DefaultAgentName}} by default</b><a class="linky" href="/agents">Open Agents{{icon "chevron"}}</a></div></div>
-    </div>
-  </div>
-</section>
 {{end}}`
 
 func (a *App) connectionsPage(w http.ResponseWriter, r *http.Request) {

@@ -14,3 +14,7 @@ func platformTestAgentVoice(cfg VoiceCallConfig, agent string) error {
 func platformWebView2Runtime() string { return "" }
 
 func platformVoiceStillOpen() bool { return false }
+
+// platformEnsureGoogleVoice starts the Google Voice window if it is not
+// already running. There is no such window off Windows.
+func platformEnsureGoogleVoice(dataDir string) {}

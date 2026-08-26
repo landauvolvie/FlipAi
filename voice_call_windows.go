@@ -42,8 +42,10 @@ var (
 
 const (
 	voiceSWMinimize = 6
-	voiceSWRestore  = 9
-	voiceWMClose    = 0x0010
+	// SW_SHOWMINNOACTIVE: minimized, no animation, no focus change.
+	voiceSWShowMinNoActive = 7
+	voiceSWRestore         = 9
+	voiceWMClose           = 0x0010
 )
 
 // Voice mode has a dedicated process because Google Voice must stay alive even
@@ -205,6 +207,17 @@ func revealGoogleVoiceWindow(dataDir string, hwnd uintptr) error {
 	}
 	recordVoiceOpen(dataDir, "window opened behind other windows", nil)
 	return nil
+}
+
+// platformEnsureGoogleVoice makes sure the window process is running, without
+// putting anything on screen. It is what the Connections page calls when it
+// wants the embedded panel: the window appears docked inside the app, so there
+// is nothing to press and no popup to dismiss.
+func platformEnsureGoogleVoice(dataDir string) {
+	if googleVoiceHWND() != 0 {
+		return
+	}
+	go func() { _ = platformOpenGoogleVoice(dataDir, false) }()
 }
 
 func platformVoiceConfigChanged(dataDir string, cfg VoiceCallConfig) {
@@ -417,18 +430,31 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	// it and the installer from replacing FlipAi.exe.
 	watchDone := make(chan struct{})
 	defer close(watchDone)
+	dock := newVoiceDockController(uintptr(w.Window()), visible)
 	go func() {
-		t := time.NewTicker(400 * time.Millisecond)
+		// Fast enough that dragging the FlipAi window does not leave the panel
+		// trailing behind it, cheap enough to run for as long as FlipAi does:
+		// each tick is a file read and, when nothing has moved, no window call
+		// at all.
+		t := time.NewTicker(120 * time.Millisecond)
 		defer t.Stop()
+		quitCheck := 0
 		for {
 			select {
 			case <-watchDone:
 				return
 			case <-t.C:
-				if quitRequested(dataDir) {
-					procVoicePostMessage.Call(uintptr(w.Window()), voiceWMClose, 0, 0)
-					return
+				quitCheck++
+				if quitCheck >= 4 {
+					quitCheck = 0
+					if quitRequested(dataDir) {
+						procVoicePostMessage.Call(uintptr(w.Window()), voiceWMClose, 0, 0)
+						return
+					}
 				}
+				req := loadVoiceDock(dataDir)
+				docked := dock.Apply(req, time.Now(), voiceDockOwner())
+				mutateVoiceDockState(dataDir, docked)
 			}
 		}
 	}()
@@ -441,7 +467,12 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		bringToFront(uintptr(w.Window()))
 		recordVoiceOpen(dataDir, "window opened", nil)
 	} else {
-		procVoiceShowWindow.Call(uintptr(w.Window()), voiceSWMinimize)
+		// The binding shows the window while it is being created, so a
+		// background start would otherwise flash a Google Voice window on
+		// screen at every Windows sign-in. SW_SHOWMINNOACTIVE puts it away
+		// without an animation and without taking focus from whatever the
+		// user is doing.
+		procVoiceShowWindow.Call(uintptr(w.Window()), voiceSWShowMinNoActive)
 	}
 	w.Run()
 	return nil
