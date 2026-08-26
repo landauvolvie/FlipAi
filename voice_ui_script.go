@@ -15,8 +15,9 @@ package main
 // The feature lives on two pages, each doing one job:
 //
 //	Settings     -- the whole setup: the switch that turns calling on, the
-//	                Google and ChatGPT sign-ins, and every status and
-//	                permission check, each with what to do about it.
+//	                Google sign-in and sign-out, the desktop apps a call is
+//	                put through to, and every status and permission check,
+//	                each with what to do about it.
 //	Connections  -- the live view: the real Google Voice browser, standing
 //	                inside the page. Leaving the page only takes the panel
 //	                away; Google Voice keeps running and answering in the
@@ -85,9 +86,11 @@ const voiceDesktopInitScript = `
   const post=(path,body)=>voiceFetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
   async function refresh(){ snapshot=await voiceFetch('/status'); return snapshot; }
 
-  function agentState(){
-    // Staleness is applied by the Go side; what arrives is current truth.
-    return (snapshot?.runtime?.codexVoice)||{};
+  function cablesPill(){
+    const audio=snapshot?.audio||{};
+    if(audio.warning&&!(audio.cables||[]).length) return pill('Not found','warn');
+    if(audio.warning) return pill('One of two','warn');
+    return pill((audio.cables||[]).join(' + ')||'Wired','ok');
   }
 
   /* ---------- the embedded Google Voice panel (Connections) ----------
@@ -191,11 +194,15 @@ const voiceDesktopInitScript = `
   let savePending=false;
   function collectConfig(){
     // Start from what the server has, and only overwrite what this card
-    // actually edits. Fields the card does not carry -- the Codex desktop
-    // fallback among them -- must survive a save untouched.
+    // actually edits. Fields the card does not carry -- the hand-edit-only
+    // audio overrides among them -- must survive a save untouched.
     const next=JSON.parse(JSON.stringify(snapshot.config));
-    next.autoAnswer=checked('vc-auto');
     next.defaultAgent=value('vc-default');
+    next.codex=Object.assign({},next.codex,{
+      appTitle:value('vcc-title'),
+      voiceShortcut:value('vcc-shortcut'),
+      appCommand:value('vcc-command')
+    });
     next.claude=Object.assign({},next.claude,{
       appTitle:value('vca-title'),
       voiceShortcut:value('vca-shortcut'),
@@ -343,13 +350,14 @@ const voiceDesktopInitScript = `
   // control the user is in the middle of using is never rebuilt underneath
   // them. It tolerates either card: rows that are not on this page are skipped.
   function updateStatusRows(){
-    const rt=snapshot.runtime||{},cfg=snapshot.config||{},agent=agentState();
+    const rt=snapshot.runtime||{},cfg=snapshot.config||{};
     const set=(id,node)=>{ const el=q('#'+id); if(!el)return; el.textContent=''; el.append(node); };
     set('vcs-state',cfg.enabled?pill('On — answering calls','ok'):pill('Off','warn'));
     set('vcs-window',runtimePill(rt));
     set('vcs-google',rt.browserRunning?(rt.signedIn?pill('Signed in','ok'):pill('Not signed in','warn')):pill('Window not running','warn'));
-    set('vcs-codex',agent.running?(agent.signedIn?pill(agent.voiceActive?'In voice mode':'Ready','ok'):pill('Sign in to ChatGPT','warn')):pill('Not running','warn'));
-    set('vcs-audio',snapshot.audioWarning?pill('Needs attention','warn'):pill('Ready — fully virtual','ok'));
+    set('vcs-cables',cablesPill());
+    set('vcs-audio',snapshot.audioWarning?pill('Needs attention','warn'):pill('Ready — silent and virtual','ok'));
+    set('vcs-routing',/Applied automatically|is wired to the cables/.test(rt.routingNote||'')?pill('Applied','ok'):pill(rt.routingNote?'Waiting':'Not applied yet','warn'));
     set('vcs-agents',(snapshot.callAgents||[]).length?pill((snapshot.callAgents||[]).join(' and '),'ok'):pill('Nobody yet','warn'));
     set('vcs-call',rt.inCall?pill(rt.caller?('Connected — '+rt.caller):'Connected','ok'):pill('Idle'));
     set('vcs-ring',rt.lastRingAt&&!/^0001/.test(rt.lastRingAt)?pill(new Date(rt.lastRingAt).toLocaleString(),'ok'):pill('Never','warn'));
@@ -362,12 +370,12 @@ const voiceDesktopInitScript = `
   }
 
   function problemNodes(){
-    const out=[],rt=snapshot.runtime||{},cfg=snapshot.config||{},agent=agentState();
+    const out=[],rt=snapshot.runtime||{},cfg=snapshot.config||{};
     if(!(snapshot.callAgents||[]).length){
       out.push(callout('No agent can take a call yet. ','Open the Agents page, add your phone number under the agent you want to talk to, and set that number to "Texts and calls" or "Calls only". A number allowed under one agent can never reach the other one.'));
     }
     if(snapshot.audioWarning) out.push(callout('Audio path: ',snapshot.audioWarning));
-    if(agent.running&&agent.lastError) out.push(callout('Codex voice: ',agent.lastError));
+    if(rt.routingNote&&!/Applied automatically|is wired to the cables/.test(rt.routingNote)) out.push(callout('Desktop app audio: ',rt.routingNote));
     if(cfg.enabled&&rt.browserRunning&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))){
       out.push(callout('No call has ever rung here. ','Google Voice only rings in a browser when you have switched that on in Google Voice itself: open the live view on Connections, then in Google Voice open Settings, then Calls, and turn on receiving calls on this device. Until then an incoming call goes to your forwarding phones and never reaches FlipAi.'));
     }
@@ -391,16 +399,18 @@ const voiceDesktopInitScript = `
 
   function settingsCard(){
     const cfg=snapshot.config,card=E('section','card'); card.id='voice-call-card';
-    const [head,actions]=sectionHead('Google Voice calling','FlipAi answers calls to your Google Voice number and puts the caller through to Codex voice. All setup lives here; the live Google Voice view is on Connections.');
+    const [head,actions]=sectionHead('Google Voice calling','FlipAi answers calls to your Google Voice number and puts the caller through to the ChatGPT/Codex desktop app\u2019s voice mode \u2014 the same agent that can work on this PC. All setup lives here; the live Google Voice view is on Connections.');
     head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand'));
     const saved=E('span','hint','Changes save as you make them'); saved.id='vc-saved';
     actions.append(saved); card.append(head);
 
     const body=E('div','card-body');
 
-    // 1. The one switch that matters.
+    // 1. The one switch that matters. There is deliberately no separate
+    //    auto-answer option: enabled means an authorized caller is answered,
+    //    and an unauthorized one never is.
     const sw=toggle('vc-enabled','Answer phone calls with an agent',
-      'FlipAi opens Google Voice at Windows sign-in, keeps it running while the PC is locked, and reopens it if it is ever closed. You never have to open it yourself. Texts and Gmail routing are unchanged.',cfg.enabled);
+      'FlipAi opens Google Voice at Windows sign-in, keeps it running while the PC is locked, and reopens it if it is ever closed. When an allowed number calls, FlipAi clicks Answer itself and starts the desktop app\u2019s voice mode; anyone else keeps ringing. Texts and Gmail routing are unchanged.',cfg.enabled);
     body.append(sw);
     q('input',sw).addEventListener('change',async(e)=>{
       const want=e.target.checked;
@@ -410,21 +420,18 @@ const voiceDesktopInitScript = `
       finally{ e.target.disabled=false; }
     });
 
-    // 2. Setup: the two sign-ins are the whole of it.
+    // 2. Set up: one sign-in, one Google Voice setting, one driver install.
     body.append(E('div','section-label','Set up'));
-    body.append(E('p','hint','Two sign-ins and one Google Voice setting, once each. The audio path needs nothing: FlipAi bridges the call to Codex voice entirely inside its own two browser windows — no cables, no device pickers, nothing played through your speakers, and it keeps working while the PC is locked.'));
+    body.append(E('p','hint','Sign in to Google once, turn on receiving calls in Google Voice itself once, and have two virtual audio cables installed once (VB-CABLE A+B, or VoiceMeeter which includes two). FlipAi wires everything from there: Google Voice\u2019s microphone and speaker, and the desktop app\u2019s own audio, are all pointed at the cables automatically \u2014 nothing to select anywhere, nothing audible on your speakers, no real microphone in the path.'));
     const signin=btn('Sign in to Google Voice','btn'); signin.id='vc-signin';
-    actionButton(signin,async()=>{ stopDockReporting(); await post('/open'); toast('The Google Voice window is open. Sign in to the Google account that owns your Voice number, then in Google Voice open Settings → Calls and turn on receiving calls on this device.'); },'Opening...');
+    actionButton(signin,async()=>{ stopDockReporting(); await post('/open'); toast('The Google Voice window is open. Sign in to the Google account that owns your Voice number, then in Google Voice open Settings \u2192 Calls and turn on receiving calls on this device.'); },'Opening...');
     const signout=btn('Sign out','btn'); signout.id='vc-signout';
     actionButton(signout,async()=>{
       if(!confirm('Sign out of Google Voice? FlipAi forgets the saved browser session; calls stop being answered until you sign in again.')) return;
       snapshot=await post('/signout'); updateStatusRows();
       toast('Signed out. The Google Voice window restarts signed out; use Sign in when you are ready.');
     },'Signing out...');
-    const codexSignin=btn('Sign in to ChatGPT','btn'); codexSignin.id='vc-codex-signin';
-    actionButton(codexSignin,async()=>{ await post('/codex-open'); toast('The Codex voice window is open. Sign in with the ChatGPT account the caller should talk to, then just close or minimize it — FlipAi keeps it running.'); },'Opening...');
     body.append(row('Google Voice account','The Google account whose Voice number FlipAi answers.',(()=>{const w=E('div');w.append(signin,document.createTextNode(' '),signout);return w;})()));
-    body.append(row('ChatGPT account','The caller talks to this account’s ChatGPT voice mode, in a window FlipAi keeps in the background.',codexSignin));
 
     // 3. Status and permission checks, live.
     body.append(E('div','section-label','Status'));
@@ -433,38 +440,35 @@ const voiceDesktopInitScript = `
     rows.append(row('Calling','Whether FlipAi answers the phone at all.',cell('vcs-state')));
     rows.append(row('Google Voice window','Kept running in the background by FlipAi.',cell('vcs-window')));
     rows.append(row('Google account','Signed-in state of the Google Voice window.',cell('vcs-google')));
-    rows.append(row('Codex voice','The built-in ChatGPT voice window that takes the call.',cell('vcs-codex')));
-    rows.append(row('Audio path','Virtual, automatic, and silent on this PC’s speakers.',cell('vcs-audio')));
+    rows.append(row('Virtual audio cables','Found automatically; each direction of the call uses its own cable.',cell('vcs-cables')));
+    rows.append(row('Audio path','Silent on this PC\u2019s speakers; no real microphone involved.',cell('vcs-audio')));
+    rows.append(row('Desktop app audio','The app\u2019s own microphone and speaker, pointed at the cables per-app by FlipAi.',cell('vcs-routing')));
     rows.append(row('Agents on calls','Set by giving an agent a number that may call, on the Agents page.',cell('vcs-agents')));
     rows.append(row('Current call','',cell('vcs-call')));
     rows.append(row('Ring seen','Whether a call has ever reached the Google Voice window.',cell('vcs-ring')));
-    rows.append(row('Edge WebView2 runtime','Windows component FlipAi needs to show Google Voice and Codex voice.',cell('vcs-webview2')));
-    rows.append(row('Browser permissions','Microphone, autoplay, notifications and pop-ups inside FlipAi’s call windows are granted by FlipAi itself; no Windows prompt ever needs answering, and no real microphone or speaker is used.',cell('vcs-permissions')));
+    rows.append(row('Edge WebView2 runtime','Windows component FlipAi needs to show Google Voice.',cell('vcs-webview2')));
+    rows.append(row('Browser permissions','Microphone, notifications, autoplay and pop-ups inside FlipAi\u2019s Google Voice window are granted by FlipAi itself; no Windows prompt ever needs answering.',cell('vcs-permissions')));
     body.append(rows);
 
     // 4. Everything that is currently wrong, in one place, kept live.
     const problems=E('div'); problems.id='vc-problems'; body.append(problems);
 
-    // 5. Call handling.
-    body.append(E('div','section-label','Call handling'));
-    const auto=toggle('vc-auto','Auto-answer authorized callers','A number that is not allowed under an agent is never answered, and an unreadable caller ID is never answered.',cfg.autoAnswer);
-    autosave(q('input',auto)); body.append(auto);
-    body.append(field('Default voice agent',autosave(select('vc-default',[['C','Codex voice (built in)'],['A','Claude Desktop']],cfg.defaultAgent)),
+    // 5. The desktop apps a call is put through to.
+    body.append(E('div','section-label','Desktop apps'));
+    body.append(field('Default voice agent',autosave(select('vc-default',[['C','ChatGPT / Codex desktop app'],['A','Claude Desktop']],cfg.defaultAgent)),
       'Only used if a caller is somehow allowed under both agents. A phone number belongs to exactly one agent, so normally the number itself decides.'));
-
-    // 6. The Claude fallback drives an external desktop app; it stays for the
-    //    people already using it, in one small optional section.
-    body.append(E('div','section-label','Claude Desktop (optional fallback)'));
-    body.append(E('p','hint','Calls routed to Claude are handled by the Claude desktop app on this PC rather than the built-in bridge, using that app’s own audio devices. Codex calls need none of this.'));
-    const own=cfg.claude||{};
-    const g=E('div','grid-2');
-    g.append(field('Desktop window title contains',autosave(input('vca-title',own.appTitle,'Claude')),'FlipAi uses it to bring the right app forward when a call connects.'));
-    g.append(field('Voice shortcut',autosave(input('vca-shortcut',own.voiceShortcut,'Ctrl+Shift+V')),'The Voice shortcut set inside that desktop app. If blank, FlipAi tries its accessible Voice button.'));
-    body.append(g);
-    body.append(field('Launch command (optional)',autosave(input('vca-command',own.appCommand,'Path or app command')),'Used only if the desktop window is not already open.'));
-    const test=btn('Start Claude voice test');
-    actionButton(test,async()=>{ await post('/test-agent?agent=A'); toast('Claude voice start requested.'); },'Testing...');
-    body.append(test);
+    for(const agent of ['C','A']){
+      const isClaude=agent==='A', own=(isClaude?cfg.claude:cfg.codex)||{}, p=isClaude?'vca':'vcc';
+      body.append(E('p','hint',(isClaude?'Claude Desktop':'ChatGPT / Codex desktop app')+' \u2014 the caller talks to this app\u2019s voice mode.'));
+      const g=E('div','grid-2');
+      g.append(field('Desktop window title contains',autosave(input(p+'-title',own.appTitle,isClaude?'Claude':'ChatGPT')),'FlipAi uses it to find the app when a call connects.'));
+      g.append(field('Voice shortcut (optional)',autosave(input(p+'-shortcut',own.voiceShortcut,'Ctrl+Shift+V')),'The Voice shortcut set inside that app. If blank, FlipAi clicks its accessible Voice button instead.'));
+      body.append(g);
+      body.append(field('Launch command (optional)',autosave(input(p+'-command',own.appCommand,'Path or app command')),'Used only if the desktop window is not already open.'));
+      const test=btn('Start '+(isClaude?'Claude':'ChatGPT')+' voice test');
+      actionButton(test,async()=>{ await post('/test-agent?agent='+agent); toast((isClaude?'Claude':'ChatGPT')+' voice start requested \u2014 the app\u2019s voice mode should be listening now.'); },'Testing...');
+      body.append(test);
+    }
 
     body.append(E('p','hint','Who may call, and whether a number may call at all, is set with the agent it reaches on the Agents page. Each agent has its own list; a number allowed under one agent cannot reach the other.'));
     card.append(body);

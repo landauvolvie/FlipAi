@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,9 +19,6 @@ func TestVoiceCallDefaultsAreOffAndRestrictedToGoogleVoice(t *testing.T) {
 	}
 	if cfg.GoogleVoiceURL != googleVoiceWebURL {
 		t.Fatalf("Google Voice URL = %q", cfg.GoogleVoiceURL)
-	}
-	if !cfg.AutoAnswer {
-		t.Fatal("once enabled, authorized calls should auto-answer by default")
 	}
 }
 
@@ -181,140 +177,25 @@ func TestVoiceBlockedCallExplainsItself(t *testing.T) {
 	}
 }
 
-// The audio path needs no configuration, but its health still has to be
-// reported honestly: the warning names whichever piece of the built-in bridge
-// is missing, and says nothing when a call would carry sound.
-func TestVoiceBridgeWarningNamesTheMissingPiece(t *testing.T) {
-	now := time.Now()
-	healthy := VoiceRuntimeState{
-		BrowserRunning: true,
-		BridgeState:    "connected",
-		CodexVoice:     VoiceAgentRuntime{Running: true, SignedIn: true, ReportedAt: now},
-	}
-	if w := voiceBridgeWarning(healthy, now); w != "" {
-		t.Errorf("a healthy bridge warned: %s", w)
-	}
-
-	// Google Voice itself not running is reported elsewhere; the audio warning
-	// stays quiet rather than piling on.
-	idle := VoiceRuntimeState{}
-	if w := voiceBridgeWarning(idle, now); w != "" {
-		t.Errorf("with nothing running the audio path warned: %s", w)
-	}
-
-	noAgent := healthy
-	noAgent.CodexVoice = VoiceAgentRuntime{}
-	if w := voiceBridgeWarning(noAgent, now); !strings.Contains(w, "not running") {
-		t.Errorf("a missing Codex window must be named, got %q", w)
-	}
-
-	// A Codex page that stopped reporting is gone, whatever it last said.
-	stale := healthy
-	stale.CodexVoice.ReportedAt = now.Add(-time.Minute)
-	if w := voiceBridgeWarning(stale, now); !strings.Contains(w, "not running") {
-		t.Errorf("a stale Codex report must read as not running, got %q", w)
-	}
-
-	signedOut := healthy
-	signedOut.CodexVoice.SignedIn = false
-	if w := voiceBridgeWarning(signedOut, now); !strings.Contains(w, "ChatGPT") {
-		t.Errorf("a signed-out Codex window must be named, got %q", w)
-	}
-
-	noLink := healthy
-	noLink.BridgeState = "connecting"
-	if w := voiceBridgeWarning(noLink, now); !strings.Contains(w, "not connected") {
-		t.Errorf("an unconnected audio link must be named, got %q", w)
-	}
-
-	// And the snapshot the desktop UI reads carries the same sentence.
+// There is no separate auto-answer switch: an authorized caller is answered
+// because calling is enabled, full stop. A legacy autoAnswer=false left in an
+// old voice-call.json changes nothing.
+func TestAuthorizedCallersAreAlwaysAnswered(t *testing.T) {
 	dir := t.TempDir()
-	vc := defaultVoiceCallConfig()
-	vc.Enabled = true
+	main := voiceTestConfig(t)
+	vc := enabledVoiceConfig()
+	vc.AutoAnswer = false // the retired switch, off, as an old config might have it
 	if err := saveVoiceCallConfig(dir, vc); err != nil {
 		t.Fatal(err)
 	}
-	mutateVoiceRuntime(dir, func(s *VoiceRuntimeState) { *s = noAgent })
-	snap := voiceSnapshot(dir, func() Config { return defaultConfig(dir) })
-	if !strings.Contains(snap.AudioWarning, "not running") {
-		t.Errorf("the snapshot did not carry the audio warning: %q", snap.AudioWarning)
+	b := newVoiceBridge(dir, func() Config { return main },
+		func(VoiceCallConfig, string) error { return nil },
+		func(VoiceCallConfig, string) error { return nil })
+	if !b.Incoming("8455551000", "") {
+		t.Fatal("an authorized caller was not answered; the retired auto-answer switch is still being honored")
 	}
-}
-
-// The relay between the two pages is a dumb, bounded pair of queues; what
-// matters is that each side only ever sees the other side's messages, in
-// order, and that garbage never enters the queue.
-func TestVoiceAgentLinkFerriesMessagesBetweenThePages(t *testing.T) {
-	link := newVoiceAgentLink()
-	link.CallSend(`{"type":"offer","sdp":"x"}`)
-	link.CallSend(`{"type":"ice","candidate":{}}`)
-	link.AgentSend(`{"type":"answer","sdp":"y"}`)
-
-	if got := link.AgentRecv(); got != `{"type":"offer","sdp":"x"}` {
-		t.Fatalf("agent received %q", got)
-	}
-	if got := link.CallRecv(); got != `{"type":"answer","sdp":"y"}` {
-		t.Fatalf("call side received %q", got)
-	}
-	if got := link.AgentRecv(); got != `{"type":"ice","candidate":{}}` {
-		t.Fatalf("agent received %q out of order", got)
-	}
-	if got := link.AgentRecv(); got != "" {
-		t.Fatalf("an empty queue returned %q", got)
-	}
-
-	// Not JSON, empty, or oversized: never queued.
-	link.CallSend("")
-	link.CallSend("not json")
-	link.CallSend(`{"pad":"` + strings.Repeat("x", voiceLinkMaxMessageSize) + `"}`)
-	if got := link.AgentRecv(); got != "" {
-		t.Fatalf("garbage entered the relay: %q", got)
-	}
-
-	// A page in a loop cannot grow the queue without bound; the oldest
-	// messages fall off first, because the newest carry the live handshake.
-	for i := 0; i < voiceLinkMaxMessages+10; i++ {
-		link.CallSend(`{"n":` + strconv.Itoa(i) + `}`)
-	}
-	n := 0
-	for link.AgentRecv() != "" {
-		n++
-	}
-	if n != voiceLinkMaxMessages {
-		t.Fatalf("queue held %d messages, want the cap %d", n, voiceLinkMaxMessages)
-	}
-}
-
-// StartVoice always queues the command -- a mid-reload page still gets it --
-// but it must say what will keep the caller waiting in silence.
-func TestStartVoiceExplainsAnUnreadyCodexWindow(t *testing.T) {
-	link := newVoiceAgentLink()
-	now := time.Now()
-
-	if err := link.StartVoice(VoiceAgentRuntime{Running: true, SignedIn: true, ReportedAt: now}.Current(now)); err != nil {
-		t.Fatalf("a ready Codex window was refused: %v", err)
-	}
-	if got := link.AgentRecv(); got != `{"type":"voice-start"}` {
-		t.Fatalf("voice-start was not queued: %q", got)
-	}
-
-	err := link.StartVoice(VoiceAgentRuntime{}.Current(now))
-	if err == nil || !strings.Contains(err.Error(), "not running") {
-		t.Fatalf("a missing Codex window was not explained: %v", err)
-	}
-	if got := link.AgentRecv(); got != `{"type":"voice-start"}` {
-		t.Fatalf("voice-start must be queued even when the window looks unready: %q", got)
-	}
-
-	err = link.StartVoice(VoiceAgentRuntime{Running: true, SignedIn: false, ReportedAt: now}.Current(now))
-	if err == nil || !strings.Contains(err.Error(), "ChatGPT") {
-		t.Fatalf("a signed-out Codex window was not explained: %v", err)
-	}
-
-	link.StopVoice()
-	_ = link.AgentRecv() // drain the queued start
-	if got := link.AgentRecv(); got != `{"type":"voice-stop"}` {
-		t.Fatalf("voice-stop was not queued: %q", got)
+	if b.Incoming("8455559999", "") {
+		t.Fatal("an unauthorized caller was answered")
 	}
 }
 
@@ -351,7 +232,8 @@ func TestGoogleVoiceScriptSurvivesDocumentCreatedTiming(t *testing.T) {
 	if strings.Contains(googleVoiceInitScript, ".observe(document.documentElement,") {
 		t.Fatal("the mutation observer must not assume a document root exists")
 	}
-	if !strings.Contains(googleVoiceInitScript, "const observeDocument = ") {
+	if !strings.Contains(googleVoiceInitScript, "function observeDoc(doc)") ||
+		!strings.Contains(googleVoiceInitScript, "if (!root) return false;") {
 		t.Fatal("the mutation observer must wait for a document root")
 	}
 }
@@ -556,9 +438,8 @@ func TestAnsweredCallSaysWhenItHasNoAudioPath(t *testing.T) {
 		func(VoiceCallConfig, string) error { return nil },
 		func(VoiceCallConfig, string) error { return nil })
 
-	// Google Voice is up, but the Codex voice window has never reported: the
-	// call still connects, and the state says who is missing from the line.
-	b.Page("https://voice.google.com/", true, "")
+	// No cables have been found on this machine yet: the call still connects,
+	// and the state says exactly why it would be silent.
 	if !b.Answered("8455551000", "") {
 		t.Fatal("an allowed caller was not bridged")
 	}
@@ -566,17 +447,20 @@ func TestAnsweredCallSaysWhenItHasNoAudioPath(t *testing.T) {
 	if st.LastEvent != "call-bridged" {
 		t.Fatalf("call was not bridged: %+v", st)
 	}
-	if !strings.Contains(st.LastError, "Codex voice window is not running") {
-		t.Errorf("a silent call must say so, got %q", st.LastError)
+	if st.LastError == "" {
+		t.Error("a silent call must say what is wrong with the audio path")
 	}
 
-	// Once the whole bridge is healthy, the same call carries no warning.
-	recordCodexVoiceStatus(dir, "https://chatgpt.com/", true, false, "", "")
-	b.Bridge("connected")
+	// Once two cables are visible, the same call carries no warning.
+	b.Devices(`[
+		{"kind":"audiooutput","deviceId":"r1","label":"CABLE-A Input (VB-Audio Cable A)"},
+		{"kind":"audioinput","deviceId":"c1","label":"CABLE-A Output (VB-Audio Cable A)"},
+		{"kind":"audiooutput","deviceId":"r2","label":"CABLE-B Input (VB-Audio Cable B)"},
+		{"kind":"audioinput","deviceId":"c2","label":"CABLE-B Output (VB-Audio Cable B)"}]`)
 	if !b.Answered("8455551000", "") {
-		t.Fatal("an allowed caller was not bridged on a healthy bridge")
+		t.Fatal("an allowed caller was not bridged with cables present")
 	}
 	if st := loadVoiceRuntime(dir); st.LastError != "" {
-		t.Errorf("a healthy bridge still warned: %q", st.LastError)
+		t.Errorf("a fully wired machine still warned: %q", st.LastError)
 	}
 }

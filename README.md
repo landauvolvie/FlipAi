@@ -396,28 +396,34 @@ agent behaves as it does when you are sitting in front of it.
 ## Phone calls to the agent (experimental)
 
 FlipAi can answer a call to your Google Voice number and put the caller through
-to **Codex voice** — ChatGPT's voice mode, running in a browser window FlipAi
-keeps signed in with your own ChatGPT account. No AI API key is involved, and
-no audio hardware is involved either: the whole conversation travels between
-FlipAi's own two browser windows and never touches the PC's microphone or
-speakers.
+to the **voice mode of the ChatGPT/Codex desktop app** running on this PC --
+the same agent that can actually work on and control the computer. No AI API
+key is involved: the conversation happens inside the desktop app exactly as it
+does when you talk to it yourself.
 
-Google Voice runs in a window FlipAi owns and keeps alive. FlipAi watches for a
-ringing call, checks the caller against the agents' own lists of numbers,
-answers it, switches Codex voice mode on, and switches it back off when the
-call ends.
+Google Voice runs in a window FlipAi owns and keeps alive. FlipAi watches for
+a ringing call -- in the page, in its frames, or announced only by a
+notification -- checks the caller against the agents' own lists of numbers,
+clicks **Answer** exactly as a person would, points the desktop app's audio at
+the virtual cables, and starts its voice mode. When the call ends, voice mode
+is switched back off.
+
+There is deliberately **no separate auto-answer switch**: with calling enabled,
+an authorized caller is always answered and an unauthorized caller never is.
+Detecting and answering are one behavior, not two options.
 
 ### Where everything lives
 
 - **Settings → Google Voice calling** is the whole setup: the switch that turns
-  calling on, **Sign in** / **Sign out** for the Google account, **Sign in to
-  ChatGPT** for the built-in Codex voice window, and a live status row for
-  every part — the windows, both sign-ins, the audio bridge, the WebView2
-  runtime, and the browser permissions (which FlipAi grants itself; no Windows
-  prompt ever needs answering).
+  calling on, **Sign in** / **Sign out** for the Google account (sign-out
+  deletes the saved browser session), the desktop apps a call is put through
+  to, and a live status row for every part -- the window, the sign-in, the
+  cables, the app's audio routing, the WebView2 runtime, and the browser
+  permissions (which FlipAi grants itself; no Windows prompt ever needs
+  answering).
 - **Connections → Google Voice** is the live view: the real Google Voice
   browser standing inside the page. Closing or leaving the preview never stops
-  Google Voice — the window only leaves the panel and keeps running in the
+  Google Voice -- the window only leaves the panel and keeps running in the
   background, detecting and answering incoming calls. **Open in its own
   window** hands it back as an ordinary window if you would rather put it on
   another monitor.
@@ -426,35 +432,42 @@ Nothing on either page waits for a Save button; every control writes as it is
 changed, and the calling switch writes through an endpoint of its own so
 nothing else can hold it up.
 
-### How the sound actually gets to the model
+### How the sound actually gets to the desktop app
 
-FlipAi never records, transcribes, or uploads the call. The audio path is
-fully virtual and fully automatic — there are no virtual-cable drivers to
-install, no audio device pickers, and nothing to select inside ChatGPT:
+FlipAi never records, transcribes, or uploads the call. It moves sound between
+two applications on this PC over virtual audio cables -- silent by
+construction, no speaker plays them and no microphone hears them, and they
+keep working while the PC is locked:
 
 ```text
 caller -> Google Voice (FlipAi's window)
-       -> FlipAi lifts the caller's audio out of the page
-       == WebRTC connection between FlipAi's two windows, on this PC ==
-       -> handed to Codex voice as its "microphone"
+       -> Google Voice's "speaker"  == cable 1 ==  the desktop app's "microphone"
        -> the agent hears the caller and answers
-       -> FlipAi captures everything Codex voice plays
-       == the same WebRTC connection, other direction ==
-       -> handed to Google Voice as its "microphone"
+       -> the desktop app's "speaker" == cable 2 ==  Google Voice's "microphone"
        -> caller hears the agent
 ```
 
-Inside the Google Voice window, the stream the page believes is its microphone
-is really the agent talking, and the element playing the caller is muted
-locally after its audio is captured — so people near the computer hear nothing
-of the conversation, and the physical microphone is never opened. The Codex
-window is treated the same way in mirror image, whether ChatGPT plays speech
-through a media element or straight through Web Audio. Because no audio device
-is used anywhere, the bridge keeps working while the PC is locked.
+**The routing is chosen and applied entirely by FlipAi -- there are no device
+pickers anywhere.** FlipAi reads the machine's endpoint list, recognizes the
+installed cable families (VB-CABLE, VB-CABLE A/B, VoiceMeeter), pins Google
+Voice's microphone and speaker inside its own window, and writes the desktop
+app's per-application default microphone and speaker through the same Windows
+per-app audio store the Settings app uses. You never open the AI app's audio
+settings, and your PC's real microphone and speakers are never part of the
+call.
 
-The two pages negotiate their WebRTC connection through FlipAi itself, which
-only ferries the handshake; the audio flows directly between the two browser
-windows on this machine and never leaves it.
+The one thing FlipAi cannot conjure is the cables themselves: Windows has no
+built-in way to pipe one application's speaker into another's microphone, and
+FlipAi does not install or redistribute audio drivers. Install **two** virtual
+cables once -- VB-CABLE A+B, or VoiceMeeter, which includes two -- and the
+status row flips to wired. With one cable FlipAi wires the caller-to-agent
+half and says exactly what is missing; with none it says exactly what to
+install. A call is still answered either way, and the call state says what is
+wrong with the sound.
+
+For the rare unrecognized cable, the four endpoint names in `voice-call.json`
+(`googleVoiceInput/Output`, `agentInput/Output`) act as hand-edited overrides;
+an override only applies while a matching device is actually present.
 
 ### Setting it up
 
@@ -468,16 +481,12 @@ windows on this machine and never leaves it.
    window**, and until this is on, an incoming call goes to your forwarding
    phones instead. The status card reminds you while no ring has ever been
    seen.
-4. **Sign in to ChatGPT** — this opens the normally hidden Codex voice window
-   once; sign in and put it away. The caller talks to this account's voice
-   mode.
+4. Install two virtual audio cables (once): VB-CABLE A+B or VoiceMeeter.
+   FlipAi finds them and wires everything by itself.
 5. Agents → pick the agent → add your phone number and set it to **Texts and
    calls** or **Calls only**. That is what puts the agent on calls; there is
    no second switch to find. The status card says which agents can take a
    call.
-
-**Sign out** on the Settings card closes the Google Voice window, deletes its
-saved browser session, and brings it back signed out.
 
 ### Who is allowed to call, per agent
 
@@ -489,28 +498,32 @@ exactly one agent:
   that asks for Claude by name is refused rather than routed;
 - a number set to **Texts only** may not call; one set to **Calls only** may not
   text;
-- **Allowed caller names** — the exact text Google Voice displays when the
-  caller is in your Google Contacts and there is no number to match — belong to
+- **Allowed caller names** -- the exact text Google Voice displays when the
+  caller is in your Google Contacts and there is no number to match -- belong to
   one agent too. Placeholders such as "Unknown" or "Private" are refused, since
   accepting one would let any anonymous call through.
 
 A caller matching neither list is never answered, and the card shows what Google
-Voice displayed and why the call was not connected.
+Voice displayed and why the call was not connected. A ringing card that names
+nobody is never given an identity from elsewhere on the page: the caller is
+read from the ringing UI itself, or from the incoming-call notification, or
+the call is refused.
 
 ### It runs in the background
 
 The Google Voice window is put away rather than closed, because a closed window
-cannot ring, and the Codex voice window runs hidden beside it in the same
-process — calls need both or neither. Windows keeps them running while the PC
-is locked, and FlipAi starts them again if they disappear. A background start
-does not flash windows across the screen.
+cannot ring. Windows keeps it running while the PC is locked, and FlipAi starts
+it again if it disappears. A background start does not flash a window on
+screen.
 
 A window nobody is looking at is one Chromium considers hidden, and Chromium
-slows a hidden window's timers to once a minute — far longer than a call rings
-for. FlipAi therefore starts both windows with background throttling, renderer
+slows a hidden window's timers to once a minute -- far longer than a call rings
+for. FlipAi therefore starts this window with background throttling, renderer
 backgrounding and occlusion detection switched off, and does not rely on a
-timer to notice a call in the first place: the page change a ringing call makes
-is what drives the check.
+timer to notice a call in the first place: the page change a ringing call
+makes -- in the main document or in any same-origin frame, all of which FlipAi
+watches -- drives the check, and an incoming-call notification triggers an
+immediate burst of checks on top.
 
 ### If Google Voice does not appear
 
@@ -518,7 +531,7 @@ The window is created by a second FlipAi process, so a failure happens out of
 sight of the page. FlipAi waits for the window to exist and reports what stopped
 it, on the Connections panel and in Activity.
 
-The usual cause is a missing **Microsoft Edge WebView2 Runtime** — FlipAi cannot
+The usual cause is a missing **Microsoft Edge WebView2 Runtime** -- FlipAi cannot
 draw the Google Voice window without it. Settings shows the installed
 version, and says so plainly when it is absent. Microsoft distributes it free as
 the Evergreen Standalone Installer.
@@ -529,15 +542,18 @@ window process.
 
 ### Limits worth knowing
 
-- Windows only, and the desktop session has to be signed in. The windows keep
-  running while the PC is locked, but they cannot start at the sign-in screen.
-- The caller talks to ChatGPT's own voice mode, with your ChatGPT account's
-  limits and behavior. FlipAi clicks its voice controls; if ChatGPT redesigns
-  the page beyond recognition, the status card reports that it could not find
-  the voice mode control.
-- Calls routed to **Claude** still use the older desktop-app fallback: FlipAi
-  focuses the Claude desktop app and sends its Voice shortcut, with the app's
-  own audio devices. Codex calls need none of this.
+- Windows only, and the desktop session has to be signed in. The window keeps
+  running while the PC is locked, but it cannot start at the sign-in screen.
+- The desktop app has to be running (or have a launch command configured) for
+  a call to reach it; FlipAi starts its voice mode through the app's
+  accessible Voice control or its configured shortcut.
+- The per-app audio routing uses the same per-application store Windows'
+  own Settings app writes. If Windows refuses it, the status row says so and
+  names the one-time manual fallback: choose the cable ends once inside the
+  app's own audio settings.
+- ChatGPT desktop Voice is a full two-way conversation. Claude Desktop's voice
+  support is dictation-oriented, so the Claude side may not hold up its end of
+  a spoken conversation the same way.
 - This is separate from SMS. Turning it on changes nothing about Gmail, message
   routing, or the SMS allowlist.
 
@@ -612,25 +628,23 @@ Before a Windows artifact is accepted, GitHub Actions verifies:
 
 ### Call-bridge browser tests
 
-`TestGoogleVoiceCallFlowInRealBrowser` runs the scripts FlipAi injects into
-Google Voice and into the Codex voice window inside headless Chromium, against
-stand-in Google Voice and ChatGPT pages, with the real Go call bridge and the
-real Go relay in the middle. The audio path is real, not mocked: the caller is
-an oscillator in one page, the agent is an oscillator in the other, the two
-pages negotiate an actual WebRTC connection through the relay, and the test
-asserts — with AnalyserNodes on the very streams the pages were given — that
-sound flowed both ways, that no audio device was involved on either side, and
-that everything was muted locally. It also covers voice mode starting on
-answer and stopping on hang-up, speech played through Web Audio as well as
-media elements, answering an approved caller, refusing an unknown one,
-contact-name callers, refusing to treat a number elsewhere in the page as the
-caller, answering a single ring only once, and the capabilities the call
-window must not keep.
+`TestGoogleVoiceCallFlowInRealBrowser` runs the script FlipAi injects into
+Google Voice inside headless Chromium, against a stand-in Google Voice page and
+the real Go call bridge. Chromium's fake audio endpoints stand in for the
+cable ends, and the browser genuinely applies the microphone and speaker
+FlipAi selects, so the routing is checked rather than assumed. It covers
+answering an approved caller with no auto-answer option in the way, refusing
+an unknown one, contact-name callers, a ring rendered inside a same-origin
+iframe, a caller identified only by the incoming-call notification, refusing
+to treat a number elsewhere in the page as the caller, answering a single ring
+only once, answering without the poll timer, and the capabilities the call
+window must not keep. The automatic cable detection has its own unit tests
+over the real VB-CABLE and VoiceMeeter endpoint names.
 
 It needs Node and Playwright and skips itself when they are absent, so the
 Windows release job does not run it. What it cannot cover, and what only a real
-call on a real PC can confirm: Google's and OpenAI's own markup, WebView2, and
-the telephony itself.
+call on a real PC can confirm: Google's own markup, WebView2, the telephony
+itself, and whether the desktop AI app actually enters voice mode.
 
 ## SmartScreen / antivirus
 

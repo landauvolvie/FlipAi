@@ -58,18 +58,20 @@
 
 ## Phone calling (experimental)
 
-Turning Google Voice calling on adds two long-lived, signed-in browser
-profiles that FlipAi owns: the Google Voice window (a Google session) and the
-hidden Codex voice window (a ChatGPT session), both stored under the app's
-per-user data folder with the same protections as the rest of it. The audio
-bridge between them is a WebRTC connection negotiated through the FlipAi
-process itself and carried directly between the two browser windows on this
-PC; call audio is never written to disk, never uploaded by FlipAi, and never
-played through, or captured from, a physical audio device. Who may ring
-through to an agent is decided by the same per-agent allowlists as SMS, an
-unidentifiable caller is never answered, and both injected pages strip
-camera, screen-share, geolocation and clipboard access and pin their windows
-to their own sites. Signing out deletes the Google Voice browser profile.
+Turning Google Voice calling on adds one long-lived, signed-in browser
+profile that FlipAi owns: the Google Voice window, stored under the app's
+per-user data folder with the same protections as the rest of it; signing out
+deletes it. A call is put through to the ChatGPT/Codex (or Claude) desktop
+app's own voice mode -- the agent then acts with that app's normal abilities
+and the caller is, in effect, operating it by voice, which is why answering is
+gated on the same per-agent allowlists as SMS and an unidentifiable caller is
+never answered. Call audio moves between the two applications over
+user-installed virtual audio cables, never touching a physical microphone or
+speaker, and is never written to disk or uploaded by FlipAi. FlipAi writes the
+desktop app's per-application default audio devices through the same per-user
+Windows store the Settings app uses (no elevation involved), and the injected
+Google Voice page strips camera, screen-share, geolocation and clipboard
+access and pins its window to Google's own sites.
 
 ## Residual risk
 

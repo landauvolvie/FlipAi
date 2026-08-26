@@ -7,9 +7,10 @@
   .threads { width: 260px; padding: 12px; }
   .thread { padding: 8px 0; }
   #callarea:empty { display: none; }
-  #callarea > div { padding: 16px; border: 1px solid #ccc; margin: 12px; width: 320px; }
+  #callarea > div, .calldialog { padding: 16px; border: 1px solid #ccc; margin: 12px; width: 320px; }
   .caller { font-size: 20px; font-weight: 600; }
   button { display: inline-block; padding: 8px 14px; margin: 6px 6px 0 0; }
+  #callframe { width: 380px; height: 220px; border: 1px dashed #999; }
 </style>
 <body>
 <div class="shell">
@@ -20,55 +21,74 @@
     <div class="thread">Pharmacy<br>+1 617-555-0143<br>prescription ready</div>
   </div>
   <div id="callarea"></div>
+  <div id="framearea"></div>
 </div>
 <script>
 // A stand-in for the parts of Google Voice the FlipAi bridge actually touches:
-// a ringing dialog with an Answer button, an in-call dialog with Hang up, the
-// media element that plays the remote caller, and the microphone capture the
-// page opens when the call connects.
-//
-// The caller is simulated as a steady tone: a real AudioContext oscillator
-// feeding the stream this page assigns to its remote <audio> element, exactly
-// where Google Voice puts the incoming WebRTC audio. FlipAi is expected to
-// lift that stream toward the agent and to silence the element locally.
+// a ringing dialog with an Answer button -- in the main document or inside a
+// same-origin iframe, both of which the real page has used -- an in-call
+// dialog with Hang up, a media element plus a microphone capture for the
+// conversation itself, and the incoming-call notification Google sometimes
+// raises before drawing anything.
 window.gv = {
+  gumConstraints: null,
   gumSettings: null,
-  gumTrackLabel: '',
-  gumError: '',
   playCalled: false,
   playError: '',
-  micLevel: 0,
-  callerCtx: null,
 
-  ring(display, ariaLabel, answerLabel) {
-    const area = document.getElementById('callarea');
-    area.textContent = '';
-    const dialog = document.createElement('div');
+  buildRing(doc, display, ariaLabel, answerLabel) {
+    const dialog = doc.createElement('div');
+    dialog.className = 'calldialog';
     dialog.setAttribute('role', 'dialog');
     if (ariaLabel) dialog.setAttribute('aria-label', ariaLabel);
 
-    const who = document.createElement('div');
+    const who = doc.createElement('div');
     who.className = 'caller';
     for (const [i, line] of String(display).split('\n').entries()) {
-      if (i) who.append(document.createElement('br'));
-      who.append(document.createTextNode(line));
+      if (i) who.append(doc.createElement('br'));
+      who.append(doc.createTextNode(line));
     }
-    const sub = document.createElement('div');
+    const sub = doc.createElement('div');
     sub.textContent = 'Incoming call';
 
-    const answer = document.createElement('button');
+    const answer = doc.createElement('button');
     answer.textContent = 'Answer';
     if (answerLabel) answer.setAttribute('aria-label', answerLabel);
     answer.addEventListener('click', () => window.gv.connect());
-    const decline = document.createElement('button');
+    const decline = doc.createElement('button');
     decline.textContent = 'Decline';
     decline.addEventListener('click', () => window.gv.hangup());
 
     dialog.append(who, sub, answer, decline);
-    area.append(dialog);
+    return dialog;
+  },
+
+  ring(display, ariaLabel, answerLabel) {
+    const area = document.getElementById('callarea');
+    area.textContent = '';
+    area.append(window.gv.buildRing(document, display, ariaLabel, answerLabel));
+  },
+
+  // The same ring, rendered inside a same-origin iframe: nothing about it is
+  // visible from the top document's own DOM queries.
+  ringInFrame(display, ariaLabel, answerLabel) {
+    const holder = document.getElementById('framearea');
+    holder.textContent = '';
+    const frame = document.createElement('iframe');
+    frame.id = 'callframe';
+    holder.append(frame);
+    const doc = frame.contentDocument;
+    doc.body.append(window.gv.buildRing(doc, display, ariaLabel, answerLabel));
+  },
+
+  // Google announcing the call through the Notifications API, as it does when
+  // it raises a desktop notification for an incoming call.
+  notifyIncoming(body) {
+    try { new Notification('Incoming call', {body: body}); } catch (e) { window.gv.noteError = String(e); }
   },
 
   async connect() {
+    document.getElementById('framearea').textContent = '';
     const area = document.getElementById('callarea');
     area.textContent = '';
     const dialog = document.createElement('div');
@@ -82,40 +102,17 @@ window.gv = {
     dialog.append(hangup, audio);
     area.append(dialog);
 
-    // The remote caller: a 440Hz tone standing in for the incoming call
-    // audio Google Voice attaches to its media element.
-    const ctx = new AudioContext();
-    window.gv.callerCtx = ctx;
-    const osc = ctx.createOscillator();
-    osc.frequency.value = 440;
-    const dest = ctx.createMediaStreamDestination();
-    osc.connect(dest);
-    osc.start();
-    window.gv.callerStream = dest.stream;
-    audio.srcObject = dest.stream;
-
-    // Google Voice opens the microphone when the call connects. FlipAi is
-    // expected to hand back the agent's voice instead of a device.
+    // Google Voice opens the microphone when the call connects. This is the
+    // request FlipAi has to redirect onto the virtual cable.
+    const constraints = {audio: {echoCancellation: true}};
+    window.gv.gumConstraints = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true}});
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       window.gv.stream = stream;
-      const track = stream.getAudioTracks()[0];
-      window.gv.gumSettings = track.getSettings();
-      window.gv.gumTrackLabel = track.label || '';
-      // What the caller would hear: the level on the microphone stream this
-      // page was given. A real Google Voice sends it into its own WebRTC
-      // connection; measuring it here is the same observation.
-      const an = ctx.createAnalyser();
-      an.fftSize = 2048;
-      ctx.createMediaStreamSource(stream).connect(an);
-      const buf = new Float32Array(an.fftSize);
-      window.gv._micPoll = setInterval(() => {
-        an.getFloatTimeDomainData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-        const rms = Math.sqrt(sum / buf.length);
-        if (rms > window.gv.micLevel) window.gv.micLevel = rms;
-      }, 100);
+      window.gv.gumSettings = stream.getAudioTracks()[0].getSettings();
+      // The remote party is rendered through the media element; its sink is
+      // what has to land on the other virtual cable.
+      audio.srcObject = stream;
     } catch (e) {
       window.gv.gumError = String(e);
     }
@@ -129,28 +126,26 @@ window.gv = {
 
   hangup() {
     document.getElementById('callarea').textContent = '';
-    if (window.gv._micPoll) { clearInterval(window.gv._micPoll); window.gv._micPoll = 0; }
+    document.getElementById('framearea').textContent = '';
     if (window.gv.stream) {
       window.gv.stream.getTracks().forEach(t => t.stop());
       window.gv.stream = null;
     }
-    if (window.gv.callerCtx) { window.gv.callerCtx.close().catch(() => {}); window.gv.callerCtx = null; }
   },
 
-  // What the page can see of FlipAi's routing.
+  // What getUserMedia was ultimately called with, after FlipAi rewrote it.
   observed() {
-    const remote = document.getElementById('remote');
     return {
+      gumCalls: window.__flipRecordedCalls || [],
       gumSettings: window.gv.gumSettings || null,
-      gumTrackLabel: window.gv.gumTrackLabel,
       gumError: window.gv.gumError || '',
+      noteError: window.gv.noteError || '',
       playCalled: window.gv.playCalled,
       playError: window.gv.playError,
-      micLevel: window.gv.micLevel,
-      remoteMuted: remote ? remote.muted : null,
-      remoteVolume: remote ? remote.volume : null,
+      sinkId: (document.getElementById('remote') || {}).sinkId || '',
       secureContext: window.isSecureContext,
-      hasMediaDevices: !!navigator.mediaDevices
+      hasMediaDevices: !!navigator.mediaDevices,
+      hasSetSinkId: typeof HTMLMediaElement.prototype.setSinkId === 'function'
     };
   }
 };

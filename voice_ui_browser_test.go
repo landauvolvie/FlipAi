@@ -53,14 +53,13 @@ func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The sign-out and Codex sign-in buttons call platform code that opens and
-	// closes real windows; here the contract under test is that the buttons
-	// reach the endpoints, so the platform side is stubbed and counted.
-	var signOuts, codexOpens atomic.Int32
-	restoreSignOut, restoreCodex := signOutGoogleVoice, openCodexVoiceWindow
+	// The sign-out button calls platform code that closes a real window and
+	// deletes a real profile; here the contract under test is that the button
+	// reaches the endpoint, so the platform side is stubbed and counted.
+	var signOuts atomic.Int32
+	restoreSignOut := signOutGoogleVoice
 	signOutGoogleVoice = func(string) error { signOuts.Add(1); return nil }
-	openCodexVoiceWindow = func(string) error { codexOpens.Add(1); return nil }
-	defer func() { signOutGoogleVoice, openCodexVoiceWindow = restoreSignOut, restoreCodex }()
+	defer func() { signOutGoogleVoice = restoreSignOut }()
 
 	voiceSrv := &http.Server{Handler: voiceControlHandler(dir, "127.0.0.1:8765",
 		func() Config { return voiceTestConfig(t) },
@@ -132,6 +131,7 @@ func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 		StateAfter         string            `json:"stateAfter"`
 		SavedNote          string            `json:"savedNote"`
 		StatusRows         map[string]string `json:"statusRows"`
+		HasAutoAnswer      bool              `json:"hasAutoAnswer"`
 		PanelWhileStarting string            `json:"panelWhileStarting"`
 		PanelWhenOff       string            `json:"panelWhenOff"`
 		PanelButtons       []string          `json:"panelButtons"`
@@ -144,7 +144,7 @@ func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 	}
 	for _, want := range []string{
 		"settings-card-rendered", "switch-applied", "field-autosaved", "signed-out",
-		"codex-signin-opened", "status-rows-answer", "switch-reverted",
+		"status-rows-answer", "switch-reverted",
 		"preview-card-rendered", "panel-explains-off", "dock-reported",
 		"panel-explains-and-retries", "pending-save-flushed",
 	} {
@@ -173,12 +173,9 @@ func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 		t.Errorf("the card did not confirm the write: %q", report.SavedNote)
 	}
 
-	// The setup buttons really reach their endpoints.
+	// The sign-out button really reaches its endpoint.
 	if signOuts.Load() != 1 {
 		t.Errorf("Sign out reached the endpoint %d times, want 1", signOuts.Load())
-	}
-	if codexOpens.Load() != 1 {
-		t.Errorf("Sign in to ChatGPT reached the endpoint %d times, want 1", codexOpens.Load())
 	}
 
 	// Every status row answers something; none may be left blank.
@@ -186,6 +183,12 @@ func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 		if strings.TrimSpace(text) == "" {
 			t.Errorf("status row %s is blank", id)
 		}
+	}
+
+	// The retired auto-answer switch must not come back: enabled plus
+	// authorized is the whole answering rule.
+	if report.HasAutoAnswer {
+		t.Error("the page still renders a separate auto-answer switch")
 	}
 
 	// And what is on disk is what the page said. This is the assertion the

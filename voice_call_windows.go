@@ -376,14 +376,6 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 	}
 	defer release()
 
-	// The Codex voice window lives beside the Google Voice window for the
-	// whole life of this process: the two pages carry a call's audio between
-	// themselves, so a process that can answer the phone always has both.
-	link := newVoiceAgentLink()
-	stopCodex := make(chan struct{})
-	defer close(stopCodex)
-	go superviseCodexVoice(dataDir, link, stopCodex)
-
 	visible := initiallyVisible
 	for {
 		if quitRequested(dataDir) {
@@ -396,7 +388,7 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 		if !cfg.Enabled && !visible {
 			return nil
 		}
-		if err := runGoogleVoiceWindow(dataDir, visible, link); err != nil {
+		if err := runGoogleVoiceWindow(dataDir, visible); err != nil {
 			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 				s.BrowserRunning = false
 				s.LastError = err.Error()
@@ -497,9 +489,6 @@ func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
 		if way.wait > 0 {
 			time.Sleep(way.wait)
 		}
-		// Creation is serialized with the Codex voice window: the browser
-		// switches travel through one process-wide environment variable.
-		voiceWebViewCreateMu.Lock()
 		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args)
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			Debug:     false,
@@ -512,7 +501,6 @@ func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
 				Center: true,
 			},
 		})
-		voiceWebViewCreateMu.Unlock()
 		if w != nil {
 			mode, note := way.name, way.note
 			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
@@ -596,7 +584,7 @@ func destroyLeftoverGoogleVoiceFrame() {
 	}
 }
 
-func runGoogleVoiceWindow(dataDir string, visible bool, link *voiceAgentLink) error {
+func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	// A Win32 message pump only works on the thread that created the window.
 	// This currently runs inside init(), where the Go runtime happens to hold
 	// the main thread, but that is an implementation detail of the runtime and
@@ -653,29 +641,19 @@ func runGoogleVoiceWindow(dataDir string, visible bool, link *voiceAgentLink) er
 		}
 		return cfg
 	}
-	// Codex calls are answered by the built-in Codex voice window over the
-	// in-process link; only Claude still drives an external desktop app.
+	// A call is answered by the desktop AI app itself: its per-app audio is
+	// pointed at the cables just before its voice mode is started, so the
+	// caller talks to the same agent that can actually work on this PC.
 	activate := func(cfg VoiceCallConfig, agent string) error {
-		if agent == "C" {
-			return link.StartVoice(loadVoiceRuntime(dataDir).CodexVoice.Current(time.Now()))
-		}
-		return activateAgentVoice(cfg, agent)
+		return activateAgentVoiceWithRouting(dataDir, cfg, agent)
 	}
-	deactivate := func(cfg VoiceCallConfig, agent string) error {
-		if agent == "C" {
-			link.StopVoice()
-			return nil
-		}
-		return deactivateAgentVoice(cfg, agent)
-	}
-	bridge := newVoiceBridge(dataDir, mainConfig, activate, deactivate)
+	bridge := newVoiceBridge(dataDir, mainConfig, activate, deactivateAgentVoice)
+	_ = w.Bind("flipVoiceAudioSettings", bridge.AudioSettings)
 	_ = w.Bind("flipVoiceIncoming", bridge.Incoming)
 	_ = w.Bind("flipVoiceAnswered", bridge.Answered)
 	_ = w.Bind("flipVoiceEnded", bridge.Ended)
+	_ = w.Bind("flipVoiceDevices", bridge.Devices)
 	_ = w.Bind("flipVoicePage", bridge.Page)
-	_ = w.Bind("flipVoiceBridge", bridge.Bridge)
-	_ = w.Bind("flipVoiceRelaySend", link.CallSend)
-	_ = w.Bind("flipVoiceRelayRecv", link.CallRecv)
 
 	w.Init(googleVoiceInitScript)
 	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
@@ -754,12 +732,6 @@ func voiceChromium(w webview2.WebView) *edge.Chromium {
 }
 
 func platformTestAgentVoice(cfg VoiceCallConfig, agent string) error {
-	if agent == "C" {
-		// Codex voice is built in: it runs inside the Google Voice window
-		// process and its readiness is on the Settings page, so there is no
-		// desktop app to poke from here.
-		return errors.New("Codex voice is built into FlipAi; its status is shown under Settings → Google Voice calling")
-	}
 	return activateAgentVoice(cfg, agent)
 }
 
@@ -772,13 +744,23 @@ func voiceAgentConfig(cfg VoiceCallConfig, agent string) VoiceAgentCallConfig {
 
 func activateAgentVoice(cfg VoiceCallConfig, agent string) error {
 	target := voiceAgentConfig(cfg, agent)
+	hwnd, err := ensureAgentAppWindow(target)
+	if err != nil {
+		return err
+	}
+	return startAgentVoiceMode(target, hwnd)
+}
+
+// ensureAgentAppWindow finds the desktop app's window, launching the app first
+// when a launch command is configured and it is not already running.
+func ensureAgentAppWindow(target VoiceAgentCallConfig) (uintptr, error) {
 	if strings.TrimSpace(target.AppTitle) == "" {
-		return errors.New("set the desktop app window title for this agent")
+		return 0, errors.New("set the desktop app window title for this agent")
 	}
 	hwnd := findWindowContaining(target.AppTitle)
 	if hwnd == 0 && target.AppCommand != "" {
 		if err := startConfiguredVoiceApp(target.AppCommand); err != nil {
-			return err
+			return 0, err
 		}
 		deadline := time.Now().Add(12 * time.Second)
 		for time.Now().Before(deadline) {
@@ -790,8 +772,14 @@ func activateAgentVoice(cfg VoiceCallConfig, agent string) error {
 		}
 	}
 	if hwnd == 0 {
-		return fmt.Errorf("could not find the %s desktop window; open the app or set its launch command", target.AppTitle)
+		return 0, fmt.Errorf("could not find the %s desktop window; open the app or set its launch command", target.AppTitle)
 	}
+	return hwnd, nil
+}
+
+// startAgentVoiceMode switches an already-running desktop app into its voice
+// mode, by its accessible Voice control or its configured shortcut.
+func startAgentVoiceMode(target VoiceAgentCallConfig, hwnd uintptr) error {
 	focused := bringToFront(hwnd)
 	if target.VoiceShortcut != "" {
 		if focused {

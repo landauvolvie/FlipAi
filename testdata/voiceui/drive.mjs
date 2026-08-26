@@ -44,17 +44,16 @@ await page.click('#vc-signout');
 await page.waitForFunction(() => /Signed out/.test(document.querySelector('#voice-call-toast')?.textContent || ''), null, { timeout: 15000 });
 out.steps.push('signed-out');
 
-// 4. The ChatGPT sign-in for the built-in Codex voice window.
-await page.click('#vc-codex-signin');
-await page.waitForFunction(() => /Codex voice window/.test(document.querySelector('#voice-call-toast')?.textContent || ''), null, { timeout: 15000 });
-out.steps.push('codex-signin-opened');
-
-// 5. The status rows exist and answer.
+// 4. The status and permission rows exist and answer, including the ones
+//    specific to the desktop-app architecture: cables and per-app routing.
 out.statusRows = {};
-for (const id of ['vcs-state','vcs-window','vcs-google','vcs-codex','vcs-audio','vcs-agents','vcs-ring','vcs-webview2','vcs-permissions']) {
+for (const id of ['vcs-state','vcs-window','vcs-google','vcs-cables','vcs-audio','vcs-routing','vcs-agents','vcs-ring','vcs-webview2','vcs-permissions']) {
   out.statusRows[id] = ((await page.textContent('#' + id)) || '').trim();
 }
 out.steps.push('status-rows-answer');
+
+// 4b. There is no auto-answer switch anywhere on the page.
+out.hasAutoAnswer = !!(await page.$('#vc-auto'));
 
 // 6. Turning it back off works too.
 await page.click('#vc-enabled');

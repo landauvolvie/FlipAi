@@ -27,6 +27,7 @@ func platformSignOutGoogleVoice(dataDir string) error {
 	return errors.New("Google Voice calling is available only in the Windows FlipAi app")
 }
 
-func platformOpenCodexVoice(dataDir string) error {
-	return errors.New("the Codex voice window is available only in the Windows FlipAi app")
-}
+// platformVoiceDevicesChanged reacts to a fresh audio device report by
+// re-pointing the desktop app's per-app audio at the cables. There is no
+// desktop app to route off Windows.
+func platformVoiceDevicesChanged(dataDir string) {}

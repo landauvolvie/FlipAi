@@ -6,8 +6,9 @@ import (
 )
 
 // The feature lives on two pages, each doing one job: Settings carries the
-// switch, the sign-ins, and every status check; Connections carries the live
-// Google Voice preview and nothing else. This holds the script to that split.
+// switch, the sign-in/sign-out, the desktop apps, and every status check;
+// Connections carries the live Google Voice preview and nothing else. This
+// holds the script to that split.
 func TestGoogleVoiceSplitsBetweenSettingsAndConnections(t *testing.T) {
 	if !strings.Contains(voiceDesktopInitScript, "if(here==='/settings') settingsCard();") {
 		t.Fatal("Settings must build the Google Voice calling card")
@@ -33,46 +34,50 @@ func TestGoogleVoiceSplitsBetweenSettingsAndConnections(t *testing.T) {
 			t.Errorf("the embedded Google Voice panel is missing %s", want)
 		}
 	}
-	for _, gone := range []string{"agentCard(", "#codex-pane", "#claude-pane"} {
-		if strings.Contains(voiceDesktopInitScript, gone) {
-			t.Errorf("the voice UI still reaches into %s", gone)
-		}
-	}
 	if strings.Contains(voiceDesktopInitScript, "allowedCallers") || strings.Contains(voiceDesktopInitScript, "allowedLabels") {
 		t.Error("who may call is configured with the agent, not in the voice card")
 	}
 }
 
-// The audio path is automatic now. Any picker for an audio endpoint on the
-// page would be the old cable design leaking back in.
+// Answering is not an option. With calling enabled, an authorized caller is
+// answered and an unauthorized one is not; a separate auto-answer switch was
+// an unnecessary second gate and must not come back.
+func TestVoiceUIHasNoAutoAnswerSwitch(t *testing.T) {
+	for _, gone := range []string{"vc-auto", "autoAnswer", "Auto-answer"} {
+		if strings.Contains(voiceDesktopInitScript, gone) {
+			t.Errorf("the voice UI still carries the retired auto-answer switch: %s", gone)
+		}
+	}
+}
+
+// The audio wiring is automatic. Pickers would be the old manual design
+// leaking back in; the page shows the chosen wiring, it never asks for it.
 func TestVoiceUIHasNoAudioDevicePickers(t *testing.T) {
-	for _, gone := range []string{
-		"googleVoiceInput", "googleVoiceOutput", "agentInput", "agentOutput",
-		"ringOutput", "deviceSelect(", "audioinput", "audiooutput", "virtual cable",
-	} {
+	for _, gone := range []string{"deviceSelect(", "audioinput", "audiooutput", "vc-gv-in", "vc-gv-out", "vc-agent-in", "vc-agent-out", "vc-ring"} {
 		if strings.Contains(voiceDesktopInitScript, gone) {
 			t.Errorf("the voice UI still carries manual audio wiring: %s", gone)
 		}
 	}
 }
 
-// Settings owns setup: sign in, sign out, the ChatGPT sign-in for the built-in
-// Codex voice window, and the status rows the task of "is a call going to
-// work" is answered by.
-func TestVoiceSettingsCardCarriesSetupAndStatus(t *testing.T) {
+// The call goes to the desktop app, not to any hidden browser agent: the
+// ChatGPT-in-a-browser sign-in must be gone, and the desktop app fields for
+// both agents must be present.
+func TestVoiceSettingsCardTargetsTheDesktopApps(t *testing.T) {
+	for _, gone := range []string{"codex-open", "Sign in to ChatGPT", "vcs-codex", "chatgpt.com"} {
+		if strings.Contains(voiceDesktopInitScript, gone) {
+			t.Errorf("the Settings card still points at the hidden browser agent: %s", gone)
+		}
+	}
 	for _, want := range []string{
-		"post('/signout')", "post('/open')", "post('/codex-open')",
-		"vcs-google", "vcs-codex", "vcs-audio", "vcs-webview2", "vcs-permissions",
+		"post('/signout')", "post('/open')",
+		"vcc-title", "vcc-shortcut", "vcc-command",
+		"vca-title", "vca-shortcut", "vca-command",
+		"vcs-google", "vcs-cables", "vcs-routing", "vcs-audio", "vcs-webview2", "vcs-permissions",
+		"test-agent?agent=",
 	} {
 		if !strings.Contains(voiceDesktopInitScript, want) {
 			t.Errorf("the Settings card is missing %s", want)
-		}
-	}
-	// Codex needs no desktop-app configuration: the old ChatGPT window-title
-	// and shortcut fields must not come back.
-	for _, gone := range []string{"vcc-title", "vcc-shortcut", "vcc-command", "vcc-enabled"} {
-		if strings.Contains(voiceDesktopInitScript, gone) {
-			t.Errorf("the Settings card still configures a Codex desktop app: %s", gone)
 		}
 	}
 }

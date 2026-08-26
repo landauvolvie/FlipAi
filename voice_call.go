@@ -24,16 +24,24 @@ const (
 
 type VoiceCallConfig struct {
 	Enabled      bool   `json:"enabled"`
-	AutoAnswer   bool   `json:"autoAnswer"`
 	DefaultAgent string `json:"defaultAgent"` // C = ChatGPT/Codex, A = Claude Desktop
 
 	GoogleVoiceURL string `json:"googleVoiceUrl"`
 
-	// The audio path needs no configuration any more. Calls are bridged to the
-	// built-in Codex voice window over a WebRTC connection between FlipAi's own
-	// two browser pages; there are no virtual cables, no endpoint pickers, and
-	// nothing for the user to select. The old cable fields simply no longer
-	// exist, and a voice-call.json that still carries them parses fine.
+	// Deprecated: answering is not an option any more. With calling enabled,
+	// an authorized caller is always answered and an unauthorized one never
+	// is; the field is kept only so an existing voice-call.json parses.
+	AutoAnswer bool `json:"autoAnswer,omitempty"`
+
+	// The audio wiring is chosen automatically from the machine's virtual
+	// cable endpoints (see voice_cables.go); there are no pickers anywhere.
+	// These four fields exist only as hand-edited overrides for the rare
+	// machine whose cables FlipAi does not recognize, and an override only
+	// applies while a matching device is really present.
+	GoogleVoiceInput  string `json:"googleVoiceInput,omitempty"`
+	GoogleVoiceOutput string `json:"googleVoiceOutput,omitempty"`
+	AgentInput        string `json:"agentInput,omitempty"`
+	AgentOutput       string `json:"agentOutput,omitempty"`
 
 	Codex  VoiceAgentCallConfig `json:"codex"`
 	Claude VoiceAgentCallConfig `json:"claude"`
@@ -66,12 +74,18 @@ type VoiceRuntimeState struct {
 	CallerLabel string `json:"callerLabel,omitempty"`
 	Agent       string `json:"agent,omitempty"`
 	Blocked     string `json:"blocked,omitempty"`
-	// BridgeState is what the Google Voice page reports about its audio link
-	// to the Codex voice page: "", "connecting", "connected" or "failed". It is
-	// the whole answer to "would a call carry sound right now".
-	BridgeState string `json:"bridgeState,omitempty"`
-	// CodexVoice is what the built-in Codex voice page last said about itself.
-	CodexVoice VoiceAgentRuntime `json:"codexVoice,omitempty"`
+	// Devices is the machine's audio endpoint list as the Google Voice window
+	// last saw it. It is what the automatic cable detection reads.
+	Devices []VoiceAudioDevice `json:"devices,omitempty"`
+	// DeviceLabelsHidden records that the browser returned endpoints with no
+	// names, which happens until the microphone permission is actually
+	// granted. Without it the status page looks merely empty rather than
+	// blocked.
+	DeviceLabelsHidden bool `json:"deviceLabelsHidden,omitempty"`
+	// RoutingNote is the outcome of the last attempt to point the desktop
+	// app's own microphone and speaker at the cables, per-app, through the
+	// Windows audio policy store.
+	RoutingNote string `json:"routingNote,omitempty"`
 	// RenderMode is how Google Voice is currently being drawn, and
 	// RenderAttempt is where in the list of ways to draw it FlipAi has got to.
 	// A window that comes up black is a graphics problem rather than a startup
@@ -114,8 +128,12 @@ type voiceControlSnapshot struct {
 	// the user clicks Open rather than after.
 	WebView2 string `json:"webView2,omitempty"`
 	// AudioWarning is what is wrong with the sound path, in the words the
-	// Connections page shows. Empty means a call would carry audio both ways.
+	// Settings page shows. Empty means a call would carry audio both ways.
 	AudioWarning string `json:"audioWarning,omitempty"`
+	// Audio is the automatic wiring currently in effect: which cable endpoint
+	// stands in for each microphone and speaker, and which cable families are
+	// in use. The Settings page shows it so "automatic" never means "opaque".
+	Audio voiceCablePlan `json:"audio"`
 	// CallAgents names the agents a call can currently be handed to. It is
 	// derived rather than stored: an agent is on calls because somebody gave it
 	// a number that may call. Showing it is how the desktop UI can say "nothing
@@ -126,15 +144,13 @@ type voiceControlSnapshot struct {
 func voiceSnapshot(dataDir string, mainConfig func() Config) voiceControlSnapshot {
 	vc := loadVoiceCallConfig(dataDir)
 	rt := loadVoiceRuntime(dataDir)
-	// Staleness is applied at read time so a Codex window that stopped
-	// reporting -- crashed, closed, never started -- reads as not running
-	// instead of forever repeating its last good report.
-	rt.CodexVoice = rt.CodexVoice.Current(time.Now())
+	plan := applyCableOverrides(planVoiceCables(rt.Devices), vc, rt.Devices)
 	snap := voiceControlSnapshot{
 		Config:       vc,
 		Runtime:      rt,
 		WebView2:     platformWebView2Runtime(),
-		AudioWarning: voiceBridgeWarning(rt, time.Now()),
+		Audio:        plan,
+		AudioWarning: plan.Warning,
 	}
 	if mainConfig != nil {
 		cfg := mainConfig()
@@ -149,7 +165,6 @@ func voiceSnapshot(dataDir string, mainConfig func() Config) voiceControlSnapsho
 
 func defaultVoiceCallConfig() VoiceCallConfig {
 	return VoiceCallConfig{
-		AutoAnswer:     true,
 		DefaultAgent:   "C",
 		GoogleVoiceURL: googleVoiceWebURL,
 		Codex: VoiceAgentCallConfig{
@@ -309,6 +324,10 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 		}
 		return strings.TrimSpace(v)
 	}
+	cfg.GoogleVoiceInput = clean(cfg.GoogleVoiceInput, 300)
+	cfg.GoogleVoiceOutput = clean(cfg.GoogleVoiceOutput, 300)
+	cfg.AgentInput = clean(cfg.AgentInput, 300)
+	cfg.AgentOutput = clean(cfg.AgentOutput, 300)
 
 	normalizeAgent := func(agent *VoiceAgentCallConfig, fallback string) error {
 		agent.AppTitle = clean(agent.AppTitle, 120)
@@ -585,7 +604,6 @@ func mutateVoiceRuntime(dataDir string, fn func(*VoiceRuntimeState)) {
 // without launching a real window on the machine running the tests.
 var openGoogleVoiceWindow = platformOpenGoogleVoice
 var signOutGoogleVoice = platformSignOutGoogleVoice
-var openCodexVoiceWindow = platformOpenCodexVoice
 
 // beginVoiceOpen starts one attempt at putting the window on screen, and is the
 // only thing that clears the reason the last attempt failed.
@@ -867,22 +885,6 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 		activity.Add("info", "voice", "Signed out of Google Voice; the saved browser session was removed.", "", "", "")
 		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
 	}))
-	// /codex-open puts the built-in Codex voice window on screen so the user
-	// can sign in to ChatGPT there. It normally runs minimized next to the
-	// Google Voice window and never needs to be looked at.
-	mux.HandleFunc("/codex-open", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required", http.StatusMethodNotAllowed)
-			return
-		}
-		if err := openCodexVoiceWindow(dataDir); err != nil {
-			activity.Add("error", "voice", "Open Codex voice failed: "+truncate(err.Error(), 300), "", "", "")
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		activity.Add("info", "voice", "Codex voice window is open for ChatGPT sign-in.", "", "", "")
-		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
-	}))
 	mux.HandleFunc("/test-agent", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
@@ -927,22 +929,54 @@ func newVoiceBridge(dataDir string, mainConfig func() Config, activate, deactiva
 	return &voiceBridge{dataDir: dataDir, mainConfig: mainConfig, activate: activate, deactivate: deactivate}
 }
 
-// Bridge is the Google Voice page reporting the state of its audio link to the
-// Codex voice page: "connecting", "connected", or "failed". It is what the
-// Settings page shows as the audio-path status, and what decides whether an
-// answered call warns about silence.
-func (b *voiceBridge) Bridge(state string) {
-	state = strings.ToLower(strings.TrimSpace(state))
-	if len(state) > 40 {
-		state = state[:40]
-	}
-	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-		s.BridgeState = state
-	})
+// AudioSettings tells the page which endpoints Google Voice must use. They are
+// the automatically chosen cable ends -- nobody picks them -- and the page
+// caches this; it is not a per-element lookup.
+func (b *voiceBridge) AudioSettings() map[string]string {
+	plan := currentVoiceCablePlan(b.dataDir)
+	return map[string]string{"input": plan.GoogleVoiceInput, "output": plan.GoogleVoiceOutput, "ring": ""}
 }
 
-// Incoming answers one question: should the page click Answer? It records what
-// Google Voice displayed either way so a refused call is explainable.
+// Devices is the page reporting the machine's audio endpoints. It is what the
+// cable detection reads, and a change to it is the moment to re-point the
+// desktop app's per-app audio at the cables.
+func (b *voiceBridge) Devices(raw string) {
+	var devices []VoiceAudioDevice
+	if json.Unmarshal([]byte(raw), &devices) != nil {
+		return
+	}
+	if len(devices) > 80 {
+		devices = devices[:80]
+	}
+	named := devices[:0]
+	hidden := false
+	for _, d := range devices {
+		if d.Kind != "audioinput" && d.Kind != "audiooutput" {
+			continue
+		}
+		// An endpoint with no name is one the browser is hiding until the
+		// microphone permission is granted. Inventing "Microphone 2" here would
+		// feed placeholders into the cable detection and make the real problem
+		// invisible, so unnamed endpoints are counted, not renamed.
+		if strings.TrimSpace(d.Label) == "" {
+			hidden = true
+			continue
+		}
+		named = append(named, d)
+	}
+	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+		s.Devices = named
+		s.DeviceLabelsHidden = hidden && len(named) == 0
+		s.LastEvent = "audio-devices"
+	})
+	platformVoiceDevicesChanged(b.dataDir)
+}
+
+// Incoming answers one question: should the page click Answer? The answer is
+// the authorization decision and nothing else -- an authorized caller is
+// always answered, an unauthorized one never is; there is no separate
+// auto-answer mode to find. What Google Voice displayed is recorded either
+// way so a refused call is explainable.
 func (b *voiceBridge) Incoming(caller, label string) bool {
 	cfg := loadVoiceCallConfig(b.dataDir)
 	d := decideVoiceCall(cfg, b.mainConfig(), caller, label)
@@ -958,7 +992,7 @@ func (b *voiceBridge) Incoming(caller, label string) bool {
 			s.LastEvent = "blocked-call-ringing"
 		}
 	})
-	return d.Allowed && cfg.AutoAnswer
+	return d.Allowed
 }
 
 // Answered runs when a call is actually up, however it was answered. A call the
@@ -996,7 +1030,7 @@ func (b *voiceBridge) Answered(caller, label string) bool {
 		return false
 	}
 	b.setAgent(d.Agent)
-	audioProblem := voiceBridgeWarning(loadVoiceRuntime(b.dataDir), time.Now())
+	audioProblem := currentVoiceCablePlan(b.dataDir).Warning
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 		s.InCall = true
 		s.Caller = number
