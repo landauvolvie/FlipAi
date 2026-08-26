@@ -449,7 +449,7 @@ func parseRawGmailMessage(id string, data []byte, snippet string, internalDate t
 	if err != nil {
 		return GmailMessage{}, err
 	}
-	body, _ := extractMailBody(m.Header, m.Body)
+	body, attachments, _ := extractMailContent(m.Header, m.Body)
 	dec := new(mime.WordDecoder)
 	subject, _ := dec.DecodeHeader(m.Header.Get("Subject"))
 	from, _ := dec.DecodeHeader(m.Header.Get("From"))
@@ -468,5 +468,5 @@ func parseRawGmailMessage(id string, data []byte, snippet string, internalDate t
 		}
 		snippet = string(rr)
 	}
-	return GmailMessage{ID: id, Subject: subject, From: from, ReplyTo: replyTo, AuthenticationResults: authResults, Body: body, Snippet: snippet, InternalDate: internalDate}, nil
+	return GmailMessage{ID: id, Subject: subject, From: from, ReplyTo: replyTo, AuthenticationResults: authResults, Body: body, Snippet: snippet, InternalDate: internalDate, Attachments: attachments}, nil
 }

@@ -261,8 +261,8 @@ func parseGoogleVoiceBodyDetailed(m GmailMessage, allowed, requiredPhrase string
 		return "", sender, false, "sender is not on the allowed phone-number list"
 	}
 	cmd := extractGoogleVoiceCommand(m.Body)
-	if cmd == "" {
-		return "", sender, false, "Google Voice message contained no SMS command text"
+	if cmd == "" && !hasSupportedMailAttachments(m.Attachments) {
+		return "", sender, false, "Google Voice message contained no SMS command text or supported attachment"
 	}
 	return cmd, sender, true, ""
 }
@@ -605,7 +605,7 @@ func (b *Bridge) poll(ctx context.Context) {
 			b.event("warn", "security", "SMS ignored: this number is allowed for calls only", sender, "", id)
 			continue
 		}
-		rc, err := parseRemoteCommand(raw, b.cfg, senderAgent)
+		rc, err := parseRemoteCommandForMessage(raw, b.cfg, senderAgent, m)
 		if err != nil {
 			log.Printf("Rejected remote SMS %s from %s: %v", id, sender, err)
 			b.event("warn", "security", "SMS rejected: "+err.Error(), sender, "", id)
@@ -713,9 +713,21 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		go b.heartbeat(ctx, stop, m, rc)
 	}
 
+	var inbound []InboundAttachment
+	var cleanupInbound func()
+	var prepErr error
+	if !rc.Status && !rc.New && len(m.Attachments) > 0 {
+		inbound, cleanupInbound, prepErr = prepareInboundAttachments(m.Attachments)
+		if cleanupInbound != nil {
+			defer cleanupInbound()
+		}
+	}
+
 	var final string
 	var err error
-	if rc.Status {
+	if prepErr != nil {
+		err = prepErr
+	} else if rc.Status {
 		b.event("info", "agent", "STATUS command executing", rc.Sender, "", m.ID)
 		final = b.statusLine()
 	} else if rc.New {
@@ -734,10 +746,10 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		}
 	} else if rc.Agent == "A" {
 		b.event("info", "agent", "Claude command started", rc.Sender, "A", m.ID)
-		final, err = b.runClaude(ctx, rc.Text, rc.Sender)
+		final, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
 	} else {
 		b.event("info", "agent", "Codex command started", rc.Sender, "C", m.ID)
-		final, err = b.runCodex(ctx, rc.Text, rc.Sender)
+		final, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
 	}
 	if err != nil {
 		b.timedEvent("error", "agent", "Agent failed: "+truncate(err.Error(), 240), rc.Sender, rc.Agent, m.ID, time.Since(startedAt))
@@ -923,10 +935,14 @@ func (b *Bridge) runClaudeLive(ctx context.Context, prompt, sender, name string)
 }
 
 func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
+	return b.runClaudeWithAttachments(ctx, command, sender, nil)
+}
+
+func (b *Bridge) runClaudeWithAttachments(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
 	if b.claude == nil {
 		return "", errors.New("Claude Code unavailable")
 	}
-	prompt := b.composePrompt("A", command)
+	prompt := promptForInboundAttachments(b.composePrompt("A", command), attachments)
 	sid, name := b.claudeSession()
 
 	// Live mode first when it is configured. Anything that stops it short of a
@@ -1040,6 +1056,10 @@ func codexThreadIsGone(err error) bool {
 }
 
 func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
+	return b.runCodexWithAttachments(ctx, command, sender, nil)
+}
+
+func (b *Bridge) runCodexWithAttachments(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
 	// Set when a dead conversation forced a fresh one, so the reply can say so
 	// instead of silently losing the previous context.
 	recovered := false
@@ -1063,7 +1083,8 @@ func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, 
 		tid = b.state.CodexThreadID
 		b.mu.Unlock()
 	}
-	params := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt("C", command)}}}
+	prompt := promptForInboundAttachments(b.composePrompt("C", command), attachments)
+	params := map[string]any{"threadId": tid, "input": codexInputForInbound(prompt, attachments)}
 	if b.cfg.Codex.ApprovalPolicy != "" {
 		params["approvalPolicy"] = b.cfg.Codex.ApprovalPolicy
 	}

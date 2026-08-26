@@ -16,7 +16,7 @@ import (
 const (
 	maxInboundAttachmentBytes = 8 << 20
 	maxInboundAttachmentCount = 6
-	maxInboundTextPartBytes    = 2 << 20
+	maxInboundTextPartBytes   = 2 << 20
 )
 
 type MailAttachment struct {
