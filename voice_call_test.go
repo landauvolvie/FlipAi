@@ -182,7 +182,15 @@ func TestVoiceBlockedCallExplainsItself(t *testing.T) {
 	}
 }
 
-func TestVoiceAudioBridgeRejectsSilentWiring(t *testing.T) {
+// Wiring the audio wrongly is reported, never refused.
+//
+// It used to be refused while saving, and that one decision was enough to make
+// phone calling unreachable: the four endpoint pickers start out holding the
+// name of whatever Windows calls the default device, so all four hold the same
+// name on a fresh PC, the save came back "these cannot share one endpoint" --
+// and the switch that turns calling on travelled in the same save. Switching
+// calling on therefore never stuck, and the status went on saying Off.
+func TestVoiceAudioBridgeWarnsInsteadOfRefusingToSave(t *testing.T) {
 	base := func() VoiceCallConfig {
 		cfg := defaultVoiceCallConfig()
 		cfg.Enabled = true
@@ -196,11 +204,13 @@ func TestVoiceAudioBridgeRejectsSilentWiring(t *testing.T) {
 	if _, err := normalizeVoiceCallConfig(base(), true); err != nil {
 		t.Fatalf("a correctly wired pair of cables was rejected: %v", err)
 	}
+	if w := voiceAudioBridgeWarning(base()); w != "" {
+		t.Errorf("a correctly wired pair of cables warned: %s", w)
+	}
+	if !audioBridgeReady(base()) {
+		t.Error("a fully wired configuration must report a working audio path")
+	}
 
-	// Absent endpoints must not stop the feature being switched on: the switch
-	// that keeps Google Voice running is the same one every call is checked
-	// against, so refusing to save it made calling unreachable on a PC with no
-	// cable driver. The call is answered and says it has no audio path instead.
 	missing := base()
 	missing.GoogleVoiceOutput, missing.GoogleVoiceInput = "", ""
 	if _, err := normalizeVoiceCallConfig(missing, true); err != nil {
@@ -209,20 +219,45 @@ func TestVoiceAudioBridgeRejectsSilentWiring(t *testing.T) {
 	if audioBridgeReady(missing) {
 		t.Error("a configuration with no endpoints must not report a working audio path")
 	}
-	if !audioBridgeReady(base()) {
-		t.Error("a fully wired configuration must report a working audio path")
+	if !strings.Contains(voiceAudioBridgeWarning(missing), "No audio path") {
+		t.Errorf("a missing audio path must be reported, got %q", voiceAudioBridgeWarning(missing))
 	}
 
+	// The case that actually blocked people: every picker holding the same
+	// default device. It saves, it warns, and calling stays on.
 	shared := base()
 	shared.AgentOutput = shared.GoogleVoiceOutput
-	if _, err := normalizeVoiceCallConfig(shared, true); err == nil {
-		t.Error("both sides sharing one speaker endpoint should be refused")
+	saved, err := normalizeVoiceCallConfig(shared, true)
+	if err != nil {
+		t.Fatalf("a contradictory audio path refused the save: %v", err)
+	}
+	if !saved.Enabled {
+		t.Fatal("calling was switched off by an audio problem")
+	}
+	if !strings.Contains(voiceAudioBridgeWarning(shared), "same speaker endpoint") {
+		t.Errorf("sharing one speaker must be reported, got %q", voiceAudioBridgeWarning(shared))
 	}
 
 	sharedMic := base()
 	sharedMic.AgentInput = sharedMic.GoogleVoiceInput
-	if _, err := normalizeVoiceCallConfig(sharedMic, true); err == nil {
-		t.Error("both sides sharing one microphone endpoint should be refused")
+	if _, err := normalizeVoiceCallConfig(sharedMic, true); err != nil {
+		t.Errorf("a contradictory microphone path refused the save: %v", err)
+	}
+	if !strings.Contains(voiceAudioBridgeWarning(sharedMic), "same microphone endpoint") {
+		t.Errorf("sharing one microphone must be reported, got %q", voiceAudioBridgeWarning(sharedMic))
+	}
+
+	// And the desktop page is handed the same sentence it has to show.
+	dir := t.TempDir()
+	if err := saveVoiceCallConfig(dir, shared); err != nil {
+		t.Fatalf("saving a contradictory audio path failed: %v", err)
+	}
+	snap := voiceSnapshot(dir, func() Config { return defaultConfig(dir) })
+	if !snap.Config.Enabled {
+		t.Error("the enabled switch did not survive a save with a bad audio path")
+	}
+	if !strings.Contains(snap.AudioWarning, "same speaker endpoint") {
+		t.Errorf("the snapshot did not carry the audio warning: %q", snap.AudioWarning)
 	}
 }
 
@@ -481,7 +516,7 @@ func TestAnsweredCallSaysWhenItHasNoAudioPath(t *testing.T) {
 	if st.LastEvent != "call-bridged" {
 		t.Fatalf("call was not bridged: %+v", st)
 	}
-	if !strings.Contains(st.LastError, "no audio path") {
+	if !strings.Contains(st.LastError, "No audio path is set up") {
 		t.Errorf("a silent call must say so, got %q", st.LastError)
 	}
 }

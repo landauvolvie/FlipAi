@@ -67,7 +67,9 @@ func TestDesktopPagesRender(t *testing.T) {
 	a := newTestApp(t)
 	pages := map[string][]string{
 		"/":            {"Bridge Google Voice SMS commands", "Recent activity", "Pause FlipAi"},
-		"/connections": {"Gmail / Google Voice", "End-to-end check", "Test message flow"},
+		// The end-to-end check card was removed: it restated status the page
+		// already shows and pointed at a Phone page that no longer exists.
+		"/connections": {"Gmail / Google Voice"},
 		// Everything an agent owns is on its own pane now: who may reach it, its
 		// code, its instruction and how it replies.
 		"/agents":   {"Codex", "Claude", "Executable path", "Allowed phone numbers", "Security code", "Replies from"},

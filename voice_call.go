@@ -72,6 +72,10 @@ type VoiceRuntimeState struct {
 	Agent       string             `json:"agent,omitempty"`
 	Blocked     string             `json:"blocked,omitempty"`
 	Devices     []VoiceAudioDevice `json:"devices,omitempty"`
+	// Docked is set while the Google Voice window is standing inside the FlipAi
+	// window. The page uses it to know whether the panel it reserved is really
+	// showing a browser or whether it should explain why it is empty.
+	Docked bool `json:"docked,omitempty"`
 	// DeviceLabelsHidden records that the browser returned endpoints with no
 	// names, which happens until the microphone permission is actually granted.
 	// Without it the settings page looks merely empty rather than blocked.
@@ -103,6 +107,9 @@ type voiceControlSnapshot struct {
 	// Google Voice window cannot be created, and it is worth saying so before
 	// the user clicks Open rather than after.
 	WebView2 string `json:"webView2,omitempty"`
+	// AudioWarning is what is wrong with the sound path, in the words the
+	// Connections page shows. Empty means a call would carry audio both ways.
+	AudioWarning string `json:"audioWarning,omitempty"`
 	// CallAgents names the agents a call can currently be handed to. It is
 	// derived rather than stored: an agent is on calls because somebody gave it
 	// a number that may call. Showing it is how the desktop UI can say "nothing
@@ -113,9 +120,10 @@ type voiceControlSnapshot struct {
 func voiceSnapshot(dataDir string, mainConfig func() Config) voiceControlSnapshot {
 	vc := loadVoiceCallConfig(dataDir)
 	snap := voiceControlSnapshot{
-		Config:   vc,
-		Runtime:  loadVoiceRuntime(dataDir),
-		WebView2: platformWebView2Runtime(),
+		Config:       vc,
+		Runtime:      loadVoiceRuntime(dataDir),
+		WebView2:     platformWebView2Runtime(),
+		AudioWarning: voiceAudioBridgeWarning(vc),
 	}
 	if mainConfig != nil {
 		cfg := mainConfig()
@@ -150,6 +158,95 @@ func audioBridgeReady(cfg VoiceCallConfig) bool {
 func voiceConfigPath(dataDir string) string  { return filepath.Join(dataDir, "voice-call.json") }
 func voiceRuntimePath(dataDir string) string { return filepath.Join(dataDir, "voice-call-state.json") }
 func voiceProfilePath(dataDir string) string { return filepath.Join(dataDir, "google-voice-webview") }
+func voiceDockPath(dataDir string) string    { return filepath.Join(dataDir, "voice-dock.json") }
+
+// VoiceDockRequest is where, on screen, the FlipAi window wants the Google
+// Voice window to sit.
+//
+// Google Voice must keep running with FlipAi closed, so it cannot be a child of
+// the FlipAi window; it lives in its own process with its own lifetime. But a
+// second window popping up in front of the app is exactly what nobody wants to
+// see. So the Connections page measures the empty panel it has reserved,
+// reports that rectangle here several times a second, and the Google Voice
+// window is moved -- borderless -- onto it. The result reads as one app with
+// Google Voice embedded beside it, while remaining a window FlipAi can keep
+// alive on its own.
+//
+// The rectangle is in physical screen pixels, which is what Windows positions
+// windows in; the page converts from CSS pixels using its device pixel ratio.
+type VoiceDockRequest struct {
+	// Visible is the page saying it currently wants the panel on screen.
+	Visible bool `json:"visible"`
+	X       int  `json:"x"`
+	Y       int  `json:"y"`
+	Width   int  `json:"width"`
+	Height  int  `json:"height"`
+	// At is when the page last said so. A page that has navigated away, been
+	// hidden, or closed stops saying it, and the dock expires by itself rather
+	// than leaving a stranded window behind.
+	At time.Time `json:"at"`
+}
+
+// voiceDockMinSize is the smallest panel worth docking. Anything smaller is a
+// page mid-layout, not a place to put a browser.
+const voiceDockMinSize = 120
+
+// voiceDockTTL is how long one report keeps the panel docked. The page repeats
+// itself about four times a second, so this is several missed reports -- long
+// enough to survive a slow frame, short enough that closing the FlipAi window
+// puts Google Voice away almost immediately.
+const voiceDockTTL = 2500 * time.Millisecond
+
+// Active reports whether this request should currently place a window.
+func (d VoiceDockRequest) Active(now time.Time) bool {
+	if !d.Visible || d.Width < voiceDockMinSize || d.Height < voiceDockMinSize {
+		return false
+	}
+	if d.At.IsZero() {
+		return false
+	}
+	return now.Sub(d.At) >= 0 && now.Sub(d.At) < voiceDockTTL
+}
+
+func normalizeVoiceDock(d VoiceDockRequest, now time.Time) VoiceDockRequest {
+	clamp := func(v, lo, hi int) int {
+		if v < lo {
+			return lo
+		}
+		if v > hi {
+			return hi
+		}
+		return v
+	}
+	// A rectangle is only ever a position on this desktop. Absurd values are
+	// clamped rather than refused so a stray layout frame cannot break docking.
+	d.X = clamp(d.X, -32000, 32000)
+	d.Y = clamp(d.Y, -32000, 32000)
+	d.Width = clamp(d.Width, 0, 32000)
+	d.Height = clamp(d.Height, 0, 32000)
+	d.At = now
+	return d
+}
+
+func saveVoiceDock(dataDir string, d VoiceDockRequest) error {
+	b, err := json.Marshal(d)
+	if err != nil {
+		return err
+	}
+	tmp := voiceDockPath(dataDir) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, voiceDockPath(dataDir))
+}
+
+func loadVoiceDock(dataDir string) VoiceDockRequest {
+	var d VoiceDockRequest
+	if b, err := os.ReadFile(voiceDockPath(dataDir)); err == nil {
+		_ = json.Unmarshal(b, &d)
+	}
+	return d
+}
 
 func loadVoiceCallConfig(dataDir string) VoiceCallConfig {
 	cfg := defaultVoiceCallConfig()
@@ -201,36 +298,41 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 	// refusing the save over it would keep the window from starting itself --
 	// which is the one thing this switch exists to do. A call that reaches no
 	// agent says so on the call, and the desktop UI says so before that.
-	if strict && cfg.Enabled {
-		if err := validateVoiceAudioBridge(cfg); err != nil {
-			return cfg, err
-		}
-	}
+	// Nothing about the audio endpoints is allowed to refuse a save. See
+	// voiceAudioBridgeWarning for why: the switch that keeps Google Voice
+	// running travels in the same save, and a refused save meant calling could
+	// never be turned on at all.
+	_ = strict
 	return cfg, nil
 }
 
-// validateVoiceAudioBridge rejects the wiring mistakes that leave a call
-// connected but silent. The conversation needs two separate virtual cables:
-// one carrying the caller to the AI app, one carrying the AI app back to the
-// caller. Pointing both ends of a direction at the same endpoint is the
-// classic setup error, and it produces a call in which nobody hears anything.
-// validateVoiceAudioBridge rejects wiring that is wrong, not wiring that is
-// merely absent.
+// voiceAudioBridgeWarning describes wiring that would leave a call connected
+// but silent. It is a warning and never a refusal.
 //
-// It used to refuse to save unless both virtual endpoints were chosen, which
-// made the whole feature unreachable on a PC with no cable driver installed:
-// the switch that keeps Google Voice running -- and the switch every call is
-// checked against -- could not be turned on at all. Missing endpoints are now
-// reported on the call itself, which is answered either way; only a
-// contradiction is refused.
-func validateVoiceAudioBridge(cfg VoiceCallConfig) error {
+// This used to be a hard validation error raised while saving. That single
+// decision made the whole feature unreachable on an ordinary PC: the four
+// endpoint pickers start out holding whatever Windows calls the default
+// device, so all four hold the same name, the save was refused as
+// "contradictory wiring" -- and the switch that keeps Google Voice running was
+// in the same save, so turning calling on silently never stuck. The status
+// said Off no matter how many times it was switched on.
+//
+// Nothing about a wrong or missing audio path should stop FlipAi answering the
+// phone. The conversation needs two separate virtual cables, one carrying the
+// caller to the AI app and one carrying the AI app back to the caller; when
+// that is not what the endpoints say, the call still connects and the page and
+// the call state both say what is wrong with the sound.
+func voiceAudioBridgeWarning(cfg VoiceCallConfig) string {
 	if cfg.AgentOutput != "" && strings.EqualFold(cfg.AgentOutput, cfg.GoogleVoiceOutput) {
-		return errors.New("Google Voice and the AI app cannot share one speaker endpoint; each direction of the conversation needs its own virtual cable")
+		return "Google Voice and the AI app are pointed at the same speaker endpoint, so the agent would hear itself instead of the caller. Each direction of the conversation needs its own virtual cable."
 	}
 	if cfg.AgentInput != "" && strings.EqualFold(cfg.AgentInput, cfg.GoogleVoiceInput) {
-		return errors.New("Google Voice and the AI app cannot share one microphone endpoint; each direction of the conversation needs its own virtual cable")
+		return "Google Voice and the AI app are pointed at the same microphone endpoint, so the caller would hear themselves instead of the agent. Each direction of the conversation needs its own virtual cable."
 	}
-	return nil
+	if !audioBridgeReady(cfg) {
+		return "No audio path is set up yet: choose the Google Voice microphone and speaker below. Until then a call is answered but nobody can hear anything."
+	}
+	return ""
 }
 
 func saveVoiceCallConfig(dataDir string, cfg VoiceCallConfig) error {
@@ -579,11 +681,74 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 		platformVoiceConfigChanged(dataDir, loadVoiceCallConfig(dataDir))
 		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
 	}))
+	// /enable exists so the one switch that decides whether FlipAi answers the
+	// phone can never be held up by anything else on the page. It writes that
+	// field and nothing else, so a half-filled audio section, a device that has
+	// gone away, or a typo in a window title cannot stop calling being turned
+	// on -- which is precisely what used to happen when the switch travelled
+	// inside the whole-card save.
+	mux.HandleFunc("/enable", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+			http.Error(w, "Could not read the setting: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		cfg := loadVoiceCallConfig(dataDir)
+		cfg.Enabled = body.Enabled
+		if err := saveVoiceCallConfig(dataDir, cfg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		saved := loadVoiceCallConfig(dataDir)
+		if saved.Enabled {
+			activity.Add("info", "voice", "Google Voice calling turned on; the window will be kept running.", "", "", "")
+		} else {
+			activity.Add("info", "voice", "Google Voice calling turned off.", "", "", "")
+		}
+		platformVoiceConfigChanged(dataDir, saved)
+		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
+	}))
+	// /dock is the FlipAi window saying where on screen it has reserved room
+	// for Google Voice. See VoiceDockRequest: this is what puts the browser
+	// inside the app instead of in a window of its own.
+	mux.HandleFunc("/dock", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var d VoiceDockRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&d); err != nil {
+			http.Error(w, "Could not read the panel position: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		d = normalizeVoiceDock(d, time.Now())
+		if err := saveVoiceDock(dataDir, d); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// A page asking for the panel is a page that wants the window running.
+		// Starting it here is what makes the embedded view appear on its own,
+		// with no Open button to find first.
+		if d.Active(time.Now()) && loadVoiceCallConfig(dataDir).Enabled {
+			platformEnsureGoogleVoice(dataDir)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	mux.HandleFunc("/open", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
 			return
 		}
+		// Popping out is also the end of docking: the window has to stop
+		// standing inside the FlipAi window before it can be a window of its
+		// own. The page stops reporting a panel at the same moment.
+		_ = saveVoiceDock(dataDir, VoiceDockRequest{At: time.Now()})
 		if err := openGoogleVoiceWindow(dataDir, true); err != nil {
 			activity.Add("error", "voice", "Open Google Voice failed: "+truncate(err.Error(), 300), "", "", "")
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -701,7 +866,7 @@ func (b *voiceBridge) Answered(caller, label string) bool {
 		return false
 	}
 	b.setAgent(d.Agent)
-	silent := !audioBridgeReady(cfg)
+	audioProblem := voiceAudioBridgeWarning(cfg)
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 		s.InCall = true
 		s.Caller = number
@@ -709,10 +874,10 @@ func (b *voiceBridge) Answered(caller, label string) bool {
 		s.Agent = d.Agent
 		s.Blocked = ""
 		s.LastEvent = "call-bridged"
-		if silent {
+		if audioProblem != "" {
 			// The call is up and the agent is listening, but nothing carries the
 			// sound between them yet.
-			s.LastError = "The call was answered but no audio path is set up: choose the Google Voice microphone and speaker under Connections, and install a virtual audio cable if you have not."
+			s.LastError = "The call was answered but the audio path is not usable. " + audioProblem
 		} else {
 			s.LastError = ""
 		}
