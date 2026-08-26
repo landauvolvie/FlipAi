@@ -155,3 +155,53 @@ func TestDockEndpointIsLocalOnly(t *testing.T) {
 		t.Error("a refused request still moved the window")
 	}
 }
+
+// The card sends the whole of itself when any field changes, and that payload
+// carries whatever "enabled" was when the card was last read. If it could write
+// that field, a save already in flight when the switch is touched would land
+// afterwards and switch calling back off -- the exact symptom the switch was
+// separated out to end. Only /enable may write it.
+func TestSavingTheCardCannotTurnCallingOffBehindTheSwitch(t *testing.T) {
+	dir := t.TempDir()
+	srv := voiceEndpoint(t, dir)
+
+	if code, body := voicePost(t, srv, "/enable", `{"enabled":true}`); code != http.StatusOK {
+		t.Fatalf("/enable returned %d: %s", code, body)
+	}
+
+	// A card assembled before the switch was touched: it still says off.
+	stale := defaultVoiceCallConfig()
+	stale.Enabled = false
+	stale.GoogleVoiceInput = "Cable B Output (capture)"
+	raw, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body := voicePost(t, srv, "/config", string(raw))
+	if code != http.StatusOK {
+		t.Fatalf("/config returned %d: %s", code, body)
+	}
+
+	saved := loadVoiceCallConfig(dir)
+	if !saved.Enabled {
+		t.Fatal("a stale card save switched calling back off")
+	}
+	if saved.GoogleVoiceInput != "Cable B Output (capture)" {
+		t.Errorf("the rest of the card was not saved: %+v", saved.GoogleVoiceInput)
+	}
+	var snap voiceControlSnapshot
+	if err := json.Unmarshal([]byte(body), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if !snap.Config.Enabled {
+		t.Error("the answer to the card save reported calling as off")
+	}
+
+	// And turning it off still works, through the switch.
+	if code, body := voicePost(t, srv, "/enable", `{"enabled":false}`); code != http.StatusOK {
+		t.Fatalf("/enable off returned %d: %s", code, body)
+	}
+	if loadVoiceCallConfig(dir).Enabled {
+		t.Error("the switch could not turn calling off")
+	}
+}

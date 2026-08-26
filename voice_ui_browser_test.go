@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -77,6 +78,27 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	go func() { _ = pageSrv.Serve(pageLn) }()
 	defer pageSrv.Close()
 
+	// The panel position is reported while the page is open and withdrawn when
+	// it leaves, so both facts have to be observed while the driver runs rather
+	// than read off the end state.
+	var sawPanel atomic.Bool
+	watching := make(chan struct{})
+	defer close(watching)
+	go func() {
+		t := time.NewTicker(100 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-watching:
+				return
+			case <-t.C:
+				if loadVoiceDock(dir).Active(time.Now()) {
+					sawPanel.Store(true)
+				}
+			}
+		}
+	}()
+
 	cmd := exec.Command("node", filepath.Join("testdata", "voiceui", "drive.mjs"))
 	cmd.Env = append(scrubProxyEnv(os.Environ()), "FLIPAI_UI_PAGE=http://127.0.0.1:8765/connections")
 	var stdout, stderr strings.Builder
@@ -110,7 +132,7 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	if len(report.Errors) > 0 {
 		t.Fatalf("the card raised errors in the browser: %v", report.Errors)
 	}
-	for _, want := range []string{"card-rendered", "switch-applied", "dock-reported", "field-autosaved", "switch-reverted"} {
+	for _, want := range []string{"card-rendered", "switch-applied", "dock-reported", "field-autosaved", "switch-reverted", "pending-save-flushed"} {
 		found := false
 		for _, got := range report.Steps {
 			if got == want {
@@ -142,8 +164,16 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	if saved.DefaultAgent != "A" {
 		t.Errorf("a field changed on the card was not written: %+v", saved.DefaultAgent)
 	}
-	dock := loadVoiceDock(dir)
-	if !dock.Visible || dock.Width < voiceDockMinSize || dock.Height < voiceDockMinSize {
-		t.Errorf("the page never reported where to put the Google Voice window: %+v", dock)
+	// A change made and navigated away from within the save debounce still has
+	// to land, or "changes save as you make them" is not true.
+	if saved.Codex.AppTitle != "Saved On The Way Out" {
+		t.Errorf("a change made just before leaving the page was lost: %q", saved.Codex.AppTitle)
+	}
+
+	if !sawPanel.Load() {
+		t.Error("the page never reported where to put the Google Voice window")
+	}
+	if dock := loadVoiceDock(dir); dock.Active(time.Now()) {
+		t.Errorf("the page left the panel docked after navigating away: %+v", dock)
 	}
 }

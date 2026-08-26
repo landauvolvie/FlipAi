@@ -3,6 +3,7 @@
 package main
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -25,5 +26,26 @@ func TestVoiceUIShowsServiceFailureInsteadOfDisappearing(t *testing.T) {
 	}
 	if !strings.Contains(voiceVisibilityFallbackScript, "Google Voice calling is installed") {
 		t.Fatal("desktop UI needs a fallback visibility warning")
+	}
+}
+
+// The desktop shell warns, after four seconds, that the voice service is not
+// responding when no card has appeared. It looks for the card by id, so the id
+// it looks for has to be the id the card is given -- when the card was renamed
+// and this was not, every working Connections page announced a broken voice
+// service to a user whose voice service was fine.
+func TestTheNoServiceWarningLooksForTheCardThatIsActuallyBuilt(t *testing.T) {
+	ids := regexp.MustCompile(`#voice-call-[a-z-]+`).FindAllString(voiceVisibilityFallbackScript, -1)
+	if len(ids) == 0 {
+		t.Fatal("the fallback warning no longer looks for a card at all")
+	}
+	for _, id := range ids {
+		// The banner's own id is the one thing it may name without building it.
+		if id == "#voice-call-unavailable" {
+			continue
+		}
+		if !strings.Contains(voiceDesktopInitScript, "card.id='"+strings.TrimPrefix(id, "#")+"'") {
+			t.Errorf("the fallback waits for %s, which the voice card script never creates", id)
+		}
 	}
 }

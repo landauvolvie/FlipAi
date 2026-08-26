@@ -366,6 +366,25 @@ func voiceAudioBridgeWarning(cfg VoiceCallConfig) string {
 	return ""
 }
 
+// voiceConfigMu serializes read-modify-write of the voice configuration. Two
+// endpoints change it -- the switch and the rest of the card -- and both rewrite
+// the whole file, so without this the later read of one could overwrite the
+// write of the other.
+var voiceConfigMu sync.Mutex
+
+// updateVoiceCallConfig applies one change to the stored configuration and
+// returns what was saved.
+func updateVoiceCallConfig(dataDir string, fn func(*VoiceCallConfig)) (VoiceCallConfig, error) {
+	voiceConfigMu.Lock()
+	defer voiceConfigMu.Unlock()
+	cfg := loadVoiceCallConfig(dataDir)
+	fn(&cfg)
+	if err := saveVoiceCallConfig(dataDir, cfg); err != nil {
+		return cfg, err
+	}
+	return loadVoiceCallConfig(dataDir), nil
+}
+
 func saveVoiceCallConfig(dataDir string, cfg VoiceCallConfig) error {
 	var err error
 	cfg, err = normalizeVoiceCallConfig(cfg, true)
@@ -717,16 +736,26 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
 			return
 		}
-		var cfg VoiceCallConfig
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&cfg); err != nil {
+		var sent VoiceCallConfig
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&sent); err != nil {
 			http.Error(w, "Could not read voice settings: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := saveVoiceCallConfig(dataDir, cfg); err != nil {
+		// Whether FlipAi answers the phone belongs to /enable and to nothing
+		// else. The page sends the whole card, and a card assembled a moment
+		// before the switch was touched still carries the old value; letting
+		// that through would switch calling back off behind the user -- the
+		// very symptom this card exists to end.
+		saved, err := updateVoiceCallConfig(dataDir, func(cfg *VoiceCallConfig) {
+			enabled := cfg.Enabled
+			*cfg = sent
+			cfg.Enabled = enabled
+		})
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		platformVoiceConfigChanged(dataDir, loadVoiceCallConfig(dataDir))
+		platformVoiceConfigChanged(dataDir, saved)
 		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
 	}))
 	// /enable exists so the one switch that decides whether FlipAi answers the
@@ -747,13 +776,13 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 			http.Error(w, "Could not read the setting: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		cfg := loadVoiceCallConfig(dataDir)
-		cfg.Enabled = body.Enabled
-		if err := saveVoiceCallConfig(dataDir, cfg); err != nil {
+		saved, err := updateVoiceCallConfig(dataDir, func(cfg *VoiceCallConfig) {
+			cfg.Enabled = body.Enabled
+		})
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		saved := loadVoiceCallConfig(dataDir)
 		if saved.Enabled {
 			activity.Add("info", "voice", "Google Voice calling turned on; the window will be kept running.", "", "", "")
 		} else {

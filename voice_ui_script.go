@@ -124,18 +124,34 @@ const voiceDesktopInitScript = `
     lastDockJSON=raw;
     try{ await post('/dock',body); }catch(_){}
   }
+  // Leaving the page is not popping the window out: the panel is withdrawn,
+  // but nothing about this page's next visit is decided here.
+  function leavingPage(){ flushSave(); withdrawPanel(); }
   function startDockReporting(){
     if(dockTimer) return;
     dockTimer=setInterval(()=>reportDock(true),250);
-    addEventListener('pagehide',stopDockReporting);
-    addEventListener('beforeunload',stopDockReporting);
-    document.addEventListener('visibilitychange',()=>{ if(document.hidden) reportDock(true); });
+    addEventListener('pagehide',leavingPage);
+    addEventListener('beforeunload',leavingPage);
+    document.addEventListener('visibilitychange',()=>{ if(document.hidden){ flushSave(); reportDock(true); } });
+  }
+  // withdrawPanel takes the Google Voice window off this page. Leaving the page
+  // is the one moment a plain fetch cannot be relied on -- the navigation
+  // cancels it -- and the panel would then stand over the app until its own
+  // timeout expired, which is a visible second of Google Voice sitting on top
+  // of whatever the user opened next. A beacon is handed to the browser to
+  // deliver instead, exactly as a pending save is.
+  function withdrawPanel(){
+    if(dockTimer){clearInterval(dockTimer);dockTimer=0;}
+    lastDockJSON='';
+    const body=JSON.stringify({visible:false,x:0,y:0,width:0,height:0});
+    try{
+      if(navigator.sendBeacon && navigator.sendBeacon(VOICE+'/dock',new Blob([body],{type:'text/plain'}))) return;
+    }catch(_){}
+    post('/dock',{visible:false,x:0,y:0,width:0,height:0}).catch(()=>{});
   }
   function stopDockReporting(){
-    if(dockTimer){clearInterval(dockTimer);dockTimer=0;}
     poppedOut=true;
-    lastDockJSON='';
-    post('/dock',{visible:false,x:0,y:0,width:0,height:0}).catch(()=>{});
+    withdrawPanel();
   }
 
   function embedStyle(){
@@ -158,6 +174,7 @@ const voiceDesktopInitScript = `
   /* ---------- saving ---------- */
 
   let saveTimer=0;
+  let savePending=false;
   function collectConfig(){
     const next=JSON.parse(JSON.stringify(snapshot.config));
     next.autoAnswer=checked('vc-auto');
@@ -178,6 +195,7 @@ const voiceDesktopInitScript = `
   }
   function markSaving(text){ const s=q('#vc-saved'); if(s){ s.textContent=text; } }
   async function saveNow(){
+    clearTimeout(saveTimer); saveTimer=0; savePending=false;
     try{
       snapshot=await post('/config',collectConfig());
       markSaving('Saved');
@@ -186,8 +204,27 @@ const voiceDesktopInitScript = `
   }
   function scheduleSave(){
     markSaving('Saving...');
+    savePending=true;
     clearTimeout(saveTimer);
     saveTimer=setTimeout(saveNow,500);
+  }
+  // A change made and then navigated away from within the debounce would be
+  // lost, silently, while the card promises that changes save as they are made.
+  // The page is going away here, so fetch cannot be relied on to finish: a
+  // beacon is handed to the browser to deliver instead. It is sent as plain
+  // text on purpose, which keeps it a request the browser sends immediately
+  // rather than one it must ask permission for first; the endpoint reads the
+  // body as JSON either way.
+  function flushSave(){
+    if(!savePending) return;
+    savePending=false;
+    clearTimeout(saveTimer); saveTimer=0;
+    let body;
+    try{ body=JSON.stringify(collectConfig()); }catch(_){ return; }
+    try{
+      if(navigator.sendBeacon && navigator.sendBeacon(VOICE+'/config',new Blob([body],{type:'text/plain'}))) return;
+    }catch(_){}
+    try{ fetch(VOICE+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:body,keepalive:true}); }catch(_){}
   }
   function autosave(node){
     node.addEventListener('change',scheduleSave);
