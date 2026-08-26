@@ -238,6 +238,27 @@ func normalizeVoiceDock(d VoiceDockRequest, now time.Time) VoiceDockRequest {
 	return d
 }
 
+// dockWriter keeps the panel position from becoming a stream of identical
+// writes. The page repeats its rectangle four times a second so the dock never
+// expires under it; a rectangle that has not moved only has to be written often
+// enough to stay current.
+type dockWriter struct {
+	mu   sync.Mutex
+	last VoiceDockRequest
+}
+
+func (d *dockWriter) shouldWrite(next VoiceDockRequest) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	same := d.last.Visible == next.Visible && d.last.X == next.X && d.last.Y == next.Y &&
+		d.last.Width == next.Width && d.last.Height == next.Height && d.last.PopOut == next.PopOut
+	if same && next.At.Sub(d.last.At) < voiceDockTTL/3 {
+		return false
+	}
+	d.last = next
+	return true
+}
+
 func saveVoiceDock(dataDir string, d VoiceDockRequest) error {
 	b, err := json.Marshal(d)
 	if err != nil {
@@ -644,6 +665,7 @@ func startVoiceControlServer(dataDir, mainConfigPath, statePath string) {
 // the button that started it, and that is only worth anything if it is tested.
 func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, activity *ActivityLog) http.Handler {
 	mux := http.NewServeMux()
+	dockWrites := &dockWriter{}
 	withCORS := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
@@ -738,9 +760,11 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 			return
 		}
 		d = normalizeVoiceDock(d, time.Now())
-		if err := saveVoiceDock(dataDir, d); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if dockWrites.shouldWrite(d) {
+			if err := saveVoiceDock(dataDir, d); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		// A page asking for the panel is a page that wants the window running.
 		// Starting it here is what makes the embedded view appear on its own,
