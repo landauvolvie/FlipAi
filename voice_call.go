@@ -27,12 +27,13 @@ type VoiceCallConfig struct {
 	AutoAnswer   bool   `json:"autoAnswer"`
 	DefaultAgent string `json:"defaultAgent"` // C = ChatGPT/Codex, A = Claude Desktop
 
-	GoogleVoiceURL    string `json:"googleVoiceUrl"`
-	GoogleVoiceInput  string `json:"googleVoiceInput"`  // virtual capture endpoint Google Voice uses as its mic
-	GoogleVoiceOutput string `json:"googleVoiceOutput"` // virtual render endpoint Google Voice uses as its speaker
-	AgentInput        string `json:"agentInput"`        // paired virtual capture endpoint selected in the AI app
-	AgentOutput       string `json:"agentOutput"`       // paired virtual render endpoint selected in the AI app
-	RingOutput        string `json:"ringOutput,omitempty"`
+	GoogleVoiceURL string `json:"googleVoiceUrl"`
+
+	// The audio path needs no configuration any more. Calls are bridged to the
+	// built-in Codex voice window over a WebRTC connection between FlipAi's own
+	// two browser pages; there are no virtual cables, no endpoint pickers, and
+	// nothing for the user to select. The old cable fields simply no longer
+	// exist, and a voice-call.json that still carries them parses fine.
 
 	Codex  VoiceAgentCallConfig `json:"codex"`
 	Claude VoiceAgentCallConfig `json:"claude"`
@@ -53,12 +54,6 @@ type VoiceAgentCallConfig struct {
 	AllowedLabels  string `json:"allowedLabels,omitempty"`
 }
 
-type VoiceAudioDevice struct {
-	Kind     string `json:"kind"` // audioinput or audiooutput
-	DeviceID string `json:"deviceId,omitempty"`
-	Label    string `json:"label"`
-}
-
 type VoiceRuntimeState struct {
 	BrowserRunning bool   `json:"browserRunning"`
 	SignedIn       bool   `json:"signedIn"`
@@ -68,10 +63,15 @@ type VoiceRuntimeState struct {
 	// CallerLabel is the raw caller ID text Google Voice displayed. It is kept
 	// so a blocked call can say what FlipAi actually saw instead of leaving the
 	// user guessing why nothing happened.
-	CallerLabel string             `json:"callerLabel,omitempty"`
-	Agent       string             `json:"agent,omitempty"`
-	Blocked     string             `json:"blocked,omitempty"`
-	Devices     []VoiceAudioDevice `json:"devices,omitempty"`
+	CallerLabel string `json:"callerLabel,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Blocked     string `json:"blocked,omitempty"`
+	// BridgeState is what the Google Voice page reports about its audio link
+	// to the Codex voice page: "", "connecting", "connected" or "failed". It is
+	// the whole answer to "would a call carry sound right now".
+	BridgeState string `json:"bridgeState,omitempty"`
+	// CodexVoice is what the built-in Codex voice page last said about itself.
+	CodexVoice VoiceAgentRuntime `json:"codexVoice,omitempty"`
 	// RenderMode is how Google Voice is currently being drawn, and
 	// RenderAttempt is where in the list of ways to draw it FlipAi has got to.
 	// A window that comes up black is a graphics problem rather than a startup
@@ -85,13 +85,9 @@ type VoiceRuntimeState struct {
 	// Docked is set while the Google Voice window is standing inside the FlipAi
 	// window. The page uses it to know whether the panel it reserved is really
 	// showing a browser or whether it should explain why it is empty.
-	Docked bool `json:"docked,omitempty"`
-	// DeviceLabelsHidden records that the browser returned endpoints with no
-	// names, which happens until the microphone permission is actually granted.
-	// Without it the settings page looks merely empty rather than blocked.
-	DeviceLabelsHidden bool   `json:"deviceLabelsHidden,omitempty"`
-	LastError          string `json:"lastError,omitempty"`
-	LastEvent          string `json:"lastEvent,omitempty"`
+	Docked    bool   `json:"docked,omitempty"`
+	LastError string `json:"lastError,omitempty"`
+	LastEvent string `json:"lastEvent,omitempty"`
 	// LastOpen is the outcome of the most recent attempt to put the Google
 	// Voice window on screen. Opening it spans two processes, so without this a
 	// click that produced nothing leaves nothing behind to explain itself.
@@ -129,11 +125,16 @@ type voiceControlSnapshot struct {
 
 func voiceSnapshot(dataDir string, mainConfig func() Config) voiceControlSnapshot {
 	vc := loadVoiceCallConfig(dataDir)
+	rt := loadVoiceRuntime(dataDir)
+	// Staleness is applied at read time so a Codex window that stopped
+	// reporting -- crashed, closed, never started -- reads as not running
+	// instead of forever repeating its last good report.
+	rt.CodexVoice = rt.CodexVoice.Current(time.Now())
 	snap := voiceControlSnapshot{
 		Config:       vc,
-		Runtime:      loadVoiceRuntime(dataDir),
+		Runtime:      rt,
 		WebView2:     platformWebView2Runtime(),
-		AudioWarning: voiceAudioBridgeWarning(vc),
+		AudioWarning: voiceBridgeWarning(rt, time.Now()),
 	}
 	if mainConfig != nil {
 		cfg := mainConfig()
@@ -158,11 +159,6 @@ func defaultVoiceCallConfig() VoiceCallConfig {
 			AppTitle: "Claude",
 		},
 	}
-}
-
-// audioBridgeReady reports whether a bridged call would actually carry sound.
-func audioBridgeReady(cfg VoiceCallConfig) bool {
-	return cfg.GoogleVoiceInput != "" && cfg.GoogleVoiceOutput != ""
 }
 
 func voiceConfigPath(dataDir string) string  { return filepath.Join(dataDir, "voice-call.json") }
@@ -313,11 +309,6 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 		}
 		return strings.TrimSpace(v)
 	}
-	cfg.GoogleVoiceInput = clean(cfg.GoogleVoiceInput, 300)
-	cfg.GoogleVoiceOutput = clean(cfg.GoogleVoiceOutput, 300)
-	cfg.AgentInput = clean(cfg.AgentInput, 300)
-	cfg.AgentOutput = clean(cfg.AgentOutput, 300)
-	cfg.RingOutput = clean(cfg.RingOutput, 300)
 
 	normalizeAgent := func(agent *VoiceAgentCallConfig, fallback string) error {
 		agent.AppTitle = clean(agent.AppTitle, 120)
@@ -339,41 +330,8 @@ func normalizeVoiceCallConfig(cfg VoiceCallConfig, strict bool) (VoiceCallConfig
 	// refusing the save over it would keep the window from starting itself --
 	// which is the one thing this switch exists to do. A call that reaches no
 	// agent says so on the call, and the desktop UI says so before that.
-	// Nothing about the audio endpoints is allowed to refuse a save. See
-	// voiceAudioBridgeWarning for why: the switch that keeps Google Voice
-	// running travels in the same save, and a refused save meant calling could
-	// never be turned on at all.
 	_ = strict
 	return cfg, nil
-}
-
-// voiceAudioBridgeWarning describes wiring that would leave a call connected
-// but silent. It is a warning and never a refusal.
-//
-// This used to be a hard validation error raised while saving. That single
-// decision made the whole feature unreachable on an ordinary PC: the four
-// endpoint pickers start out holding whatever Windows calls the default
-// device, so all four hold the same name, the save was refused as
-// "contradictory wiring" -- and the switch that keeps Google Voice running was
-// in the same save, so turning calling on silently never stuck. The status
-// said Off no matter how many times it was switched on.
-//
-// Nothing about a wrong or missing audio path should stop FlipAi answering the
-// phone. The conversation needs two separate virtual cables, one carrying the
-// caller to the AI app and one carrying the AI app back to the caller; when
-// that is not what the endpoints say, the call still connects and the page and
-// the call state both say what is wrong with the sound.
-func voiceAudioBridgeWarning(cfg VoiceCallConfig) string {
-	if cfg.AgentOutput != "" && strings.EqualFold(cfg.AgentOutput, cfg.GoogleVoiceOutput) {
-		return "Google Voice and the AI app are pointed at the same speaker endpoint, so the agent would hear itself instead of the caller. Each direction of the conversation needs its own virtual cable."
-	}
-	if cfg.AgentInput != "" && strings.EqualFold(cfg.AgentInput, cfg.GoogleVoiceInput) {
-		return "Google Voice and the AI app are pointed at the same microphone endpoint, so the caller would hear themselves instead of the agent. Each direction of the conversation needs its own virtual cable."
-	}
-	if !audioBridgeReady(cfg) {
-		return "No audio path is set up yet: choose the Google Voice microphone and speaker below. Until then a call is answered but nobody can hear anything."
-	}
-	return ""
 }
 
 // voiceConfigMu serializes read-modify-write of the voice configuration. Two
@@ -626,6 +584,8 @@ func mutateVoiceRuntime(dataDir string, fn func(*VoiceRuntimeState)) {
 // matters -- a failure reaching the button that started it -- can be tested
 // without launching a real window on the machine running the tests.
 var openGoogleVoiceWindow = platformOpenGoogleVoice
+var signOutGoogleVoice = platformSignOutGoogleVoice
+var openCodexVoiceWindow = platformOpenCodexVoice
 
 // beginVoiceOpen starts one attempt at putting the window on screen, and is the
 // only thing that clears the reason the last attempt failed.
@@ -890,6 +850,39 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 		platformRestartGoogleVoice(dataDir)
 		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
 	}))
+	// /signout forgets the Google account the Google Voice window is signed in
+	// to, by closing the window and deleting its browser profile. The window
+	// comes back signed out (and is kept running if calling is on), so signing
+	// in as somebody else is just the normal sign-in again.
+	mux.HandleFunc("/signout", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := signOutGoogleVoice(dataDir); err != nil {
+			activity.Add("error", "voice", "Google Voice sign-out failed: "+truncate(err.Error(), 300), "", "", "")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		activity.Add("info", "voice", "Signed out of Google Voice; the saved browser session was removed.", "", "", "")
+		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
+	}))
+	// /codex-open puts the built-in Codex voice window on screen so the user
+	// can sign in to ChatGPT there. It normally runs minimized next to the
+	// Google Voice window and never needs to be looked at.
+	mux.HandleFunc("/codex-open", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := openCodexVoiceWindow(dataDir); err != nil {
+			activity.Add("error", "voice", "Open Codex voice failed: "+truncate(err.Error(), 300), "", "", "")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		activity.Add("info", "voice", "Codex voice window is open for ChatGPT sign-in.", "", "", "")
+		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
+	}))
 	mux.HandleFunc("/test-agent", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
@@ -934,11 +927,18 @@ func newVoiceBridge(dataDir string, mainConfig func() Config, activate, deactiva
 	return &voiceBridge{dataDir: dataDir, mainConfig: mainConfig, activate: activate, deactivate: deactivate}
 }
 
-// AudioSettings tells the page which Windows endpoints Google Voice must use.
-// The page caches this; it is not a per-element lookup.
-func (b *voiceBridge) AudioSettings() map[string]string {
-	cfg := loadVoiceCallConfig(b.dataDir)
-	return map[string]string{"input": cfg.GoogleVoiceInput, "output": cfg.GoogleVoiceOutput, "ring": cfg.RingOutput}
+// Bridge is the Google Voice page reporting the state of its audio link to the
+// Codex voice page: "connecting", "connected", or "failed". It is what the
+// Settings page shows as the audio-path status, and what decides whether an
+// answered call warns about silence.
+func (b *voiceBridge) Bridge(state string) {
+	state = strings.ToLower(strings.TrimSpace(state))
+	if len(state) > 40 {
+		state = state[:40]
+	}
+	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+		s.BridgeState = state
+	})
 }
 
 // Incoming answers one question: should the page click Answer? It records what
@@ -996,7 +996,7 @@ func (b *voiceBridge) Answered(caller, label string) bool {
 		return false
 	}
 	b.setAgent(d.Agent)
-	audioProblem := voiceAudioBridgeWarning(cfg)
+	audioProblem := voiceBridgeWarning(loadVoiceRuntime(b.dataDir), time.Now())
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 		s.InCall = true
 		s.Caller = number
@@ -1026,37 +1026,6 @@ func (b *voiceBridge) Ended() {
 		s.CallerLabel = ""
 		s.Agent = ""
 		s.LastEvent = "call-ended"
-	})
-}
-
-func (b *voiceBridge) Devices(raw string) {
-	var devices []VoiceAudioDevice
-	if json.Unmarshal([]byte(raw), &devices) != nil {
-		return
-	}
-	if len(devices) > 80 {
-		devices = devices[:80]
-	}
-	named := devices[:0]
-	hidden := false
-	for _, d := range devices {
-		if d.Kind != "audioinput" && d.Kind != "audiooutput" {
-			continue
-		}
-		// An endpoint with no name is one the browser is hiding until the
-		// microphone permission is granted. Inventing "Microphone 2" here would
-		// put an unselectable placeholder in the settings dropdowns and make the
-		// real problem invisible, so unnamed endpoints are counted, not renamed.
-		if strings.TrimSpace(d.Label) == "" {
-			hidden = true
-			continue
-		}
-		named = append(named, d)
-	}
-	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-		s.Devices = named
-		s.DeviceLabelsHidden = hidden && len(named) == 0
-		s.LastEvent = "audio-devices"
 	})
 }
 

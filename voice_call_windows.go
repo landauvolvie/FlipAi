@@ -43,6 +43,7 @@ var (
 )
 
 const (
+	voiceSWHide     = 0
 	voiceSWMinimize = 6
 	// SW_SHOWMINNOACTIVE: minimized, no animation, no focus change.
 	voiceSWShowMinNoActive = 7
@@ -371,25 +372,17 @@ func superviseGoogleVoice(dataDir string) {
 func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 	release, owner := acquireGoogleVoiceInstance()
 	if !owner {
-		// Another instance holds the window. A background respawn has nothing to
-		// do and nobody waiting on it, so it just stands down.
-		if !initiallyVisible {
-			return nil
-		}
-		// A user is waiting, though. The other instance normally has a window
-		// already, or is seconds away from one; if it never produces one it is
-		// wedged, and returning quietly here is what made repeated clicks on
-		// Open do nothing at all, forever -- the caller saw a process start and
-		// exit cleanly, with no window and no complaint.
-		h := waitForGoogleVoiceWindow(voiceWindowStartup)
-		if h == 0 {
-			err := errors.New("another FlipAi Google Voice process is already running but has not produced a window; quit FlipAi from the tray and start it again")
-			recordVoiceOpen(dataDir, "an existing window process is not responding", err)
-			return err
-		}
-		return revealGoogleVoiceWindow(dataDir, h)
+		return runGoogleVoiceProcessAsSecond(dataDir, initiallyVisible)
 	}
 	defer release()
+
+	// The Codex voice window lives beside the Google Voice window for the
+	// whole life of this process: the two pages carry a call's audio between
+	// themselves, so a process that can answer the phone always has both.
+	link := newVoiceAgentLink()
+	stopCodex := make(chan struct{})
+	defer close(stopCodex)
+	go superviseCodexVoice(dataDir, link, stopCodex)
 
 	visible := initiallyVisible
 	for {
@@ -403,7 +396,7 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 		if !cfg.Enabled && !visible {
 			return nil
 		}
-		if err := runGoogleVoiceWindow(dataDir, visible); err != nil {
+		if err := runGoogleVoiceWindow(dataDir, visible, link); err != nil {
 			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 				s.BrowserRunning = false
 				s.LastError = err.Error()
@@ -418,6 +411,10 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 			s.Agent = ""
 			s.LastEvent = "browser-closed"
 		})
+		// A sign-out closes the window precisely so the browser profile can be
+		// deleted here, while nothing holds it; the loop then opens a fresh,
+		// signed-out window.
+		consumePendingVoiceSignOut(dataDir)
 		visible = false
 		if !loadVoiceCallConfig(dataDir).Enabled || quitRequested(dataDir) {
 			return nil
@@ -426,6 +423,28 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 		// feature off. Recreate it minimized while the optional feature remains on.
 		time.Sleep(1500 * time.Millisecond)
 	}
+}
+
+// runGoogleVoiceProcessAsSecond is what a --google-voice invocation does when
+// another process already owns the window.
+func runGoogleVoiceProcessAsSecond(dataDir string, initiallyVisible bool) error {
+	// Another instance holds the window. A background respawn has nothing to
+	// do and nobody waiting on it, so it just stands down.
+	if !initiallyVisible {
+		return nil
+	}
+	// A user is waiting, though. The other instance normally has a window
+	// already, or is seconds away from one; if it never produces one it is
+	// wedged, and returning quietly here is what made repeated clicks on
+	// Open do nothing at all, forever -- the caller saw a process start and
+	// exit cleanly, with no window and no complaint.
+	h := waitForGoogleVoiceWindow(voiceWindowStartup)
+	if h == 0 {
+		err := errors.New("another FlipAi Google Voice process is already running but has not produced a window; quit FlipAi from the tray and start it again")
+		recordVoiceOpen(dataDir, "an existing window process is not responding", err)
+		return err
+	}
+	return revealGoogleVoiceWindow(dataDir, h)
 }
 
 // voiceBrowserArguments are the Chromium switches the Google Voice window is
@@ -478,6 +497,9 @@ func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
 		if way.wait > 0 {
 			time.Sleep(way.wait)
 		}
+		// Creation is serialized with the Codex voice window: the browser
+		// switches travel through one process-wide environment variable.
+		voiceWebViewCreateMu.Lock()
 		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args)
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			Debug:     false,
@@ -490,6 +512,7 @@ func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
 				Center: true,
 			},
 		})
+		voiceWebViewCreateMu.Unlock()
 		if w != nil {
 			mode, note := way.name, way.note
 			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
@@ -573,7 +596,7 @@ func destroyLeftoverGoogleVoiceFrame() {
 	}
 }
 
-func runGoogleVoiceWindow(dataDir string, visible bool) error {
+func runGoogleVoiceWindow(dataDir string, visible bool, link *voiceAgentLink) error {
 	// A Win32 message pump only works on the thread that created the window.
 	// This currently runs inside init(), where the Go runtime happens to hold
 	// the main thread, but that is an implementation detail of the runtime and
@@ -630,13 +653,29 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 		}
 		return cfg
 	}
-	bridge := newVoiceBridge(dataDir, mainConfig, activateAgentVoice, deactivateAgentVoice)
-	_ = w.Bind("flipVoiceAudioSettings", bridge.AudioSettings)
+	// Codex calls are answered by the built-in Codex voice window over the
+	// in-process link; only Claude still drives an external desktop app.
+	activate := func(cfg VoiceCallConfig, agent string) error {
+		if agent == "C" {
+			return link.StartVoice(loadVoiceRuntime(dataDir).CodexVoice.Current(time.Now()))
+		}
+		return activateAgentVoice(cfg, agent)
+	}
+	deactivate := func(cfg VoiceCallConfig, agent string) error {
+		if agent == "C" {
+			link.StopVoice()
+			return nil
+		}
+		return deactivateAgentVoice(cfg, agent)
+	}
+	bridge := newVoiceBridge(dataDir, mainConfig, activate, deactivate)
 	_ = w.Bind("flipVoiceIncoming", bridge.Incoming)
 	_ = w.Bind("flipVoiceAnswered", bridge.Answered)
 	_ = w.Bind("flipVoiceEnded", bridge.Ended)
-	_ = w.Bind("flipVoiceDevices", bridge.Devices)
 	_ = w.Bind("flipVoicePage", bridge.Page)
+	_ = w.Bind("flipVoiceBridge", bridge.Bridge)
+	_ = w.Bind("flipVoiceRelaySend", link.CallSend)
+	_ = w.Bind("flipVoiceRelayRecv", link.CallRecv)
 
 	w.Init(googleVoiceInitScript)
 	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
@@ -715,6 +754,12 @@ func voiceChromium(w webview2.WebView) *edge.Chromium {
 }
 
 func platformTestAgentVoice(cfg VoiceCallConfig, agent string) error {
+	if agent == "C" {
+		// Codex voice is built in: it runs inside the Google Voice window
+		// process and its readiness is on the Settings page, so there is no
+		// desktop app to poke from here.
+		return errors.New("Codex voice is built into FlipAi; its status is shown under Settings → Google Voice calling")
+	}
 	return activateAgentVoice(cfg, agent)
 }
 

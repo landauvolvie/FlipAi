@@ -23,13 +23,22 @@
 </div>
 <script>
 // A stand-in for the parts of Google Voice the FlipAi bridge actually touches:
-// a ringing dialog with an Answer button, an in-call dialog with Hang up, and a
-// media element plus a microphone capture for the conversation itself.
+// a ringing dialog with an Answer button, an in-call dialog with Hang up, the
+// media element that plays the remote caller, and the microphone capture the
+// page opens when the call connects.
+//
+// The caller is simulated as a steady tone: a real AudioContext oscillator
+// feeding the stream this page assigns to its remote <audio> element, exactly
+// where Google Voice puts the incoming WebRTC audio. FlipAi is expected to
+// lift that stream toward the agent and to silence the element locally.
 window.gv = {
-  gumConstraints: null,
   gumSettings: null,
+  gumTrackLabel: '',
+  gumError: '',
   playCalled: false,
   playError: '',
+  micLevel: 0,
+  callerCtx: null,
 
   ring(display, ariaLabel, answerLabel) {
     const area = document.getElementById('callarea');
@@ -73,17 +82,40 @@ window.gv = {
     dialog.append(hangup, audio);
     area.append(dialog);
 
-    // Google Voice opens the microphone when the call connects. This is the
-    // request FlipAi has to redirect onto the virtual cable.
-    const constraints = {audio: {echoCancellation: true}};
-    window.gv.gumConstraints = null;
+    // The remote caller: a 440Hz tone standing in for the incoming call
+    // audio Google Voice attaches to its media element.
+    const ctx = new AudioContext();
+    window.gv.callerCtx = ctx;
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 440;
+    const dest = ctx.createMediaStreamDestination();
+    osc.connect(dest);
+    osc.start();
+    window.gv.callerStream = dest.stream;
+    audio.srcObject = dest.stream;
+
+    // Google Voice opens the microphone when the call connects. FlipAi is
+    // expected to hand back the agent's voice instead of a device.
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true}});
       window.gv.stream = stream;
-      window.gv.gumSettings = stream.getAudioTracks()[0].getSettings();
-      // The remote party is rendered through the media element; its sink is
-      // what has to land on the other virtual cable.
-      audio.srcObject = stream;
+      const track = stream.getAudioTracks()[0];
+      window.gv.gumSettings = track.getSettings();
+      window.gv.gumTrackLabel = track.label || '';
+      // What the caller would hear: the level on the microphone stream this
+      // page was given. A real Google Voice sends it into its own WebRTC
+      // connection; measuring it here is the same observation.
+      const an = ctx.createAnalyser();
+      an.fftSize = 2048;
+      ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Float32Array(an.fftSize);
+      window.gv._micPoll = setInterval(() => {
+        an.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        const rms = Math.sqrt(sum / buf.length);
+        if (rms > window.gv.micLevel) window.gv.micLevel = rms;
+      }, 100);
     } catch (e) {
       window.gv.gumError = String(e);
     }
@@ -97,26 +129,29 @@ window.gv = {
 
   hangup() {
     document.getElementById('callarea').textContent = '';
+    if (window.gv._micPoll) { clearInterval(window.gv._micPoll); window.gv._micPoll = 0; }
     if (window.gv.stream) {
       window.gv.stream.getTracks().forEach(t => t.stop());
       window.gv.stream = null;
     }
+    if (window.gv.callerCtx) { window.gv.callerCtx.close().catch(() => {}); window.gv.callerCtx = null; }
   },
 
-  // What getUserMedia was ultimately called with, after FlipAi rewrote it.
+  // What the page can see of FlipAi's routing.
   observed() {
+    const remote = document.getElementById('remote');
     return {
-      gumCalls: window.__flipRecordedCalls || [],
       gumSettings: window.gv.gumSettings || null,
+      gumTrackLabel: window.gv.gumTrackLabel,
       gumError: window.gv.gumError || '',
       playCalled: window.gv.playCalled,
       playError: window.gv.playError,
-      sinkId: (document.getElementById('remote') || {}).sinkId || '',
+      micLevel: window.gv.micLevel,
+      remoteMuted: remote ? remote.muted : null,
+      remoteVolume: remote ? remote.volume : null,
       secureContext: window.isSecureContext,
-      hasMediaDevices: !!navigator.mediaDevices,
-      hasSetSinkId: typeof HTMLMediaElement.prototype.setSinkId === 'function'
+      hasMediaDevices: !!navigator.mediaDevices
     };
   }
 };
-
 </script>

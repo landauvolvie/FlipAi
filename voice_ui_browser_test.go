@@ -14,15 +14,16 @@ import (
 	"time"
 )
 
-// The card that turns phone calling on is a script, not a template, and every
+// The cards that control phone calling are a script, not a template, and every
 // test FlipAi had stopped at the Go side of it. That is how the switch could
 // stop saving without a single test noticing: the endpoint worked, the config
 // round-tripped, and the page still could not turn calling on.
 //
 // This runs the exact script the Windows app injects in headless Chromium,
-// against the real local voice endpoint and a real config on disk, and clicks
-// the switch.
-func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
+// against the real local voice endpoint and a real config on disk, and walks
+// both pages: Settings (the switch, the sign-ins, the status rows) and
+// Connections (the live preview panel).
+func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 	if testing.Short() {
 		t.Skip("browser UI harness is skipped in -short mode")
 	}
@@ -48,17 +49,18 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	defer pageLn.Close()
 
 	dir := t.TempDir()
-	// The state a fresh PC is in: every audio endpoint holding the same default
-	// device, which is exactly the configuration that used to make the switch
-	// unsavable.
-	stuck := defaultVoiceCallConfig()
-	stuck.GoogleVoiceInput = "Default - Remote Audio"
-	stuck.GoogleVoiceOutput = "Default - Remote Audio"
-	stuck.AgentInput = "Default - Remote Audio"
-	stuck.AgentOutput = "Default - Remote Audio"
-	if err := saveVoiceCallConfig(dir, stuck); err != nil {
+	if err := saveVoiceCallConfig(dir, defaultVoiceCallConfig()); err != nil {
 		t.Fatal(err)
 	}
+
+	// The sign-out and Codex sign-in buttons call platform code that opens and
+	// closes real windows; here the contract under test is that the buttons
+	// reach the endpoints, so the platform side is stubbed and counted.
+	var signOuts, codexOpens atomic.Int32
+	restoreSignOut, restoreCodex := signOutGoogleVoice, openCodexVoiceWindow
+	signOutGoogleVoice = func(string) error { signOuts.Add(1); return nil }
+	openCodexVoiceWindow = func(string) error { codexOpens.Add(1); return nil }
+	defer func() { signOutGoogleVoice, openCodexVoiceWindow = restoreSignOut, restoreCodex }()
 
 	voiceSrv := &http.Server{Handler: voiceControlHandler(dir, "127.0.0.1:8765",
 		func() Config { return voiceTestConfig(t) },
@@ -67,8 +69,8 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	defer voiceSrv.Close()
 
 	// A stand-in for the FlipAi window: the same shell the desktop UI marks as
-	// trusted, the same .content element the card is appended to, and nothing
-	// else, so a failure here is the card's.
+	// trusted, the same .content element the cards are appended to, and nothing
+	// else, so a failure here is the cards'.
 	pageSrv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, `<!doctype html><html data-flipai-desktop="1"><head><meta charset="utf-8"><title>FlipAi</title></head>`+
@@ -78,9 +80,9 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	go func() { _ = pageSrv.Serve(pageLn) }()
 	defer pageSrv.Close()
 
-	// The panel position is reported while the page is open and withdrawn when
-	// it leaves, so both facts have to be observed while the driver runs rather
-	// than read off the end state.
+	// The panel position is reported while the Connections page is open and
+	// withdrawn when it leaves, so both facts have to be observed while the
+	// driver runs rather than read off the end state.
 	var sawPanel atomic.Bool
 	watching := make(chan struct{})
 	defer close(watching)
@@ -100,7 +102,10 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	}()
 
 	cmd := exec.Command("node", filepath.Join("testdata", "voiceui", "drive.mjs"))
-	cmd.Env = append(scrubProxyEnv(os.Environ()), "FLIPAI_UI_PAGE=http://127.0.0.1:8765/connections")
+	cmd.Env = append(scrubProxyEnv(os.Environ()),
+		"FLIPAI_UI_SETTINGS=http://127.0.0.1:8765/settings",
+		"FLIPAI_UI_CONNECTIONS=http://127.0.0.1:8765/connections",
+	)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -120,22 +125,29 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	}
 
 	var report struct {
-		Errors             []string `json:"errors"`
-		Steps              []string `json:"steps"`
-		Cards              []string `json:"cards"`
-		StateAfter         string   `json:"stateAfter"`
-		SavedNote          string   `json:"savedNote"`
-		PanelWhileStarting string   `json:"panelWhileStarting"`
-		PanelWhenOff       string   `json:"panelWhenOff"`
-		PanelButtons       []string `json:"panelButtons"`
+		Errors             []string          `json:"errors"`
+		Steps              []string          `json:"steps"`
+		Cards              []string          `json:"cards"`
+		PreviewCards       []string          `json:"previewCards"`
+		StateAfter         string            `json:"stateAfter"`
+		SavedNote          string            `json:"savedNote"`
+		StatusRows         map[string]string `json:"statusRows"`
+		PanelWhileStarting string            `json:"panelWhileStarting"`
+		PanelWhenOff       string            `json:"panelWhenOff"`
+		PanelButtons       []string          `json:"panelButtons"`
 	}
 	if err := json.Unmarshal([]byte(stdout.String()), &report); err != nil {
 		t.Fatalf("could not read the driver report: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
 	if len(report.Errors) > 0 {
-		t.Fatalf("the card raised errors in the browser: %v", report.Errors)
+		t.Fatalf("the cards raised errors in the browser: %v", report.Errors)
 	}
-	for _, want := range []string{"card-rendered", "switch-applied", "dock-reported", "field-autosaved", "switch-reverted", "panel-explains-and-retries", "panel-explains-off", "pending-save-flushed"} {
+	for _, want := range []string{
+		"settings-card-rendered", "switch-applied", "field-autosaved", "signed-out",
+		"codex-signin-opened", "status-rows-answer", "switch-reverted",
+		"preview-card-rendered", "panel-explains-off", "dock-reported",
+		"panel-explains-and-retries", "pending-save-flushed",
+	} {
 		found := false
 		for _, got := range report.Steps {
 			if got == want {
@@ -143,19 +155,37 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("the card never got as far as %q; steps=%v", want, report.Steps)
+			t.Errorf("the driver never got as far as %q; steps=%v", want, report.Steps)
 		}
 	}
 
-	// One card, not two.
-	if len(report.Cards) != 1 || report.Cards[0] != "Google Voice Experimental" {
-		t.Errorf("Connections should carry one Google Voice card, got %v", report.Cards)
+	// One card per page, each doing its one job.
+	if len(report.Cards) != 1 || !strings.Contains(report.Cards[0], "Google Voice calling") {
+		t.Errorf("Settings should carry one Google Voice calling card, got %v", report.Cards)
+	}
+	if len(report.PreviewCards) != 1 || !strings.HasPrefix(report.PreviewCards[0], "Google Voice") {
+		t.Errorf("Connections should carry one Google Voice preview card, got %v", report.PreviewCards)
 	}
 	if !strings.Contains(report.StateAfter, "On") {
 		t.Errorf("the card did not report calling as on: %q", report.StateAfter)
 	}
 	if report.SavedNote != "Saved" {
 		t.Errorf("the card did not confirm the write: %q", report.SavedNote)
+	}
+
+	// The setup buttons really reach their endpoints.
+	if signOuts.Load() != 1 {
+		t.Errorf("Sign out reached the endpoint %d times, want 1", signOuts.Load())
+	}
+	if codexOpens.Load() != 1 {
+		t.Errorf("Sign in to ChatGPT reached the endpoint %d times, want 1", codexOpens.Load())
+	}
+
+	// Every status row answers something; none may be left blank.
+	for id, text := range report.StatusRows {
+		if strings.TrimSpace(text) == "" {
+			t.Errorf("status row %s is blank", id)
+		}
 	}
 
 	// And what is on disk is what the page said. This is the assertion the
@@ -168,9 +198,9 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 		t.Errorf("a field changed on the card was not written: %+v", saved.DefaultAgent)
 	}
 	// A change made and navigated away from within the save debounce still has
-	// to land, or "changes save as you make them" is not true.
-	if saved.Codex.AppTitle != "Saved On The Way Out" {
-		t.Errorf("a change made just before leaving the page was lost: %q", saved.Codex.AppTitle)
+	// to land, or "changes save as they are made" is not true.
+	if saved.Claude.AppTitle != "Saved On The Way Out" {
+		t.Errorf("a change made just before leaving the page was lost: %q", saved.Claude.AppTitle)
 	}
 
 	// The panel is the thing the user stares at when Google Voice does not

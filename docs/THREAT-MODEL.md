@@ -56,6 +56,21 @@
   published release installs without anyone reading the notes first. Turn it
   off in Settings → Updates to keep the install a deliberate act.
 
+## Phone calling (experimental)
+
+Turning Google Voice calling on adds two long-lived, signed-in browser
+profiles that FlipAi owns: the Google Voice window (a Google session) and the
+hidden Codex voice window (a ChatGPT session), both stored under the app's
+per-user data folder with the same protections as the rest of it. The audio
+bridge between them is a WebRTC connection negotiated through the FlipAi
+process itself and carried directly between the two browser windows on this
+PC; call audio is never written to disk, never uploaded by FlipAi, and never
+played through, or captured from, a physical audio device. Who may ring
+through to an agent is decided by the same per-agent allowlists as SMS, an
+unidentifiable caller is never answered, and both injected pages strip
+camera, screen-share, geolocation and clipboard access and pin their windows
+to their own sites. Signing out deletes the Google Voice browser profile.
+
 ## Residual risk
 
 Live conversation mode adds one long-running Claude Code child process and one

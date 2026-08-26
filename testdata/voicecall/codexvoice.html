@@ -1,0 +1,129 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ChatGPT</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0; padding: 16px; }
+  button { display: inline-block; padding: 8px 14px; margin: 6px 6px 0 0; }
+</style>
+<body>
+<div id="composer">
+  <textarea placeholder="Message ChatGPT"></textarea>
+  <div id="voicecontrols">
+    <button id="startvoice" aria-label="Use voice mode">Use voice mode</button>
+  </div>
+</div>
+<script>
+// A stand-in for the parts of chatgpt.com the FlipAi bridge actually touches:
+// a button that starts voice mode, a button that ends it, the microphone
+// capture voice mode opens, and the sound the agent makes while talking.
+//
+// The agent's speech is simulated two ways, matching the two ways the real
+// page can make sound: a stream attached to a media element, and Web Audio
+// played straight at the context's speakers. Which one a scenario uses is
+// chosen by ?speak=element or ?speak=webaudio in the page URL.
+window.cx = {
+  voiceActive: false,
+  startClicks: 0,
+  stopClicks: 0,
+  gumError: '',
+  gumTrackLabel: '',
+  micLevel: 0,
+  speakCtx: null,
+
+  async startVoice() {
+    if (window.cx.voiceActive) return;
+    window.cx.voiceActive = true;
+    window.cx.startClicks++;
+    const controls = document.getElementById('voicecontrols');
+    controls.textContent = '';
+    const stop = document.createElement('button');
+    stop.id = 'stopvoice';
+    stop.setAttribute('aria-label', 'End voice mode');
+    stop.textContent = 'End voice mode';
+    stop.addEventListener('click', () => window.cx.stopVoice());
+    controls.append(stop);
+
+    // Voice mode listens: the microphone it is given should be the caller.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+      window.cx.stream = stream;
+      window.cx.gumTrackLabel = (stream.getAudioTracks()[0] || {}).label || '';
+      const ctx = new AudioContext();
+      window.cx.listenCtx = ctx;
+      const an = ctx.createAnalyser();
+      an.fftSize = 2048;
+      ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Float32Array(an.fftSize);
+      window.cx._micPoll = setInterval(() => {
+        an.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        const rms = Math.sqrt(sum / buf.length);
+        if (rms > window.cx.micLevel) window.cx.micLevel = rms;
+      }, 100);
+    } catch (e) {
+      window.cx.gumError = String(e);
+    }
+
+    // And voice mode talks: a 880Hz tone standing in for the agent speaking.
+    const how = new URLSearchParams(location.search).get('speak') || 'element';
+    const ctx = new AudioContext();
+    window.cx.speakCtx = ctx;
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 880;
+    if (how === 'webaudio') {
+      // Straight at the speakers; FlipAi must catch it there.
+      osc.connect(ctx.destination);
+      osc.start();
+    } else {
+      const dest = ctx.createMediaStreamDestination();
+      osc.connect(dest);
+      osc.start();
+      const audio = document.createElement('audio');
+      audio.id = 'agentout';
+      audio.autoplay = true;
+      document.body.append(audio);
+      audio.srcObject = dest.stream;
+      const p = audio.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+  },
+
+  stopVoice() {
+    if (!window.cx.voiceActive) return;
+    window.cx.voiceActive = false;
+    window.cx.stopClicks++;
+    const controls = document.getElementById('voicecontrols');
+    controls.textContent = '';
+    const start = document.createElement('button');
+    start.id = 'startvoice';
+    start.setAttribute('aria-label', 'Use voice mode');
+    start.textContent = 'Use voice mode';
+    start.addEventListener('click', () => window.cx.startVoice());
+    controls.append(start);
+    if (window.cx._micPoll) { clearInterval(window.cx._micPoll); window.cx._micPoll = 0; }
+    if (window.cx.stream) {
+      window.cx.stream.getTracks().forEach(t => t.stop());
+      window.cx.stream = null;
+    }
+    if (window.cx.speakCtx) { window.cx.speakCtx.close().catch(() => {}); window.cx.speakCtx = null; }
+    const out = document.getElementById('agentout');
+    if (out) out.remove();
+  },
+
+  observed() {
+    const out = document.getElementById('agentout');
+    return {
+      voiceActive: window.cx.voiceActive,
+      startClicks: window.cx.startClicks,
+      stopClicks: window.cx.stopClicks,
+      gumError: window.cx.gumError,
+      gumTrackLabel: window.cx.gumTrackLabel,
+      micLevel: window.cx.micLevel,
+      agentOutMuted: out ? out.muted : null,
+      agentOutVolume: out ? out.volume : null
+    };
+  }
+};
+document.getElementById('startvoice').addEventListener('click', () => window.cx.startVoice());
+</script>

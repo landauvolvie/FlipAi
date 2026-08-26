@@ -16,20 +16,22 @@ import (
 )
 
 // This is the closest thing to a real call this code can be given without a
-// phone line. The production injection script runs in headless Chromium against
-// a stand-in Google Voice page, its window.flipVoice* bindings are wired to the
-// real voiceBridge, and Chromium's fake audio endpoints stand in for the two
-// virtual cables the feature needs on a real PC. The microphone capture and the
-// media-element sink are genuinely applied by the browser, so the routing
-// assertions below are real rather than mocked.
+// phone line. Both production injection scripts run in headless Chromium --
+// the Google Voice one against a stand-in Google Voice page, the Codex voice
+// one against a stand-in ChatGPT page -- with the real voiceBridge behind the
+// window.flipVoice* bindings and the real voiceAgentLink relaying the WebRTC
+// handshake between the two pages. The audio is real, not mocked: each side is
+// an oscillator, the sound crosses an actual RTCPeerConnection, and the levels
+// asserted are measured on the very streams the pages were given.
 //
-// What it still cannot cover: Google's own markup, WebView2, the telephony
-// itself, and whether the desktop AI app enters voice mode.
+// What it still cannot cover: Google's and OpenAI's own markup, WebView2, and
+// the telephony itself.
 
 const playwrightModule = "/opt/node22/lib/node_modules/playwright/index.mjs"
 
 type harnessScenario struct {
 	bridge  *voiceBridge
+	link    *voiceAgentLink
 	dataDir string
 
 	mu            sync.Mutex
@@ -83,18 +85,27 @@ func (h *callHarness) configure(name string, in harnessConfig) error {
 	if err := normalizeAgents(&main); err != nil {
 		return err
 	}
-	s := &harnessScenario{dataDir: dataDir}
+	s := &harnessScenario{dataDir: dataDir, link: newVoiceAgentLink()}
+	// The activation path is the production one: a Codex call queues the
+	// voice-start command on the real link, exactly as the Windows window
+	// process does, so the stand-in ChatGPT page has to genuinely receive it.
 	s.bridge = newVoiceBridge(dataDir, func() Config { return main },
 		func(_ VoiceCallConfig, agent string) error {
 			s.mu.Lock()
-			defer s.mu.Unlock()
 			s.activations = append(s.activations, agent)
+			s.mu.Unlock()
+			if agent == "C" {
+				return s.link.StartVoice(loadVoiceRuntime(dataDir).CodexVoice.Current(time.Now()))
+			}
 			return nil
 		},
 		func(_ VoiceCallConfig, agent string) error {
 			s.mu.Lock()
-			defer s.mu.Unlock()
 			s.deactivations = append(s.deactivations, agent)
+			s.mu.Unlock()
+			if agent == "C" {
+				s.link.StopVoice()
+			}
 			return nil
 		})
 	h.mu.Lock()
@@ -110,6 +121,10 @@ func (h *callHarness) shimHandler() http.Handler {
 	mux.HandleFunc("/flipai-init.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write([]byte(googleVoiceInitScript))
+	})
+	mux.HandleFunc("/flipai-codex-init.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		_, _ = w.Write([]byte(codexVoiceInitScript))
 	})
 	mux.HandleFunc("/configure", func(w http.ResponseWriter, r *http.Request) {
 		var cfg harnessConfig
@@ -139,7 +154,6 @@ func (h *callHarness) shimHandler() http.Handler {
 		v, _ := p[k].(string)
 		return v
 	}
-	mux.HandleFunc("/audio-settings", call(func(b *voiceBridge, _ map[string]any) any { return b.AudioSettings() }))
 	mux.HandleFunc("/incoming", call(func(b *voiceBridge, p map[string]any) any {
 		return b.Incoming(str(p, "number"), str(p, "label"))
 	}))
@@ -147,10 +161,34 @@ func (h *callHarness) shimHandler() http.Handler {
 		return b.Answered(str(p, "number"), str(p, "label"))
 	}))
 	mux.HandleFunc("/ended", call(func(b *voiceBridge, _ map[string]any) any { b.Ended(); return nil }))
-	mux.HandleFunc("/devices", call(func(b *voiceBridge, p map[string]any) any { b.Devices(str(p, "raw")); return nil }))
 	mux.HandleFunc("/page", call(func(b *voiceBridge, p map[string]any) any {
 		signedIn, _ := p["signedIn"].(bool)
 		b.Page(str(p, "href"), signedIn, str(p, "controls"))
+		return nil
+	}))
+	mux.HandleFunc("/bridge", call(func(b *voiceBridge, p map[string]any) any { b.Bridge(str(p, "state")); return nil }))
+	// The relay between the two pages, and the Codex page's status report, use
+	// the same real Go code the Windows window process binds.
+	withLink := func(fn func(*harnessScenario, map[string]any) any) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			s := h.scenario(r.Header.Get("X-FlipAi-Scenario"))
+			if s == nil {
+				http.Error(w, "unknown scenario", http.StatusBadRequest)
+				return
+			}
+			params := map[string]any{}
+			_ = json.NewDecoder(r.Body).Decode(&params)
+			writeResult(w, fn(s, params))
+		}
+	}
+	mux.HandleFunc("/relay-call-send", withLink(func(s *harnessScenario, p map[string]any) any { s.link.CallSend(str(p, "msg")); return nil }))
+	mux.HandleFunc("/relay-call-recv", withLink(func(s *harnessScenario, _ map[string]any) any { return s.link.CallRecv() }))
+	mux.HandleFunc("/relay-agent-send", withLink(func(s *harnessScenario, p map[string]any) any { s.link.AgentSend(str(p, "msg")); return nil }))
+	mux.HandleFunc("/relay-agent-recv", withLink(func(s *harnessScenario, _ map[string]any) any { return s.link.AgentRecv() }))
+	mux.HandleFunc("/codex-status", withLink(func(s *harnessScenario, p map[string]any) any {
+		signedIn, _ := p["signedIn"].(bool)
+		active, _ := p["voiceActive"].(bool)
+		recordCodexVoiceStatus(s.dataDir, str(p, "href"), signedIn, active, str(p, "controls"), str(p, "lastError"))
 		return nil
 	}))
 	return mux
@@ -169,29 +207,38 @@ type driverReport struct {
 			Method string `json:"method"`
 			Args   []any  `json:"args"`
 		} `json:"calls"`
-		Devices []struct {
-			Kind     string `json:"kind"`
-			DeviceID string `json:"deviceId"`
-			Label    string `json:"label"`
-		} `json:"devices"`
-		Answered     bool              `json:"answered"`
-		PollTimers   int               `json:"pollTimers"`
-		Capabilities map[string]string `json:"capabilities"`
-		Observed     observedPage      `json:"observed"`
-		MidCall      observedPage      `json:"midCall"`
+		Answered      bool              `json:"answered"`
+		PollTimers    int               `json:"pollTimers"`
+		Capabilities  map[string]string `json:"capabilities"`
+		Observed      observedPage      `json:"observed"`
+		MidCall       observedPage      `json:"midCall"`
+		MidCodex      observedCodex     `json:"midCodex"`
+		CodexObserved *observedCodex    `json:"codexObserved"`
 	} `json:"scenarios"`
 }
 
 type observedPage struct {
-	GumCalls        []any          `json:"gumCalls"`
 	GumSettings     map[string]any `json:"gumSettings"`
+	GumTrackLabel   string         `json:"gumTrackLabel"`
 	GumError        string         `json:"gumError"`
 	PlayCalled      bool           `json:"playCalled"`
 	PlayError       string         `json:"playError"`
-	SinkID          string         `json:"sinkId"`
+	MicLevel        float64        `json:"micLevel"`
+	RemoteMuted     *bool          `json:"remoteMuted"`
+	RemoteVolume    *float64       `json:"remoteVolume"`
 	SecureContext   bool           `json:"secureContext"`
 	HasMediaDevices bool           `json:"hasMediaDevices"`
-	HasSetSinkID    bool           `json:"hasSetSinkId"`
+}
+
+type observedCodex struct {
+	VoiceActive    bool     `json:"voiceActive"`
+	StartClicks    int      `json:"startClicks"`
+	StopClicks     int      `json:"stopClicks"`
+	GumError       string   `json:"gumError"`
+	GumTrackLabel  string   `json:"gumTrackLabel"`
+	MicLevel       float64  `json:"micLevel"`
+	AgentOutMuted  *bool    `json:"agentOutMuted"`
+	AgentOutVolume *float64 `json:"agentOutVolume"`
 }
 
 func (r driverReport) find(t *testing.T, name string) int {
@@ -215,17 +262,6 @@ func (r driverReport) countCalls(idx int, method string) int {
 	return n
 }
 
-func deviceIDByLabel(t *testing.T, report driverReport, idx int, kind, label string) string {
-	t.Helper()
-	for _, d := range report.Scenarios[idx].Devices {
-		if d.Kind == kind && d.Label == label {
-			return d.DeviceID
-		}
-	}
-	t.Fatalf("headless Chromium did not expose a %s named %q; devices=%+v", kind, label, report.Scenarios[idx].Devices)
-	return ""
-}
-
 func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 	if testing.Short() {
 		t.Skip("browser call-flow harness is skipped in -short mode")
@@ -237,7 +273,11 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 		t.Skip("playwright is not installed; skipping the browser call-flow harness")
 	}
 
-	page, err := os.ReadFile(filepath.Join("testdata", "voicecall", "googlevoice.html"))
+	gvPage, err := os.ReadFile(filepath.Join("testdata", "voicecall", "googlevoice.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cxPage, err := os.ReadFile(filepath.Join("testdata", "voicecall", "codexvoice.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,12 +286,17 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 	shim := httptest.NewServer(h.shimHandler())
 	defer shim.Close()
 
-	// The browser has to believe it is on voice.google.com: the injection script
-	// navigates away from anything else, and the media APIs it uses need a
-	// secure context. A TLS server plus a host-resolver rule gives it both.
+	// The browser has to believe it is on voice.google.com and chatgpt.com:
+	// both injection scripts navigate away from anything else, and the media
+	// APIs they use need a secure context. One TLS server answering by Host,
+	// plus host-resolver rules, gives them both.
 	site := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(page)
+		if strings.Contains(r.Host, "chatgpt") {
+			_, _ = w.Write(cxPage)
+			return
+		}
+		_, _ = w.Write(gvPage)
 	}))
 	defer site.Close()
 	_, sitePort, err := net.SplitHostPort(strings.TrimPrefix(site.URL, "https://"))
@@ -259,12 +304,13 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctxTimeout := 4 * time.Minute
+	ctxTimeout := 6 * time.Minute
 	cmd := exec.Command("node", filepath.Join("testdata", "voicecall", "drive.mjs"))
 	cmd.Env = append(scrubProxyEnv(os.Environ()),
 		"FLIPAI_TEST_BASE=https://voice.google.com/",
+		"FLIPAI_TEST_CODEX=https://chatgpt.com/",
 		"FLIPAI_TEST_SHIM="+shim.URL+"/",
-		"FLIPAI_TEST_MAP="+fmt.Sprintf("MAP voice.google.com:443 127.0.0.1:%s", sitePort),
+		"FLIPAI_TEST_MAP="+fmt.Sprintf("MAP voice.google.com:443 127.0.0.1:%s, MAP chatgpt.com:443 127.0.0.1:%s", sitePort, sitePort),
 	)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -297,40 +343,57 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 	t.Run("authorized call is answered bridged and torn down", func(t *testing.T) {
 		i := report.find(t, "authorized-number")
 		mid := report.Scenarios[i].MidCall
-		if !mid.SecureContext || !mid.HasMediaDevices || !mid.HasSetSinkID {
+		if !mid.SecureContext || !mid.HasMediaDevices {
 			t.Fatalf("harness page is not a realistic call surface: %+v", mid)
 		}
-		wantMic := deviceIDByLabel(t, report, i, "audioinput", "Fake Audio Input 2")
-		wantSpeaker := deviceIDByLabel(t, report, i, "audiooutput", "Fake Audio Output 2")
-
 		if mid.GumError != "" {
-			t.Fatalf("Google Voice could not open the microphone: %s", mid.GumError)
+			t.Fatalf("Google Voice could not open its microphone stream: %s", mid.GumError)
 		}
-		// The browser actually opened the endpoint FlipAi chose, rather than the
-		// page's default microphone.
-		if got, _ := mid.GumSettings["deviceId"].(string); got != wantMic {
-			t.Errorf("call microphone = %q, want the configured endpoint %q", got, wantMic)
+		// The microphone Google Voice was given is the bridge, not a device: no
+		// hardware anywhere in the path, nothing for the user to select, and
+		// nothing that stops working when the PC is locked. Chromium stamps a
+		// Web Audio destination track's "device" as WebAudio-<uuid>, which is
+		// exactly the proof wanted here.
+		if got, _ := mid.GumSettings["deviceId"].(string); got != "" && got != "default" && !strings.HasPrefix(got, "WebAudio") {
+			t.Errorf("call microphone came from a device (%q); it must be the virtual bridge stream", got)
 		}
-		// Google Voice's own capture is the one carrying echoCancellation; FlipAi
-		// also opens the microphone at startup, so the right request is picked
-		// out rather than assuming which came last.
-		var pageCall any
-		for _, c := range mid.GumCalls {
-			if digInto(c, "audio", "echoCancellation") == true {
-				pageCall = c
-			}
-		}
-		if pageCall == nil {
-			t.Fatalf("Google Voice's own microphone request never reached the browser: %+v", mid.GumCalls)
-		}
-		if exact := digInto(pageCall, "audio", "deviceId", "exact"); exact != wantMic {
-			t.Errorf("microphone constraint = %v, want exact %q", exact, wantMic)
-		}
-		if mid.SinkID != wantSpeaker {
-			t.Errorf("call speaker = %q, want the configured endpoint %q", mid.SinkID, wantSpeaker)
+		if strings.Contains(mid.GumTrackLabel, "Fake Audio") {
+			t.Errorf("call microphone is a Chromium fake device (%q); it must be the virtual bridge stream", mid.GumTrackLabel)
 		}
 		if !mid.PlayCalled {
-			t.Error("the page never started playback, so speaker routing was not exercised")
+			t.Error("the page never started playback, so the caller stream was not exercised")
+		}
+		// Nobody near the PC hears the conversation.
+		if mid.RemoteMuted == nil || !*mid.RemoteMuted {
+			t.Error("the caller's audio element was not muted locally")
+		}
+		if mid.RemoteVolume == nil || *mid.RemoteVolume != 0 {
+			t.Error("the caller's audio element volume was not zeroed locally")
+		}
+		// The sound genuinely flowed both ways across the WebRTC bridge.
+		if mid.MicLevel <= 0.01 {
+			t.Errorf("the agent's voice never reached the stream Google Voice sends to the caller (level %v)", mid.MicLevel)
+		}
+		midCodex := report.Scenarios[i].MidCodex
+		if midCodex.MicLevel <= 0.01 {
+			t.Errorf("the caller's voice never reached Codex voice mode's microphone (level %v)", midCodex.MicLevel)
+		}
+		if midCodex.GumError != "" {
+			t.Errorf("Codex voice mode could not open its microphone stream: %s", midCodex.GumError)
+		}
+		if strings.Contains(midCodex.GumTrackLabel, "Fake Audio") {
+			t.Errorf("Codex microphone is a Chromium fake device (%q); it must be the virtual bridge stream", midCodex.GumTrackLabel)
+		}
+		if midCodex.StartClicks != 1 || !midCodex.VoiceActive {
+			t.Errorf("Codex voice mode was not started exactly once for the call: %+v", midCodex)
+		}
+		if midCodex.AgentOutMuted == nil || !*midCodex.AgentOutMuted {
+			t.Error("the agent's speech element was not muted locally")
+		}
+		// Hang-up ends voice mode on the Codex side.
+		final := report.Scenarios[i].CodexObserved
+		if final == nil || final.VoiceActive || final.StopClicks != 1 {
+			t.Errorf("Codex voice mode was not stopped exactly once on hang-up: %+v", final)
 		}
 
 		acts, deacts := h.scenario("authorized-number").recorded()
@@ -347,10 +410,22 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 		if st.LastEvent != "call-ended" {
 			t.Errorf("last event = %q, want call-ended", st.LastEvent)
 		}
-		// The endpoint pickers in Settings are populated from here, so the page
-		// has to have reported real named endpoints without waiting for a call.
-		if len(st.Devices) == 0 || st.DeviceLabelsHidden {
-			t.Errorf("no named audio endpoints reached the settings state: %+v", st.Devices)
+		// The Settings page's readiness rows come from here: the bridge
+		// connected and the Codex page reported itself signed in.
+		if st.BridgeState != "connected" {
+			t.Errorf("bridge state = %q, want connected", st.BridgeState)
+		}
+		agent := st.CodexVoice.Current(time.Now())
+		if !agent.Running || !agent.SignedIn {
+			t.Errorf("Codex voice status never reached the runtime state: %+v", st.CodexVoice)
+		}
+	})
+
+	t.Run("web-audio speech is captured and bridged too", func(t *testing.T) {
+		i := report.find(t, "agent-speaks-through-webaudio")
+		mid := report.Scenarios[i].MidCall
+		if mid.MicLevel <= 0.01 {
+			t.Errorf("speech played through AudioContext.destination never reached the caller (level %v)", mid.MicLevel)
 		}
 	})
 

@@ -1,31 +1,31 @@
-// Drives the real FlipAi Google Voice injection script in headless Chromium
-// against a stand-in Google Voice page, with the real Go call-bridge behind the
-// window.flipVoice* bindings. Everything here is plumbing; the logic under test
-// is served by the Go side at /flipai-init.js and is byte-for-byte what the
+// Drives the real FlipAi injection scripts in headless Chromium against
+// stand-in Google Voice and ChatGPT pages, with the real Go call bridge and
+// the real Go relay behind the window.flipVoice*/flipCodex* bindings.
+// Everything here is plumbing; the logic under test is served by the Go side
+// at /flipai-init.js and /flipai-codex-init.js and is byte-for-byte what the
 // Windows app injects.
 //
-// Chromium supplies two fake audio inputs and two fake audio outputs, which
-// stand in for the two virtual audio cables the feature needs on a real PC. The
-// microphone capture and the media-element sink are genuinely applied by the
-// browser, so the routing assertions are real rather than mocked.
+// The audio path is real: the caller is an oscillator in the Google Voice
+// page, the agent is an oscillator in the ChatGPT page, the two pages connect
+// over an actual RTCPeerConnection negotiated through the Go relay, and the
+// levels asserted at each end are measured by AnalyserNodes on the streams
+// the pages were actually given. Nothing about the sound is mocked.
 import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
 
-const BASE = process.env.FLIPAI_TEST_BASE;   // https://voice.google.com/ (browser-visible)
-const SHIM = process.env.FLIPAI_TEST_SHIM;   // http://127.0.0.1:PORT/ (this script only)
-const MAP = process.env.FLIPAI_TEST_MAP;     // Chromium host-resolver rule
+const BASE = process.env.FLIPAI_TEST_BASE;         // https://voice.google.com/
+const CODEX_BASE = process.env.FLIPAI_TEST_CODEX;  // https://chatgpt.com/
+const SHIM = process.env.FLIPAI_TEST_SHIM;         // http://127.0.0.1:PORT/ (this script only)
+const MAP = process.env.FLIPAI_TEST_MAP;           // Chromium host-resolver rules
 const results = { scenarios: [] };
 
-// The script under test is served by the Go side so the browser runs exactly
-// the string the Windows app injects, with no copy to drift out of date.
 const initScript = await (await fetch(SHIM + 'flipai-init.js')).text();
+const codexInitScript = await (await fetch(SHIM + 'flipai-codex-init.js')).text();
 
 const browser = await chromium.launch({
   args: [
     '--no-proxy-server',
     `--host-resolver-rules=${MAP}`,
     '--ignore-certificate-errors',
-    '--use-fake-device-for-media-stream',
-    '--use-fake-ui-for-media-stream',
     '--autoplay-policy=no-user-gesture-required',
   ],
 });
@@ -46,43 +46,45 @@ async function scenario(name, config, body, opts = {}) {
     if (!r.ok) throw new Error(`${method}: ${r.status} ${await r.text()}`);
     return r.json();
   };
-  const bind = (jsName, method, shape) =>
-    page.exposeFunction(jsName, async (...args) => {
+  const bind = (target, jsName, method, shape) =>
+    target.exposeFunction(jsName, async (...args) => {
       calls.push({ method: jsName, args });
       return (await post(method, shape(...args))).result;
     });
 
-  await bind('flipVoiceAudioSettings', 'audio-settings', () => ({}));
-  await bind('flipVoiceIncoming', 'incoming', (number, label) => ({ number, label }));
-  await bind('flipVoiceAnswered', 'answered', (number, label) => ({ number, label }));
-  await bind('flipVoiceEnded', 'ended', () => ({}));
-  await bind('flipVoiceDevices', 'devices', (raw) => ({ raw }));
-  await bind('flipVoicePage', 'page', (href, signedIn, controls) => ({ href, signedIn, controls }));
+  await bind(page, 'flipVoiceIncoming', 'incoming', (number, label) => ({ number, label }));
+  await bind(page, 'flipVoiceAnswered', 'answered', (number, label) => ({ number, label }));
+  await bind(page, 'flipVoiceEnded', 'ended', () => ({}));
+  await bind(page, 'flipVoicePage', 'page', (href, signedIn, controls) => ({ href, signedIn, controls }));
+  await bind(page, 'flipVoiceBridge', 'bridge', (state) => ({ state }));
+  await bind(page, 'flipVoiceRelaySend', 'relay-call-send', (msg) => ({ msg }));
+  await page.exposeFunction('flipVoiceRelayRecv', async () =>
+    (await post('relay-call-recv', {})).result);
 
-  // Recorded before FlipAi installs its own wrapper, so it observes the
-  // constraints FlipAi produced rather than the ones the page asked for.
-  // Init scripts also run on the initial empty document, where mediaDevices is
-  // absent, so this has to tolerate not being able to install itself.
-  await page.addInitScript(() => {
-    try {
-      const md = navigator.mediaDevices;
-      if (!md || !md.getUserMedia) return;
-      const inner = md.getUserMedia.bind(md);
-      window.__flipRecordedCalls = [];
-      md.getUserMedia = function (c) {
-        // FlipAi opens the microphone itself at startup to unlock endpoint
-        // names, so more than one capture is expected; every one is kept.
-        window.__flipRecordedCalls.push(JSON.parse(JSON.stringify(c || null)));
-        return inner(c);
-      };
-    } catch (_) {}
-  });
   // A scenario may need to change the environment the script under test runs
   // in; this goes in before it so it is in place when the script installs.
   if (opts.pre) await page.addInitScript(opts.pre);
   await page.addInitScript({ content: initScript });
 
   await post('configure', config);
+
+  // The stand-in ChatGPT page, running the real Codex injection script, wired
+  // to the same Go relay. Only scenarios that exercise the bridge load it.
+  let codex = null;
+  if (opts.codex) {
+    codex = await ctx.newPage();
+    codex.on('pageerror', (e) => errors.push('codex: ' + String(e)));
+    await bind(codex, 'flipCodexRelaySend', 'relay-agent-send', (msg) => ({ msg }));
+    await codex.exposeFunction('flipCodexRelayRecv', async () =>
+      (await post('relay-agent-recv', {})).result);
+    await bind(codex, 'flipCodexStatus', 'codex-status', (href, signedIn, voiceActive, controls, lastError) =>
+      ({ href, signedIn, voiceActive, controls, lastError }));
+    await codex.addInitScript({ content: codexInitScript });
+    await codex.goto(CODEX_BASE + '?speak=' + (opts.speak || 'element'), { waitUntil: 'load' });
+    await codex.waitForFunction(() => typeof window.__flipCodexTick === 'function', null, { timeout: 10000 })
+      .catch(() => { throw new Error(`FlipAi codex script never installed in ${name}`); });
+  }
+
   await page.goto(BASE, { waitUntil: 'load' });
   await page.waitForFunction(() => typeof window.__flipVoiceTick === 'function', null, { timeout: 10000 })
     .catch(() => { throw new Error(`FlipAi script never installed in ${name}: ${errors.join(' | ') || 'no page error reported'}`); });
@@ -92,29 +94,50 @@ async function scenario(name, config, body, opts = {}) {
   const tick = async (times = 1) => {
     for (let i = 0; i < times; i++) {
       await page.evaluate(() => window.__flipVoiceTick());
+      if (codex) await codex.evaluate(() => window.__flipCodexTick()).catch(() => {});
       await page.waitForTimeout(150);
     }
   };
+  // Waits until the Go bridge has been told the WebRTC link is up.
+  const waitBridgeConnected = async () => {
+    const deadline = Date.now() + 30000;
+    for (;;) {
+      if (calls.some((c) => c.method === 'flipVoiceBridge' && c.args[0] === 'connected')) return;
+      if (Date.now() > deadline) {
+        const trace = calls
+          .filter((c) => c.method === 'flipVoiceBridge' || c.method === 'flipVoiceRelaySend' || c.method === 'flipCodexRelaySend')
+          .map((c) => c.method + ' ' + String(c.args[0]).slice(0, 80))
+          .join('\n');
+        throw new Error(`the audio bridge never connected in ${name}; signaling so far:\n${trace}`);
+      }
+      await tick();
+    }
+  };
+  const waitLevels = async () => {
+    const deadline = Date.now() + 30000;
+    for (;;) {
+      const gv = await page.evaluate(() => window.gv.observed());
+      const cx = await codex.evaluate(() => window.cx.observed());
+      if (gv.micLevel > 0.01 && cx.micLevel > 0.01) return;
+      if (Date.now() > deadline) {
+        throw new Error(`audio never flowed both ways in ${name}: caller heard ${gv.micLevel}, agent heard ${cx.micLevel}`);
+      }
+      await tick();
+      await page.waitForTimeout(300);
+    }
+  };
 
-  const devices = await page.evaluate(async () =>
-    (await navigator.mediaDevices.enumerateDevices())
-      .filter((d) => d.kind === 'audioinput' || d.kind === 'audiooutput')
-      .map((d) => ({ kind: d.kind, deviceId: d.deviceId, label: d.label })));
-
-  const out = await body({ page, tick, calls, devices });
+  const out = await body({ page, codex, tick, calls, waitBridgeConnected, waitLevels });
   results.scenarios.push({
     name,
     calls,
     errors,
-    devices,
     observed: await page.evaluate(() => window.gv.observed()),
+    codexObserved: codex ? await codex.evaluate(() => window.cx.observed()) : null,
     ...out,
   });
   await ctx.close();
 }
-
-const CABLE_IN = 'Fake Audio Input 2';    // stands in for the cable feeding Google Voice's mic
-const CABLE_OUT = 'Fake Audio Output 2';  // stands in for the cable carrying the caller onward
 
 // Who may call is decided by the agents, exactly as who may text is; the voice
 // half only says how the call is bridged.
@@ -123,8 +146,6 @@ const baseConfig = (agents = {}) => ({
     enabled: true,
     autoAnswer: true,
     defaultAgent: 'C',
-    googleVoiceInput: CABLE_IN,
-    googleVoiceOutput: CABLE_OUT,
     codex: { enabled: true, appTitle: 'ChatGPT' },
     claude: { enabled: false, appTitle: 'Claude' },
   },
@@ -137,18 +158,42 @@ const baseConfig = (agents = {}) => ({
 });
 
 // 1. The whole point of the feature: an approved number calls, FlipAi answers,
-//    bridges the audio onto the cables, and tears down on hang-up.
-await scenario('authorized-number', baseConfig(), async ({ page, tick }) => {
-  await tick();
+//    Codex voice mode starts, and sound flows both ways over the virtual
+//    bridge -- the caller's tone reaches the agent's microphone, the agent's
+//    tone reaches the stream Google Voice sends to the caller, and nothing is
+//    audible locally. Hang-up tears the whole thing down.
+await scenario('authorized-number', baseConfig(), async ({ page, codex, tick, waitBridgeConnected, waitLevels }) => {
+  await waitBridgeConnected();
   await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
   await tick();
   await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await codex.waitForFunction(() => window.cx.voiceActive, null, { timeout: 15000 })
+    .catch(() => { throw new Error('Codex voice mode never started for an answered call'); });
+  await waitLevels();
+  const midCall = await page.evaluate(() => window.gv.observed());
+  const midCodex = await codex.evaluate(() => window.cx.observed());
+  await page.evaluate(() => window.gv.hangup());
   await tick(2);
+  await codex.waitForFunction(() => !window.cx.voiceActive, null, { timeout: 15000 })
+    .catch(() => { throw new Error('Codex voice mode never stopped after hang-up'); });
+  return { midCall, midCodex };
+}, { codex: true, speak: 'element' });
+
+// 1b. The agent speaks through Web Audio aimed straight at the speakers
+//     instead of a media element; the bridge has to catch that too, and keep
+//     it off the real speakers.
+await scenario('agent-speaks-through-webaudio', baseConfig(), async ({ page, codex, tick, waitBridgeConnected, waitLevels }) => {
+  await waitBridgeConnected();
+  await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
+  await tick();
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await codex.waitForFunction(() => window.cx.voiceActive, null, { timeout: 15000 });
+  await waitLevels();
   const midCall = await page.evaluate(() => window.gv.observed());
   await page.evaluate(() => window.gv.hangup());
-  await tick();
+  await tick(2);
   return { midCall };
-});
+}, { codex: true, speak: 'webaudio' });
 
 // 2. The caller is in Google Contacts, so Google Voice shows a name and there is
 //    no number to match. Nothing may be answered, and FlipAi has to say why.

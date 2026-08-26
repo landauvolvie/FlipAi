@@ -48,9 +48,12 @@ const voiceVisibilityFallbackScript = `
 (() => {
   const showVoiceFailure = () => {
     if (!globalThis.__flipaiDesktop) return;
-    if (location.pathname !== '/connections') return;
+    // The controls live on Settings, the live preview on Connections; either
+    // page failing to grow its card means the local voice service is down.
+    const wanted = {'/connections': '#voice-preview-card', '/settings': '#voice-call-card'}[location.pathname];
+    if (!wanted) return;
     setTimeout(() => {
-      if (document.querySelector('#voice-call-card')) return;
+      if (document.querySelector(wanted)) return;
       if (document.querySelector('#voice-call-unavailable')) return;
       const content = document.querySelector('.content');
       if (!content) return;

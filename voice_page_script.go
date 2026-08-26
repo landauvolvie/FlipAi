@@ -9,10 +9,13 @@ package main
 //     voice_call_windows.go for why that removal happens here);
 //   - notice a ringing call, work out who is calling, and ask FlipAi whether
 //     to answer it;
-//   - pin Google Voice's microphone and speaker to the virtual endpoints the
-//     user chose, so the call is wired to the AI app rather than the PC's own
-//     headset;
-//   - tell FlipAi when the call starts and ends, so desktop voice mode is
+//   - carry the call's sound to and from the built-in Codex voice page over a
+//     WebRTC connection that never leaves this machine: the caller's voice is
+//     lifted out of Google Voice's own audio elements, and the stream Google
+//     Voice believes is its microphone is really the agent talking. No real
+//     microphone is opened, nothing is played through the PC's speakers, and
+//     there is no audio device anywhere in the path;
+//   - tell FlipAi when the call starts and ends, so the agent's voice mode is
 //     switched on and off around it.
 //
 // It deliberately lives in a platform-independent file: the harness in
@@ -25,8 +28,7 @@ const googleVoiceInitScript = `
   window.__flipVoiceInstalled = true;
 
   const TICK_MS = 700;
-  const SETTINGS_TTL_MS = 3000;
-  const DEVICE_REPORT_MS = 5000;
+  const RELAY_MS = 300;
 
   /* ---------- keep this window a Google Voice window ---------- */
 
@@ -42,8 +44,9 @@ const googleVoiceInitScript = `
   }, true);
 
   // WebView2 grants this window's permissions globally, because per-permission
-  // grants are broken in the browser binding FlipAi uses. Everything except the
-  // microphone is therefore taken away here, before Google Voice can ask.
+  // grants are broken in the browser binding FlipAi uses. Everything except
+  // what a phone call needs is therefore taken away here, before Google Voice
+  // can ask.
   const denied = (msg) => Promise.reject(new DOMException(msg, 'NotAllowedError'));
   try {
     const geo = {
@@ -65,128 +68,211 @@ const googleVoiceInitScript = `
     }
   } catch (_) {}
 
-  /* ---------- talking to FlipAi ---------- */
+  /* ---------- the virtual audio bridge ----------
 
-  let settings = {input: '', output: '', ring: ''};
-  let settingsAt = 0;
-  async function audioSettings() {
-    const now = Date.now();
-    if (now - settingsAt < SETTINGS_TTL_MS) return settings;
+     Two Web Audio junction points carry the whole conversation:
+
+       toAgent   -- everything the caller says. Google Voice plays the caller
+                    through a media element; the stream behind that element is
+                    tapped into this node, and the element itself is muted so
+                    nothing near the PC hears the call.
+       fromAgent -- everything the agent says. It arrives from the Codex voice
+                    page over the WebRTC link and is poured into this node,
+                    whose stream is what Google Voice receives when it asks
+                    for a microphone.
+
+     The link between the pages is an RTCPeerConnection whose offer/answer/ICE
+     messages travel through FlipAi (window.flipVoiceRelay*), because two
+     WebViews have no other way to reach each other. The media itself flows
+     directly between the two browser processes on this machine. */
+
+  let actx = null, toAgent = null, fromAgent = null;
+  function audioGraph() {
+    if (!actx) {
+      actx = new AudioContext();
+      toAgent = actx.createMediaStreamDestination();
+      fromAgent = actx.createMediaStreamDestination();
+    }
+    if (actx.state === 'suspended') { try { actx.resume(); } catch (_) {} }
+    return actx;
+  }
+
+  // Chromium only decodes a remote WebRTC track that is attached to a media
+  // element. The monitor element is that attachment: muted, never in the DOM,
+  // existing so the track flows into the audio graph.
+  const monitors = [];
+  function monitorStream(ms) {
+    const a = document.createElement('audio');
+    a.__flipInternal = true;
+    a.muted = true;
+    a.srcObject = ms;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => {});
+    monitors.push(a);
+    if (monitors.length > 8) monitors.shift();
+  }
+
+  let pc = null;
+  let bridgeState = 'idle';
+  let lastOffer = 0;
+  async function reportBridge(state) {
+    if (state === bridgeState) return;
+    bridgeState = state;
+    try { await window.flipVoiceBridge(state); } catch (_) {}
+  }
+  function sendToAgent(msg) {
+    try { window.flipVoiceRelaySend(JSON.stringify(msg)); } catch (_) {}
+  }
+
+  // This page is always the offerer; the Codex page always answers. Whoever
+  // loads second announces itself ('hello' from the agent, a fresh offer from
+  // here), so a reload on either side rebuilds the same connection.
+  //
+  // Both pages come up within moments of each other, so the startup offer and
+  // the offer answering the agent's 'hello' can be in flight at once. Every
+  // negotiation therefore carries an id, and anything about an older
+  // negotiation is dropped: the newest offer always wins on both sides.
+  let offerSeq = 0;
+  async function newPeer() {
+    audioGraph();
+    lastOffer = Date.now();
+    if (pc) { try { pc.close(); } catch (_) {} pc = null; }
+    const id = ++offerSeq;
+    pc = new RTCPeerConnection();
+    pc.addTrack(toAgent.stream.getAudioTracks()[0], toAgent.stream);
+    pc.onicecandidate = (e) => { if (e.candidate) sendToAgent({type: 'ice', id: id, candidate: e.candidate.toJSON()}); };
+    pc.ontrack = (e) => {
+      const ms = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
+      monitorStream(ms);
+      try { audioGraph().createMediaStreamSource(ms).connect(fromAgent); } catch (_) {}
+    };
+    const mine = pc;
+    pc.onconnectionstatechange = () => {
+      if (pc !== mine) return;
+      const s = mine.connectionState;
+      if (s === 'connected') reportBridge('connected');
+      else if (s === 'failed' || s === 'disconnected' || s === 'closed') reportBridge('failed');
+    };
+    reportBridge('connecting');
+    const offer = await pc.createOffer();
+    if (id !== offerSeq) return; // a newer negotiation replaced this one mid-await
+    await pc.setLocalDescription(offer);
+    sendToAgent({type: 'offer', id: id, sdp: pc.localDescription.sdp});
+  }
+
+  async function onAgentMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'hello') { await newPeer(); return; }
+    if (!pc || msg.id !== offerSeq) return;
+    if (msg.type === 'answer' && msg.sdp) {
+      try { await pc.setRemoteDescription({type: 'answer', sdp: msg.sdp}); } catch (_) {}
+    } else if (msg.type === 'ice' && msg.candidate) {
+      try { await pc.addIceCandidate(msg.candidate); } catch (_) {}
+    }
+  }
+
+  let pumping = false;
+  async function pumpRelay() {
+    if (pumping) return;
+    pumping = true;
     try {
-      const next = await window.flipVoiceAudioSettings();
-      if (next) settings = next;
-    } catch (_) {}
-    settingsAt = now;
-    return settings;
+      for (let i = 0; i < 24; i++) {
+        let raw = '';
+        try { raw = await window.flipVoiceRelayRecv(); } catch (_) { break; }
+        if (!raw) break;
+        let msg = null;
+        try { msg = JSON.parse(raw); } catch (_) { continue; }
+        await onAgentMessage(msg);
+      }
+    } finally { pumping = false; }
   }
 
-  /* ---------- audio endpoints ---------- */
-
-  // Every lookup below is cached. The previous version resolved the endpoint
-  // from scratch for every audio element on every DOM mutation, and Google
-  // Voice mutates continuously, so it issued thousands of host round-trips a
-  // second and left the page too busy to answer a call.
-  const idCache = new Map();
-  let deviceList = [];
-  let sinkId = '';
-  // micId is resolved ahead of time only to warm idCache, so the getUserMedia
-  // interception below can substitute the endpoint without a lookup mid-call.
-  let micId = '';
-
-  async function currentDevices() {
-    try { deviceList = await navigator.mediaDevices.enumerateDevices(); } catch (_) { deviceList = []; }
-    return deviceList;
-  }
-  function matchDevice(list, kind, wanted) {
-    const want = String(wanted).toLowerCase();
-    const exact = list.find(d => d.kind === kind && d.label === wanted);
-    if (exact) return exact.deviceId;
-    const loose = list.find(d => d.kind === kind && d.label && d.label.toLowerCase().includes(want));
-    return loose ? loose.deviceId : '';
-  }
-  async function deviceIdFor(kind, wanted) {
-    if (!wanted) return '';
-    const key = kind + ' ' + wanted;
-    if (idCache.has(key)) return idCache.get(key);
-    const id = matchDevice(await currentDevices(), kind, wanted);
-    if (id) idCache.set(key, id);
-    return id;
-  }
-  function forgetDevices() { idCache.clear(); settingsAt = 0; }
-
-  async function refreshEndpoints() {
-    const s = await audioSettings();
-    sinkId = await deviceIdFor('audiooutput', s.output);
-    micId = await deviceIdFor('audioinput', s.input);
+  // A connection that failed -- the Codex window restarted, or never came up
+  // -- is retried from scratch, but not so often that two pages starting at
+  // once trip over each other's half-finished handshakes.
+  function bridgeUpkeep() {
+    if (!pc || bridgeState === 'failed') {
+      if (Date.now() - lastOffer > 8000) newPeer().catch(() => {});
+    }
   }
 
-  let lastDeviceJSON = '';
-  let lastDeviceReport = 0;
-  async function reportDevices(force) {
-    const now = Date.now();
-    if (!force && now - lastDeviceReport < DEVICE_REPORT_MS) return;
-    lastDeviceReport = now;
-    const out = (await currentDevices())
-      .filter(d => d.kind === 'audioinput' || d.kind === 'audiooutput')
-      .map(d => ({kind: d.kind, deviceId: d.deviceId || '', label: d.label || ''}));
-    const raw = JSON.stringify(out);
-    if (raw === lastDeviceJSON) return;
-    lastDeviceJSON = raw;
-    try { await window.flipVoiceDevices(raw); } catch (_) {}
+  /* ---------- keep the call silent and lift the caller's voice ----------
+
+     Google Voice attaches the caller's stream to a media element with
+     srcObject. Intercepting that property is both halves of the audio path at
+     once: the stream is tapped into toAgent for the agent to hear, and the
+     element is silenced so the conversation never reaches the PC's speakers.
+     The ringtone plays through an ordinary src= element and is deliberately
+     left alone -- a phone ringing in the room is fine, a conversation is not. */
+
+  const captured = new WeakSet();
+  function silence(el) {
+    el.__flipSilenced = true;
+    try { el.muted = true; } catch (_) {}
+    try { el.volume = 0; } catch (_) {}
+  }
+  function captureCallMedia(el, ms) {
+    if (!ms || typeof ms.getAudioTracks !== 'function') return;
+    const tracks = ms.getAudioTracks();
+    if (!tracks.length) return;
+    silence(el);
+    // Never route the agent's own voice back to the agent: a stream built
+    // from the bridge microphone is the agent talking, not the caller.
+    if (tracks.every((t) => t.__flipBridge)) return;
+    if (captured.has(ms)) return;
+    captured.add(ms);
+    try { audioGraph().createMediaStreamSource(ms).connect(toAgent); } catch (_) {}
   }
 
-  // routed remembers the endpoint already applied to an element, which is what
-  // makes it cheap enough to re-check on every DOM change.
-  const routed = new WeakMap();
-  function applySink(el) {
-    if (!el || typeof el.setSinkId !== 'function' || !sinkId) return false;
-    if (routed.get(el) === sinkId) return true;
-    try {
-      routed.set(el, sinkId);
-      el.setSinkId(sinkId).catch(() => routed.delete(el));
-      return true;
-    } catch (_) { routed.delete(el); return false; }
+  const mediaProto = HTMLMediaElement.prototype;
+  const srcObjectDesc = Object.getOwnPropertyDescriptor(mediaProto, 'srcObject');
+  if (srcObjectDesc && srcObjectDesc.set) {
+    Object.defineProperty(mediaProto, 'srcObject', {
+      configurable: true,
+      get() { return srcObjectDesc.get.call(this); },
+      set(v) {
+        srcObjectDesc.set.call(this, v);
+        if (!this.__flipInternal) captureCallMedia(this, v);
+      }
+    });
   }
-  function routeAll() { document.querySelectorAll('audio,video').forEach(applySink); }
-
-  // Google Voice plays the caller through a media element. The sink is applied
-  // from the cached endpoint and play() is still called in the same turn:
-  // deferring play() past its user-gesture turn can trip autoplay policy and
-  // lose the call audio altogether.
+  // A silenced element stays silenced even if the page unmutes it later.
+  const mutedDesc = Object.getOwnPropertyDescriptor(mediaProto, 'muted');
+  if (mutedDesc && mutedDesc.set) {
+    Object.defineProperty(mediaProto, 'muted', {
+      configurable: true,
+      get() { return mutedDesc.get.call(this); },
+      set(v) { mutedDesc.set.call(this, this.__flipSilenced ? true : v); }
+    });
+  }
+  const volumeDesc = Object.getOwnPropertyDescriptor(mediaProto, 'volume');
+  if (volumeDesc && volumeDesc.set) {
+    Object.defineProperty(mediaProto, 'volume', {
+      configurable: true,
+      get() { return volumeDesc.get.call(this); },
+      set(v) { volumeDesc.set.call(this, this.__flipSilenced ? 0 : v); }
+    });
+  }
   const nativePlay = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function(...args) {
-    applySink(this);
+    if (this.__flipSilenced) { try { this.muted = true; } catch (_) {} }
     return nativePlay.apply(this, args);
   };
 
-  // Force Google Voice's microphone onto the virtual endpoint chosen in FlipAi.
-  // A video request is refused outright: this window exists for phone calls.
+  /* ---------- the microphone Google Voice believes it has ---------- */
+
+  // Google Voice's microphone is the agent's voice. No device is opened, no
+  // permission prompt can appear, and locking the PC changes nothing because
+  // no hardware is in use. A video request is refused outright: this window
+  // exists for phone calls.
   if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getUserMedia = async function(constraints) {
       if (constraints && constraints.video) return denied('The camera is disabled in FlipAi');
-      let next = constraints;
-      try {
-        const s = await audioSettings();
-        if (constraints && constraints.audio && s.input) {
-          const id = await deviceIdFor('audioinput', s.input);
-          if (id) {
-            const a = constraints.audio === true ? {} : Object.assign({}, constraints.audio);
-            a.deviceId = {exact: id};
-            next = Object.assign({}, constraints, {audio: a});
-          }
-        }
-      } catch (_) {}
-      const stream = await gum(next);
-      // Endpoint names are only readable once a stream exists, so this is the
-      // first moment the device list is worth anything to the settings page.
-      forgetDevices();
-      reportDevices(true);
-      return stream;
+      audioGraph();
+      const ms = fromAgent.stream.clone();
+      ms.getAudioTracks().forEach((t) => { t.__flipBridge = true; });
+      return ms;
     };
-    try {
-      navigator.mediaDevices.addEventListener('devicechange', () => { forgetDevices(); reportDevices(true); });
-    } catch (_) {}
   }
 
   // WebView2 runs this script at document-created time, when <html> may not
@@ -199,14 +285,14 @@ const googleVoiceInitScript = `
   // -- and this window is deliberately minimized. A ring that arrives while the
   // timer is throttled has to be noticed from the DOM change that carries it,
   // or the call is simply never answered.
-  let routeQueued = false;
+  let tickQueued = false;
   const observeDocument = () => {
     const root = document.documentElement || document.body;
     if (!root) return false;
     new MutationObserver(() => {
-      if (routeQueued) return;
-      routeQueued = true;
-      setTimeout(() => { routeQueued = false; routeAll(); tick(); }, 250);
+      if (tickQueued) return;
+      tickQueued = true;
+      setTimeout(() => { tickQueued = false; tick(); }, 250);
     }).observe(root, {childList: true, subtree: true});
     return true;
   };
@@ -362,9 +448,8 @@ const googleVoiceInitScript = `
       const signedIn = location.hostname === 'voice.google.com' && !/sign\s*in/i.test(bodyText);
       try { await window.flipVoicePage(href, signedIn, controlsSnapshot()); } catch (_) {}
 
-      await refreshEndpoints();
-      routeAll();
-      reportDevices(false);
+      await pumpRelay();
+      bridgeUpkeep();
 
       const answer = findAnswer();
       if (answer && !inCall && !answering) {
@@ -395,22 +480,16 @@ const googleVoiceInitScript = `
     }
   }
 
-  // Endpoint names are hidden from a page until it holds a microphone grant, so
-  // FlipAi opens the microphone once at startup and immediately closes it. That
-  // is what makes the endpoint pickers in Settings show real device names
-  // before a call has ever arrived, and it settles the permission ahead of the
-  // first ring instead of during it.
-  async function primeDevices() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-      stream.getTracks().forEach(t => t.stop());
-    } catch (_) {}
-    forgetDevices();
-    await reportDevices(true);
-  }
-
   const loop = () => { tick().then(() => setTimeout(loop, TICK_MS)); };
-  setTimeout(() => { primeDevices().then(loop); }, 250);
+  setTimeout(() => {
+    // Offer the bridge immediately: the Codex page may already be waiting, and
+    // a call can arrive before the first tick otherwise finds it.
+    newPeer().catch(() => {});
+    loop();
+  }, 250);
+  // The handshake with the Codex page must not wait on the slow tick: ICE is a
+  // short back-and-forth, and every leg would otherwise cost 700ms.
+  setInterval(() => { pumpRelay(); }, RELAY_MS);
   // The harness drives ticks directly instead of waiting on the timer.
   window.__flipVoiceTick = tick;
 })();

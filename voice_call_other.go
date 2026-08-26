@@ -22,3 +22,11 @@ func platformEnsureGoogleVoice(dataDir string) {}
 // platformRestartGoogleVoice restarts the window process. There is none off
 // Windows.
 func platformRestartGoogleVoice(dataDir string) {}
+
+func platformSignOutGoogleVoice(dataDir string) error {
+	return errors.New("Google Voice calling is available only in the Windows FlipAi app")
+}
+
+func platformOpenCodexVoice(dataDir string) error {
+	return errors.New("the Codex voice window is available only in the Windows FlipAi app")
+}

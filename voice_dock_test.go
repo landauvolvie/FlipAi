@@ -44,15 +44,8 @@ func voicePost(t *testing.T, srv *httptest.Server, path, body string) (int, stri
 // switch was flipped.
 func TestTurningCallingOnSavesByItself(t *testing.T) {
 	dir := t.TempDir()
-	// The state that used to make the save impossible: every endpoint holding
-	// the same default device name.
-	stuck := defaultVoiceCallConfig()
-	stuck.GoogleVoiceInput = "Default - Remote Audio"
-	stuck.GoogleVoiceOutput = "Default - Remote Audio"
-	stuck.AgentInput = "Default - Remote Audio"
-	stuck.AgentOutput = "Default - Remote Audio"
-	if err := saveVoiceCallConfig(dir, stuck); err != nil {
-		t.Fatalf("a fresh PC's default endpoints could not even be saved: %v", err)
+	if err := saveVoiceCallConfig(dir, defaultVoiceCallConfig()); err != nil {
+		t.Fatalf("the default configuration could not even be saved: %v", err)
 	}
 
 	srv := voiceEndpoint(t, dir)
@@ -66,9 +59,6 @@ func TestTurningCallingOnSavesByItself(t *testing.T) {
 	}
 	if !snap.Config.Enabled {
 		t.Fatal("the answer says calling is still off")
-	}
-	if snap.AudioWarning == "" {
-		t.Error("the answer should still say the audio path is wrong")
 	}
 	if !loadVoiceCallConfig(dir).Enabled {
 		t.Fatal("calling was not written to disk")
@@ -173,7 +163,7 @@ func TestSavingTheCardCannotTurnCallingOffBehindTheSwitch(t *testing.T) {
 	// A card assembled before the switch was touched: it still says off.
 	stale := defaultVoiceCallConfig()
 	stale.Enabled = false
-	stale.GoogleVoiceInput = "Cable B Output (capture)"
+	stale.Claude.AppTitle = "Claude Nightly"
 	raw, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatal(err)
@@ -187,8 +177,8 @@ func TestSavingTheCardCannotTurnCallingOffBehindTheSwitch(t *testing.T) {
 	if !saved.Enabled {
 		t.Fatal("a stale card save switched calling back off")
 	}
-	if saved.GoogleVoiceInput != "Cable B Output (capture)" {
-		t.Errorf("the rest of the card was not saved: %+v", saved.GoogleVoiceInput)
+	if saved.Claude.AppTitle != "Claude Nightly" {
+		t.Errorf("the rest of the card was not saved: %+v", saved.Claude.AppTitle)
 	}
 	var snap voiceControlSnapshot
 	if err := json.Unmarshal([]byte(body), &snap); err != nil {

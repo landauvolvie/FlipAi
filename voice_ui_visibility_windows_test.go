@@ -35,9 +35,9 @@ func TestVoiceUIShowsServiceFailureInsteadOfDisappearing(t *testing.T) {
 // and this was not, every working Connections page announced a broken voice
 // service to a user whose voice service was fine.
 func TestTheNoServiceWarningLooksForTheCardThatIsActuallyBuilt(t *testing.T) {
-	ids := regexp.MustCompile(`#voice-call-[a-z-]+`).FindAllString(voiceVisibilityFallbackScript, -1)
-	if len(ids) == 0 {
-		t.Fatal("the fallback warning no longer looks for a card at all")
+	ids := regexp.MustCompile(`#voice-(?:call|preview)-[a-z-]+`).FindAllString(voiceVisibilityFallbackScript, -1)
+	if len(ids) < 2 {
+		t.Fatalf("the fallback warning must look for both the Settings and Connections cards, found %v", ids)
 	}
 	for _, id := range ids {
 		// The banner's own id is the one thing it may name without building it.
