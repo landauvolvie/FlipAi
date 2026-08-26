@@ -66,7 +66,9 @@ func TestEveryFrameChangeReLaysOutTheBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(source)
+	// Checked out on Windows this file has CRLF line endings, so anything
+	// looking for a bare newline finds nothing at all.
+	body := strings.ReplaceAll(string(source), "\r\n", "\n")
 	for _, fn := range []string{"func (c *voiceDockController) dock(", "func (c *voiceDockController) undock("} {
 		i := strings.Index(body, fn)
 		if i < 0 {
