@@ -8,12 +8,20 @@ import (
 	"testing"
 )
 
-func TestEdgeGoogleVoiceUsesWebPermissionDescriptorNames(t *testing.T) {
+func edgeReceiverSource(t *testing.T) string {
+	t.Helper()
 	b, err := os.ReadFile("voice_edge_windows.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(b)
+	// GitHub's Windows runners can check text files out with CRLF even when the
+	// source was generated with LF. Normalize before structural string checks so
+	// the test verifies the receiver rather than the checkout newline policy.
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
+}
+
+func TestEdgeGoogleVoiceUsesWebPermissionDescriptorNames(t *testing.T) {
+	s := edgeReceiverSource(t)
 	for _, want := range []string{`"notifications"`, `"push"`, `"microphone"`, `"speaker-selection"`} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("Edge Google Voice receiver missing permission descriptor %s", want)
@@ -27,11 +35,7 @@ func TestEdgeGoogleVoiceUsesWebPermissionDescriptorNames(t *testing.T) {
 }
 
 func TestEdgeReceiverDoesNotStartBrowserHidden(t *testing.T) {
-	b, err := os.ReadFile("voice_edge_windows.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(b)
+	s := edgeReceiverSource(t)
 	start := strings.Index(s, "cmd := exec.Command(edgePath, args...)")
 	if start < 0 {
 		t.Fatal("Edge launch block missing")
@@ -46,11 +50,7 @@ func TestEdgeReceiverDoesNotStartBrowserHidden(t *testing.T) {
 }
 
 func TestEdgeReceiverLivenessUsesHWNDNotVisibility(t *testing.T) {
-	b, err := os.ReadFile("voice_edge_windows.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(b)
+	s := edgeReceiverSource(t)
 	start := strings.Index(s, "func edgeWindowGone")
 	if start < 0 {
 		t.Fatal("edgeWindowGone missing")
