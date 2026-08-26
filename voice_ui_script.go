@@ -162,6 +162,11 @@ const voiceDesktopInitScript = `
       '#gv-embed-slot .gv-empty{position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;text-align:center;padding:28px;color:#d8d3e6;background:#151221}',
       '#gv-embed-slot .gv-empty b{font-size:15px;color:#fff}',
       '#gv-embed-slot .gv-empty span{max-width:520px;font-size:13px;line-height:1.5;color:#b3abc7}',
+      '#gv-embed-slot .gv-empty .gv-why{max-width:560px;font-size:12px;line-height:1.5;color:#8f87a8;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap}',
+      '#gv-embed-slot .gv-empty .gv-acts{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px}',
+      '#gv-embed-slot .gv-empty button{cursor:pointer;border-radius:10px;border:1px solid #3a3350;background:#241f36;color:#efe9ff;font:inherit;font-size:13px;padding:8px 14px}',
+      '#gv-embed-slot .gv-empty button:hover{background:#2f2846}',
+      '#gv-embed-slot .gv-empty button[disabled]{opacity:.6;cursor:default}',
       '.gv-embed-wrap{margin:6px 0 4px}',
       '.gv-embed-note{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:8px 0 0}',
       '.gv-flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0 2px}',
@@ -260,6 +265,76 @@ const voiceDesktopInitScript = `
     retry.addEventListener('click',()=>location.reload());
   }
 
+  // panelState answers the only question the dark panel has ever been asked:
+  // why is Google Voice not in it?
+  //
+  // It used to answer with one sentence, always the same one, telling the user
+  // to turn on a switch that was already on. Everything below is a state FlipAi
+  // actually knows it is in, and each one that a person can do something about
+  // says what.
+  function panelState(){
+    const rt=snapshot.runtime||{},cfg=snapshot.config||{};
+    if(rt.docked&&rt.browserRunning) return null;
+    // The user's own switch comes first: with calling off, nothing is being
+    // attempted, so nothing else is the reason yet.
+    if(!cfg.enabled){
+      return {title:'Calling is off',
+        detail:'Turn on "Answer phone calls with an agent" above and Google Voice appears here.'};
+    }
+    if(!snapshot.webView2){
+      return {title:'Windows is missing the component that shows Google Voice',
+        detail:'FlipAi draws Google Voice with the Microsoft Edge WebView2 Runtime, which is not installed on this PC. Microsoft distributes it free as the Evergreen Standalone Installer. Install it, then press Retry.',
+        retry:true};
+    }
+    if(rt.lastOpenError){
+      return {title:'Google Voice could not start', why:rt.lastOpenError, retry:true, popOut:true,
+        detail:'Nothing else in FlipAi is affected — texts and Gmail routing carry on.'};
+    }
+    if(!rt.browserRunning){
+      return {title:'Starting Google Voice...', why:rt.lastOpen||'',
+        detail:'The first run has to unpack Microsoft WebView2, which can take a minute. If it stays like this, press Retry.',
+        retry:true};
+    }
+    if(!rt.docked){
+      return {title:'Google Voice is running, but FlipAi could not put it in this panel',
+        why:rt.lastOpen||'',
+        detail:'It is signed in and it will still answer calls. FlipAi places the window over this panel, which needs the FlipAi window to be on screen and not minimized. Open it in its own window if you would rather see it there.',
+        retry:true, popOut:true};
+    }
+    return {title:'Google Voice is loading...', detail:'The window is running; waiting for it to appear in this panel.'};
+  }
+
+  function renderPanel(){
+    const empty=q('#gv-embed-empty');
+    if(!empty) return;
+    const state=panelState();
+    if(!state){ empty.style.display='none'; return; }
+    empty.style.display='flex';
+    empty.textContent='';
+    empty.append(E('b','',state.title));
+    if(state.detail) empty.append(E('span','',state.detail));
+    if(state.why) empty.append(E('p','gv-why',state.why));
+    if(state.retry||state.popOut){
+      const acts=E('div','gv-acts');
+      if(state.retry){
+        const r=E('button','',"Retry"); r.type='button';
+        r.addEventListener('click',async()=>{
+          r.disabled=true; r.textContent='Restarting...';
+          try{ snapshot=await post('/restart'); updateStatusRows(); }
+          catch(e){ toast(e.message,true); }
+          finally{ r.disabled=false; r.textContent='Retry'; }
+        });
+        acts.append(r);
+      }
+      if(state.popOut){
+        const o=E('button','','Open in its own window'); o.type='button';
+        o.addEventListener('click',()=>q('#vc-pop-out')?.click());
+        acts.append(o);
+      }
+      empty.append(acts);
+    }
+  }
+
   // updateStatusRows redraws only the parts that change on their own, so a
   // dropdown the user is in the middle of using is never rebuilt underneath
   // them.
@@ -273,29 +348,25 @@ const voiceDesktopInitScript = `
     set('vcs-call',rt.inCall?pill(rt.caller?('Connected — '+rt.caller):'Connected','ok'):pill('Idle'));
     set('vcs-ring',rt.lastRingAt&&!/^0001/.test(rt.lastRingAt)?pill(new Date(rt.lastRingAt).toLocaleString(),'ok'):pill('Never','warn'));
     const sw=q('#vc-enabled'); if(sw) sw.checked=!!cfg.enabled;
-    const empty=q('#gv-embed-slot .gv-empty');
-    if(empty) empty.style.display=(rt.docked&&rt.browserRunning)?'none':'flex';
+    renderPanel();
     const problems=q('#vc-problems');
     if(problems){ problems.textContent=''; for(const node of problemNodes()) problems.append(node); }
   }
 
   function problemNodes(){
+    // Only what the panel above does not already say. Saying the same thing
+    // twice, in two different places, is how the old card managed to contradict
+    // itself.
     const out=[],rt=snapshot.runtime||{},cfg=snapshot.config||{};
-    if(!snapshot.webView2){
-      out.push(callout('Microsoft Edge WebView2 Runtime is not installed. ','FlipAi cannot show Google Voice without it. Install Microsoft’s free Evergreen Standalone Installer and restart FlipAi.'));
-    }
-    if(!cfg.enabled){
-      out.push(callout('Calling is off. ','Turn on "Answer phone calls with an agent" above. FlipAi then keeps Google Voice running from Windows sign-in onward, whether or not this window is open.'));
-    }
     if(!(snapshot.callAgents||[]).length){
       out.push(callout('No agent can take a call yet. ','Open the Agents page, add your phone number under the agent you want to talk to, and set that number to "Texts and calls" or "Calls only". A number allowed under one agent can never reach the other one.'));
     }
     if(snapshot.audioWarning) out.push(callout('Audio path: ',snapshot.audioWarning));
-    if(cfg.enabled&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))){
-      out.push(callout('No call has ever rung here. ','Google Voice only rings in a browser when you have switched that on in Google Voice itself: in the panel below open Settings, then Calls, and turn on receiving calls on this device. Until then an incoming call goes to your forwarding phones and never reaches FlipAi.'));
+    if(cfg.enabled&&rt.browserRunning&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))){
+      out.push(callout('No call has ever rung here. ','Google Voice only rings in a browser when you have switched that on in Google Voice itself: in the panel above open Settings, then Calls, and turn on receiving calls on this device. Until then an incoming call goes to your forwarding phones and never reaches FlipAi.'));
     }
     if(rt.blocked) out.push(callout('Last call was not connected: ',rt.blocked));
-    if(rt.lastError) out.push(callout('Google Voice window: ',rt.lastError));
+    if(rt.lastError&&!rt.lastOpenError) out.push(callout('Google Voice window: ',rt.lastError));
     return out;
   }
 
@@ -305,7 +376,7 @@ const voiceDesktopInitScript = `
     const [head,actions]=sectionHead('Google Voice','One connection: the Google Voice window FlipAi keeps signed in, the calls it answers, and the audio path to the agent.');
     head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand'));
     const saved=E('span','hint','Changes save as you make them'); saved.id='vc-saved';
-    const popOut=btn('Open in its own window');
+    const popOut=btn('Open in its own window'); popOut.id='vc-pop-out';
     actions.append(saved,popOut); card.append(head);
 
     const body=E('div','card-body');
@@ -325,9 +396,7 @@ const voiceDesktopInitScript = `
     // 2. Google Voice itself, inside the app.
     const wrap=E('div','gv-embed-wrap');
     const slot=E('div'); slot.id='gv-embed-slot';
-    const empty=E('div','gv-empty');
-    empty.append(E('b','','Google Voice is not on screen yet'),
-      E('span','','FlipAi shows the Google Voice window here, inside the app. Turn calling on above and it appears within a few seconds; the first run has to unpack Microsoft WebView2, which can take a little longer. Sign in to Google here once and FlipAi keeps that session.'));
+    const empty=E('div','gv-empty'); empty.id='gv-embed-empty';
     slot.append(empty); wrap.append(slot);
     const note=E('div','gv-embed-note');
     note.append(E('p','hint','This is the real Google Voice, running in a window FlipAi owns and keeps alive. It stays signed in and keeps answering calls after you close FlipAi.'));

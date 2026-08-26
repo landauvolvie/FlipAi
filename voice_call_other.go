@@ -18,3 +18,7 @@ func platformVoiceStillOpen() bool { return false }
 // platformEnsureGoogleVoice starts the Google Voice window if it is not
 // already running. There is no such window off Windows.
 func platformEnsureGoogleVoice(dataDir string) {}
+
+// platformRestartGoogleVoice restarts the window process. There is none off
+// Windows.
+func platformRestartGoogleVoice(dataDir string) {}
