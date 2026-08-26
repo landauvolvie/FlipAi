@@ -5,6 +5,7 @@ package main
 import (
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 // Docking puts the Google Voice window inside the FlipAi window.
@@ -28,6 +29,8 @@ var (
 	procDockSetWindowLong   = pointerSizedWindowLong("SetWindowLongPtrW", "SetWindowLongW")
 	procDockShowWindowAsync = voiceUser32.NewProc("ShowWindowAsync")
 	procDockIsIconic        = voiceUser32.NewProc("IsIconic")
+	procDockGetClientRect   = voiceUser32.NewProc("GetClientRect")
+	procDockClientToScreen  = voiceUser32.NewProc("ClientToScreen")
 )
 
 const (
@@ -72,10 +75,48 @@ func pointerSizedWindowLong(wide, narrow string) *syscall.LazyProc {
 // dock rectangle arrives several times a second and almost always says the same
 // thing; re-styling and re-showing a window that many times a second would make
 // the panel flicker and steal focus.
+type dockRect struct{ Left, Top, Right, Bottom int32 }
+type dockPoint struct{ X, Y int32 }
+
+// screenRectFor turns one panel offset into the screen rectangle to place the
+// window at, clipped to the FlipAi window's client area so a page that reports
+// more than it can see cannot hang the panel over the rest of the app.
+//
+// It answers ok=false when the owner window cannot be measured, which is the
+// same thing as having nowhere to dock.
+func screenRectFor(owner uintptr, req VoiceDockRequest) (x, y, w, h int32, ok bool) {
+	var client dockRect
+	if r, _, _ := procDockGetClientRect.Call(owner, uintptr(unsafe.Pointer(&client))); r == 0 {
+		return 0, 0, 0, 0, false
+	}
+	origin := dockPoint{}
+	if r, _, _ := procDockClientToScreen.Call(owner, uintptr(unsafe.Pointer(&origin))); r == 0 {
+		return 0, 0, 0, 0, false
+	}
+	left, top := int32(req.X), int32(req.Y)
+	right, bottom := left+int32(req.Width), top+int32(req.Height)
+	if left < 0 {
+		left = 0
+	}
+	if top < 0 {
+		top = 0
+	}
+	if right > client.Right {
+		right = client.Right
+	}
+	if bottom > client.Bottom {
+		bottom = client.Bottom
+	}
+	if right-left < voiceDockMinSize || bottom-top < voiceDockMinSize {
+		return 0, 0, 0, 0, false
+	}
+	return origin.X + left, origin.Y + top, right - left, bottom - top, true
+}
+
 type voiceDockController struct {
 	hwnd    uintptr
 	docked  bool
-	rect    VoiceDockRequest
+	placed  [4]int32 // the screen rectangle the window is currently standing on
 	owner   uintptr
 	restore bool // the undocked window should be shown rather than minimized
 }
@@ -96,20 +137,28 @@ func setWindowStyle(hwnd uintptr, index int, value uintptr) {
 // Apply moves the window to match one dock request. It returns whether the
 // window is currently docked.
 func (c *voiceDockController) Apply(req VoiceDockRequest, now time.Time, owner uintptr) bool {
-	want := req.Active(now) && owner != 0
+	want := false
+	var rect [4]int32
+	if req.Active(now) && owner != 0 {
+		if x, y, w, h, ok := screenRectFor(owner, req); ok {
+			want, rect = true, [4]int32{x, y, w, h}
+		}
+	}
 	switch {
 	case want && !c.docked:
-		c.dock(req, owner)
+		c.dock(rect, owner)
 	case want && c.docked:
 		if owner != c.owner {
 			c.setOwner(owner)
 		}
-		if req.X != c.rect.X || req.Y != c.rect.Y || req.Width != c.rect.Width || req.Height != c.rect.Height {
-			c.place(req)
-		} else if iconic, _, _ := procDockIsIconic.Call(c.hwnd); iconic != 0 {
-			// The owner was minimized and restored, which takes the owned
-			// window with it. Put it back where the page says it belongs.
-			c.place(req)
+		if rect != c.placed {
+			c.place(rect)
+			break
+		}
+		// The owner was minimized and restored, which takes the owned window
+		// with it. Put it back where the page says it belongs.
+		if iconic, _, _ := procDockIsIconic.Call(c.hwnd); iconic != 0 {
+			c.place(rect)
 		}
 	case !want && c.docked:
 		c.undock()
@@ -117,7 +166,7 @@ func (c *voiceDockController) Apply(req VoiceDockRequest, now time.Time, owner u
 	return c.docked
 }
 
-func (c *voiceDockController) dock(req VoiceDockRequest, owner uintptr) {
+func (c *voiceDockController) dock(rect [4]int32, owner uintptr) {
 	// A borderless window: no title bar to look like a second app, no resize
 	// frame to drag it off the panel it is standing in for.
 	style := windowStyle(c.hwnd, gwlStyle)
@@ -134,7 +183,7 @@ func (c *voiceDockController) dock(req VoiceDockRequest, owner uintptr) {
 
 	c.setOwner(owner)
 	c.docked = true
-	c.place(req)
+	c.place(rect)
 }
 
 // setOwner makes the FlipAi window this window's owner. An owned window is kept
@@ -145,12 +194,11 @@ func (c *voiceDockController) setOwner(owner uintptr) {
 	c.owner = owner
 }
 
-func (c *voiceDockController) place(req VoiceDockRequest) {
-	c.rect = req
+func (c *voiceDockController) place(rect [4]int32) {
+	c.placed = rect
 	procDockShowWindowAsync.Call(c.hwnd, voiceSWShowNoActivate)
 	procDockSetWindowPos.Call(c.hwnd, hwndTop,
-		uintptr(int32(req.X)), uintptr(int32(req.Y)),
-		uintptr(int32(req.Width)), uintptr(int32(req.Height)),
+		uintptr(rect[0]), uintptr(rect[1]), uintptr(rect[2]), uintptr(rect[3]),
 		swpNoActivate|swpFrameChanged|swpShowWindow)
 }
 
@@ -159,6 +207,7 @@ func (c *voiceDockController) place(req VoiceDockRequest) {
 // Google Voice keeps running, signed in, ready for a call.
 func (c *voiceDockController) undock() {
 	c.docked = false
+	c.placed = [4]int32{}
 	setWindowStyle(c.hwnd, gwlpHWndParent, 0)
 	c.owner = 0
 

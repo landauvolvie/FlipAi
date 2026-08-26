@@ -59,7 +59,7 @@ The window has a sidebar with five pages:
 | Page | What it does |
 | --- | --- |
 | **Home** | Live status of Gmail, both agents, and the allowlist; recent activity; **Pause FlipAi**, which leaves incoming texts unread in Gmail until you resume |
-| **Connections** | Gmail method and credentials, subject-phrase matching, a message-flow test that checks the whole inbound path, and Google Voice calling |
+| **Connections** | Gmail method and credentials, subject-phrase matching, and the Google Voice card: calling on or off, Google Voice itself shown inside the app, the audio path, and which agents can take a call |
 | **Agents** | A pane per agent holding everything that agent owns — the numbers allowed to reach it and what each may do, its security code, its executable, working folder, SMS shortcut, access, conversation, reply behaviour, and the instruction sent with every text |
 | **Activity** | Every stage of every message, filterable by stage, agent, text, and time, with how long each step took; export and clear |
 | **Settings** | Updates, start with Windows, **start before sign-in**, startup repair, close to tray, theme, compact layout, alerts, shared message routing, the local service, log files, and reset |
@@ -400,21 +400,62 @@ to the voice mode of the ChatGPT or Claude desktop app you already pay for. No
 AI API key is involved: the conversation happens inside the desktop app exactly
 as it does when you talk to it yourself.
 
-FlipAi runs Google Voice in its own window, watches for a ringing call, checks
-the caller against a per-agent allowlist, answers it, switches the desktop app
-into voice mode, and switches it back off when the call ends.
+Google Voice runs in a window FlipAi owns and keeps alive. FlipAi watches for a
+ringing call, checks the caller against that agent's own list of numbers,
+answers it, switches the desktop app into voice mode, and switches it back off
+when the call ends.
 
-### What you have to provide
+### One switch, and it is on the Connections page
 
-**Two virtual audio cables.** This is the part FlipAi cannot do for you, and
-without it a call will connect in silence. A phone conversation needs two
-independent audio paths, and Windows has no way to patch one application's
-speaker into another's microphone on its own. Install a virtual audio cable
-driver that gives you two separate cables — each cable appears in Windows as one
-playback endpoint and one recording endpoint. FlipAi does not install, bundle,
-or redistribute any audio driver.
+Connections has one **Google Voice** card. Turn on **Answer phone calls with an
+agent** and FlipAi does the rest: it opens Google Voice at Windows sign-in,
+keeps it running while the PC is locked, and reopens it if it is ever closed.
+There is no window to open by hand and nothing to press before a call can be
+answered.
 
-Wire them like this:
+Nothing on that card waits for a Save button — every control writes as you
+change it, and the switch writes through an endpoint of its own so that nothing
+else on the page can hold it up.
+
+### Google Voice appears inside the app
+
+The card reserves a panel and Google Voice is shown inside it, framed as part
+of the page rather than as a second window. Sign in to Google there once and
+FlipAi keeps that session in a browser profile of its own.
+
+It is still a separate process, because Google Voice has to stay signed in and
+listening with the FlipAi window closed — that is the whole point of keeping it
+running. Leaving the Connections page, or closing FlipAi, simply takes the panel
+away; Google Voice goes on running in the background and goes on answering
+calls. **Open in its own window** hands it back as an ordinary window if you
+would rather put it on another monitor.
+
+### How the sound actually gets to the model
+
+FlipAi never records, transcribes, or uploads the call. It moves sound between
+two applications already running on your PC:
+
+```text
+caller -> Google Voice (FlipAi's window)
+       -> Google Voice speaker  == cable 1 ==  ChatGPT/Claude microphone
+       -> the agent hears the caller and answers
+       -> ChatGPT/Claude speaker == cable 2 ==  Google Voice microphone
+       -> caller hears the agent
+```
+
+Google Voice is an ordinary web page using the microphone and speaker Windows
+gives it. FlipAi pins that page's microphone and speaker to the endpoints you
+choose, so instead of your headset it uses a virtual cable that the AI app is
+listening to. The AI app's own voice mode does the listening and the talking;
+FlipAi only starts it when the call connects and stops it when the call ends.
+
+**Two virtual audio cables are what you have to provide.** This is the part
+FlipAi cannot do for you, and without it a call connects in silence. A phone
+conversation needs two independent paths, and Windows cannot patch one
+application's speaker into another's microphone on its own. Install a virtual
+audio cable driver that gives you two separate cables — each appears in Windows
+as one playback endpoint and one recording endpoint. FlipAi does not install,
+bundle, or redistribute any audio driver.
 
 | Direction | Set in | Endpoint |
 | --- | --- | --- |
@@ -424,84 +465,78 @@ Wire them like this:
 | | FlipAi: Google Voice microphone | Cable 2 recording |
 
 FlipAi applies the Google Voice side itself. The desktop app side you choose
-once, inside that app's own audio settings. FlipAi refuses to save a
-configuration where both sides share an endpoint, because that produces a call
-in which nobody can hear anything.
+once, inside that app's own audio settings.
 
-Not having the cables yet does not stop you setting the rest up. FlipAi will
-still keep Google Voice running and still answer an authorized call — the call
-simply has no sound, and says so.
+Wiring that cannot work — both sides pointed at one endpoint, or no endpoints
+chosen at all — is reported on the card and never refuses a save. It used to:
+the four pickers start out holding the name of the same default Windows device,
+the save was rejected as contradictory, and because the switch that turns
+calling on travelled in the same save, calling could not be switched on at all.
+A call with no usable audio path is still answered, and says what is wrong.
 
 ### Setting it up
 
-1. Connections → **Google Voice phone bridge** → **Open Google Voice**, and sign
-   in. The endpoint pickers stay empty until this window exists, because Windows
-   only reveals endpoint names to a page that holds microphone permission.
-2. Turn **Keep Google Voice running** on. From then on the window opens by
-   itself at Windows sign-in, stays running in the background, and reopens if it
-   is closed — you never have to press Open again. This switch is also what
-   allows a call to be answered at all.
-3. Choose the Google Voice microphone and speaker from the table above.
-4. Agents → pick the agent → add your phone number and set it to **Texts and
+1. Connections → **Google Voice** → turn **Answer phone calls with an agent**
+   on. Google Voice appears in the panel within a few seconds; the very first
+   run has to unpack Microsoft WebView2 and can take longer.
+2. Sign in to Google in that panel.
+3. In Google Voice itself, open **Settings → Calls** and turn on receiving calls
+   on this device. **FlipAi cannot answer a call that never rings in its
+   window**, and until this is on, an incoming call goes to your forwarding
+   phones instead.
+4. Choose the Google Voice microphone and speaker from the table above. The
+   pickers stay empty until the window exists, because Windows only reveals
+   endpoint names to a page holding microphone permission.
+5. Agents → pick the agent → add your phone number and set it to **Texts and
    calls** or **Calls only**. That is what puts the agent on calls; there is no
-   second switch to find. Connections says which agents can take a call.
+   second switch to find. The card says which agents can take a call.
+
+### Who is allowed to call, per agent
+
+Every permission belongs to one agent. The numbers that may text an agent are
+the numbers that may call it, on that agent's own pane, and a number belongs to
+exactly one agent:
+
+- a number allowed under ChatGPT/Codex cannot reach Claude, and a text from it
+  that asks for Claude by name is refused rather than routed;
+- a number set to **Texts only** may not call; one set to **Calls only** may not
+  text;
+- **Allowed caller names** — the exact text Google Voice displays when the
+  caller is in your Google Contacts and there is no number to match — belong to
+  one agent too. Placeholders such as "Unknown" or "Private" are refused, since
+  accepting one would let any anonymous call through.
+
+A caller matching neither list is never answered, and the card shows what Google
+Voice displayed and why the call was not connected.
 
 ### It runs in the background
 
-The Google Voice window is minimized rather than closed, because a closed window
+The Google Voice window is put away rather than closed, because a closed window
 cannot ring. Windows keeps it running while the PC is locked, and FlipAi starts
-it again if it disappears.
+it again if it disappears. A background start no longer flashes a window on
+screen.
 
-A minimized window is one Chromium considers hidden, and Chromium slows a hidden
-window's timers down to once a minute — far longer than a call rings for. FlipAi
-therefore starts this window with background throttling, renderer backgrounding
-and occlusion detection switched off, and does not rely on a timer to notice a
-call in the first place: the page change a ringing call makes is what drives the
-check.
+A window nobody is looking at is one Chromium considers hidden, and Chromium
+slows a hidden window's timers to once a minute — far longer than a call rings
+for. FlipAi therefore starts this window with background throttling, renderer
+backgrounding and occlusion detection switched off, and does not rely on a timer
+to notice a call in the first place: the page change a ringing call makes is
+what drives the check.
 
-### If Open Google Voice does nothing
+### If Google Voice does not appear
 
-The window is created by a second FlipAi process, so a failure used to happen
-out of sight of the button. Opening now waits for the window to exist and
-reports what stopped it; the reason appears as a banner on the page, on the
-Connections card, and in Activity.
+The window is created by a second FlipAi process, so a failure happens out of
+sight of the page. FlipAi waits for the window to exist and reports what stopped
+it, on the Connections card and in Activity.
 
 The usual cause is a missing **Microsoft Edge WebView2 Runtime** — FlipAi cannot
 draw the Google Voice window without it. Connections shows the installed
-version, and says so plainly when it is absent. Microsoft distributes
-it free as the Evergreen Standalone Installer.
+version, and says so plainly when it is absent. Microsoft distributes it free as
+the Evergreen Standalone Installer.
 
 If the message says another FlipAi Google Voice process is running without a
 window, quit FlipAi from the tray and start it again; that clears a wedged
 window process.
-
-### Google Voice has to be set to ring in the browser
-
-**FlipAi cannot answer a call that never rings in its window.** Google Voice only
-rings in a browser when you have switched that on in Google Voice itself: open
-Google Voice, go to **Settings → Calls**, and turn on receiving calls on this
-device. Until then an incoming call goes to your forwarding phones and never
-reaches FlipAi.
-
-Connections shows whether a call has ever rung in the window, and can list what
-FlipAi can currently see on the page, so "nothing happens when I call" is
-something you can look at rather than guess about.
-
-### Who is allowed to call
-
-The same numbers that may text an agent may call it, on the Agents page, as long
-as the number is set to **Texts and calls** or **Calls only**. A number set to
-**Texts only** is refused with a message saying so.
-
-One extra entry exists for calls: **Allowed caller names** — the exact text
-Google Voice displays. You need it whenever the caller is in your Google
-Contacts, because Google Voice then shows a name and there is no number for
-FlipAi to match. Placeholders such as "Unknown" or "Private" are refused, since
-accepting one would let any anonymous call through.
-
-When a call is refused, Connections shows what Google Voice displayed and why it
-was not connected, and the agent's Phone voice card offers to add that name to
-the list. A caller matching neither list is never answered.
 
 ### Limits worth knowing
 

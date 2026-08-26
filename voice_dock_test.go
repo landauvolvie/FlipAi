@@ -89,6 +89,8 @@ func TestTheEmbeddedPanelRectangleReachesTheWindow(t *testing.T) {
 	dir := t.TempDir()
 	srv := voiceEndpoint(t, dir)
 
+	// The page reports where the panel sits in its own viewport, in physical
+	// pixels; FlipAi turns that into a screen position from its own window.
 	code, body := voicePost(t, srv, "/dock", `{"visible":true,"x":100,"y":220,"width":900,"height":700}`)
 	if code != http.StatusNoContent {
 		t.Fatalf("/dock returned %d: %s", code, body)
@@ -114,6 +116,11 @@ func TestTheEmbeddedPanelRectangleReachesTheWindow(t *testing.T) {
 	}
 	if loadVoiceDock(dir).Active(time.Now()) {
 		t.Error("the panel is still docked after the page hid it")
+	}
+
+	// A negative offset is not a position inside a window.
+	if got := normalizeVoiceDock(VoiceDockRequest{Visible: true, X: -900, Y: -900, Width: 900, Height: 700}, time.Now()); got.X != 0 || got.Y != 0 {
+		t.Errorf("an offset outside the window was not clamped: %+v", got)
 	}
 
 	// A panel too small to be a browser is not one.

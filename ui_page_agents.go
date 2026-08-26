@@ -79,7 +79,7 @@ const agentsPageHTML = `
 {{define "agentAccess"}}
 <section class="card">
   <div class="card-head divided">
-    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}. A number belongs to one agent, so adding it here removes it from the other.</p></div>
+    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}, by text or by call. This list belongs to {{.Name}} alone: a number on the other agent&#39;s list cannot reach {{.Name}}, and a number here cannot reach the other agent — not even by asking for it by name in a text.</p></div>
   </div>
   <div class="card-body">
     {{if .Phones}}
@@ -131,7 +131,7 @@ const agentsPageHTML = `
     <div class="field">
       <label for="{{.Field "callerNames"}}">Allowed caller names</label>
       <textarea id="{{.Field "callerNames"}}" name="{{.Field "callerNames"}}" rows="2" placeholder="Jane Appleseed">{{.CallerNames}}</textarea>
-      <p class="hint">Only for calls. Google Voice shows a contact name instead of a number when the caller is in your Google Contacts, and there is no number to match. Type the name exactly as it appears, one per line.</p>
+      <p class="hint">Only for calls. Google Voice shows a contact name instead of a number when the caller is in your Google Contacts, and there is no number to match. Type the name exactly as it appears, one per line. Like a number, a caller name belongs to one agent: adding it here takes it off the other.</p>
     </div>
   </div>
 </section>

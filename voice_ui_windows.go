@@ -88,17 +88,22 @@ const voiceDesktopInitScript = `
     const el=q('#gv-embed-slot');
     if(!el) return null;
     const r=el.getBoundingClientRect();
-    if(r.width<160||r.height<160) return null;
-    // Only report the part of the panel that is actually on screen; a panel
-    // scrolled half out of the window must not hang over the page above it.
-    if(r.bottom<80||r.top>innerHeight-40) return null;
+    // Only the part of the panel that is really on screen is reported. The
+    // card is taller than the window, so a panel scrolled half out of view
+    // would otherwise hang the Google Voice window over the page above it.
+    const left=Math.max(r.left,0), top=Math.max(r.top,0);
+    const right=Math.min(r.right,innerWidth), bottom=Math.min(r.bottom,innerHeight);
+    if(right-left<160||bottom-top<160) return null;
     const dpr=devicePixelRatio||1;
+    // Reported against the page's own viewport, in physical pixels. FlipAi
+    // turns that into a screen position from its own window, so nothing here
+    // has to guess where a title bar or a display scale put the page.
     return {
       visible:true,
-      x:Math.round((screenX+r.left)*dpr),
-      y:Math.round((screenY+r.top)*dpr),
-      width:Math.round(r.width*dpr),
-      height:Math.round(r.height*dpr)
+      x:Math.round(left*dpr),
+      y:Math.round(top*dpr),
+      width:Math.round((right-left)*dpr),
+      height:Math.round((bottom-top)*dpr)
     };
   }
   let lastDockJSON='';
