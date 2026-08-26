@@ -1,8 +1,13 @@
-//go:build windows
-
 package main
 
 // voiceDesktopInitScript augments only FlipAi's trusted localhost desktop UI.
+//
+// It lives in a platform-independent file for the same reason
+// googleVoiceInitScript does: voice_ui_browser_test.go runs this exact string
+// in headless Chromium against the real local voice endpoint, which is the only
+// way to prove that the switch on this card really does turn calling on. The
+// bug it exists to catch -- the switch that never saved -- was invisible to
+// every test there was, because every test there was stopped at the Go side.
 // The same pages opened in a normal browser remain unchanged. Keeping these
 // controls client-side also means the existing SMS handlers and templates are
 // untouched by the voice-call feature.

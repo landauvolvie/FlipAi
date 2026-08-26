@@ -187,6 +187,10 @@ type VoiceDockRequest struct {
 	Y       int  `json:"y"`
 	Width   int  `json:"width"`
 	Height  int  `json:"height"`
+	// PopOut is the page asking for the window back as an ordinary window of
+	// its own rather than as a panel. It travels with the request that ends
+	// the docking so the window is never put away and reopened in one breath.
+	PopOut bool `json:"popOut,omitempty"`
 	// At is when the page last said so. A page that has navigated away, been
 	// hidden, or closed stops saying it, and the dock expires by itself rather
 	// than leaving a stranded window behind.
@@ -754,7 +758,7 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 		// Popping out is also the end of docking: the window has to stop
 		// standing inside the FlipAi window before it can be a window of its
 		// own. The page stops reporting a panel at the same moment.
-		_ = saveVoiceDock(dataDir, VoiceDockRequest{At: time.Now()})
+		_ = saveVoiceDock(dataDir, VoiceDockRequest{PopOut: true, At: time.Now()})
 		if err := openGoogleVoiceWindow(dataDir, true); err != nil {
 			activity.Add("error", "voice", "Open Google Voice failed: "+truncate(err.Error(), 300), "", "", "")
 			http.Error(w, err.Error(), http.StatusInternalServerError)

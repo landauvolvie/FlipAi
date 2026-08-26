@@ -56,7 +56,6 @@ const (
 	hwndTop = 0
 
 	voiceSWShowNoActivate = 4
-	voiceSWHide           = 0
 )
 
 // pointerSizedWindowLong picks the window-long call this Windows build has.
@@ -71,10 +70,6 @@ func pointerSizedWindowLong(wide, narrow string) *syscall.LazyProc {
 	return voiceUser32.NewProc(narrow)
 }
 
-// voiceDockController applies at most one window change per state change. The
-// dock rectangle arrives several times a second and almost always says the same
-// thing; re-styling and re-showing a window that many times a second would make
-// the panel flicker and steal focus.
 type dockRect struct{ Left, Top, Right, Bottom int32 }
 type dockPoint struct{ X, Y int32 }
 
@@ -113,6 +108,10 @@ func screenRectFor(owner uintptr, req VoiceDockRequest) (x, y, w, h int32, ok bo
 	return origin.X + left, origin.Y + top, right - left, bottom - top, true
 }
 
+// voiceDockController applies at most one window change per state change. The
+// dock rectangle arrives several times a second and almost always says the same
+// thing; re-styling and re-showing a window that many times a second would make
+// the panel flicker and steal focus.
 type voiceDockController struct {
 	hwnd    uintptr
 	docked  bool
@@ -137,6 +136,13 @@ func setWindowStyle(hwnd uintptr, index int, value uintptr) {
 // Apply moves the window to match one dock request. It returns whether the
 // window is currently docked.
 func (c *voiceDockController) Apply(req VoiceDockRequest, now time.Time, owner uintptr) bool {
+	// "Open it in its own window" arrives as a request to stop docking that
+	// also says where the window should end up. Without carrying that through,
+	// undocking would put the window away at the very moment the user asked to
+	// see it, and the two would race.
+	if req.PopOut {
+		c.restore = true
+	}
 	want := false
 	var rect [4]int32
 	if req.Active(now) && owner != 0 {
@@ -159,7 +165,9 @@ func (c *voiceDockController) Apply(req VoiceDockRequest, now time.Time, owner u
 		// with it. Put it back where the page says it belongs.
 		if iconic, _, _ := procDockIsIconic.Call(c.hwnd); iconic != 0 {
 			c.place(rect)
+			break
 		}
+		c.keepAbove()
 	case !want && c.docked:
 		c.undock()
 	}
@@ -202,6 +210,22 @@ func (c *voiceDockController) place(rect [4]int32) {
 		swpNoActivate|swpFrameChanged|swpShowWindow)
 }
 
+// keepAbove puts the panel directly above the FlipAi window in the stack
+// without moving, resizing, or activating it.
+//
+// Owning the window should be enough on its own: an owned window is always
+// kept above its owner. But the owner is set across process boundaries, which
+// Windows is entitled to refuse, and a refusal is silent. Without this the
+// panel would simply vanish behind the app the first time the user clicked the
+// page next to it, with nothing to explain where it went.
+func (c *voiceDockController) keepAbove() {
+	if c.owner == 0 {
+		return
+	}
+	procDockSetWindowPos.Call(c.hwnd, c.owner, 0, 0, 0, 0,
+		swpNoActivate|swpNoMove|swpNoSize)
+}
+
 // undock returns the window to an ordinary one and puts it away again. It is
 // deliberately not closed: the whole point of the separate process is that
 // Google Voice keeps running, signed in, ready for a call.
@@ -228,17 +252,6 @@ func (c *voiceDockController) undock() {
 		return
 	}
 	procDockShowWindowAsync.Call(c.hwnd, voiceSWMinimize)
-}
-
-// PopOut is the "open it in its own window" path: stop docking and hand the
-// user a normal window they can move to another monitor.
-func (c *voiceDockController) PopOut() {
-	c.restore = true
-	if c.docked {
-		c.undock()
-		return
-	}
-	procDockShowWindowAsync.Call(c.hwnd, voiceSWRestore)
 }
 
 // voiceDockOwner is the FlipAi window the panel belongs to, or 0 when there is
