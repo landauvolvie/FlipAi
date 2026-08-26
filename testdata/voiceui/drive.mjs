@@ -46,5 +46,17 @@ await page.click('#vc-enabled');
 await page.waitForFunction(() => document.querySelector('#vcs-state')?.textContent?.includes('Off'), null, { timeout: 15000 });
 out.steps.push('switch-reverted');
 
+// 6. A change made and immediately navigated away from is still saved. The
+//    card promises that changes save as they are made, and a debounce that the
+//    page outlives by less than half a second would quietly break that promise.
+await page.evaluate(() => {
+  const el = document.querySelector('#vcc-title');
+  el.value = 'Saved On The Way Out';
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+});
+await page.goto('about:blank');
+await page.waitForTimeout(1500);
+out.steps.push('pending-save-flushed');
+
 await browser.close();
 process.stdout.write(JSON.stringify(out));

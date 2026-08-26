@@ -191,6 +191,12 @@ func (c *voiceDockController) dock(rect [4]int32, owner uintptr) {
 
 	c.setOwner(owner)
 	c.docked = true
+	// Docking settles where the window belongs when it is next put away: back
+	// in the background. Without this, one "Open in its own window" left the
+	// pop-out standing for the rest of the process's life, so every later
+	// undock -- a page navigation, a hidden window, an expired dock -- restored
+	// Google Voice on top of whatever the user had moved on to.
+	c.restore = false
 	c.place(rect)
 }
 

@@ -39,13 +39,18 @@ const baseDesktopInitScript = `
 // If the optional voice-control service itself cannot answer, keep the feature
 // discoverable instead of failing silently. The full controls normally appear
 // well before this timer fires; this banner is only the failure state.
+//
+// The id below is the one the card actually gets, and a test holds the two
+// together: when the card was renamed, this selector went on looking for a card
+// that no longer existed, so every working Connections page waited four seconds
+// and then announced that the voice service was not responding.
 const voiceVisibilityFallbackScript = `
 (() => {
   const showVoiceFailure = () => {
     if (!globalThis.__flipaiDesktop) return;
     if (location.pathname !== '/connections') return;
     setTimeout(() => {
-      if (document.querySelector('#voice-call-connection-card,#voice-call-settings-card')) return;
+      if (document.querySelector('#voice-call-card')) return;
       if (document.querySelector('#voice-call-unavailable')) return;
       const content = document.querySelector('.content');
       if (!content) return;
