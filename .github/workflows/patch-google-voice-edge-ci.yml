@@ -1,0 +1,77 @@
+name: patch-google-voice-edge-ci
+
+on:
+  push:
+    branches: [fix/google-voice-edge-ci]
+    paths:
+      - .github/workflows/patch-google-voice-edge-ci.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/google-voice-edge-ci
+          fetch-depth: 0
+
+      - name: Correct Google Voice window process check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          old = '''          function Wait-VoiceWindow([int]$seconds) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              $p = @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue |
+                     Where-Object { $_.MainWindowTitle -like '*Google Voice*' })
+              if ($p.Count -gt 0) { return $p[0] }
+              Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+            return $null
+          }
+'''
+          new = '''          function Wait-VoiceWindow([int]$seconds) {
+            $deadline = (Get-Date).AddSeconds($seconds)
+            do {
+              # Current Google Voice uses Microsoft Edge app mode so incoming
+              # browser push can wake calls. Older builds used a FlipAi-owned
+              # window. Accept either surface and still require the stable
+              # Google Voice window title that FlipAi assigns.
+              $p = @(Get-Process -Name FlipAi,msedge -ErrorAction SilentlyContinue |
+                     Where-Object { $_.MainWindowTitle -like '*Google Voice*' })
+              if ($p.Count -gt 0) { return $p[0] }
+              Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+            return $null
+          }
+'''
+
+          for name in ('.github/workflows/build.yml', '.github/workflows/release.yml'):
+              p = Path(name)
+              text = p.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{name}: expected exactly one stale Wait-VoiceWindow block, got {text.count(old)}')
+              p.write_text(text.replace(old, new, 1))
+
+          Path('.github/workflows/patch-google-voice-edge-ci.yml').unlink()
+          PY
+
+          git diff --check
+          grep -q 'Get-Process -Name FlipAi,msedge' .github/workflows/build.yml
+          grep -q 'Get-Process -Name FlipAi,msedge' .github/workflows/release.yml
+
+      - name: Commit workflow correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "ci: detect Google Voice Edge app window"
+          git push origin HEAD:fix/google-voice-edge-ci
