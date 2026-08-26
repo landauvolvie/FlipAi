@@ -104,13 +104,13 @@ jobs:
           replace("bridge.go",
           '''\t\tfinal, err = b.runClaude(ctx, rc.Text, rc.Sender)
           ''',
-          '''\t\tfinal, err = b.runClaude(ctx, rc.Text, rc.Sender, inbound)
+          '''\t\tfinal, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
           ''')
 
           replace("bridge.go",
           '''\t\tfinal, err = b.runCodex(ctx, rc.Text, rc.Sender)
           ''',
-          '''\t\tfinal, err = b.runCodex(ctx, rc.Text, rc.Sender, inbound)
+          '''\t\tfinal, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
           ''')
 
           replace("bridge.go",
@@ -120,7 +120,11 @@ jobs:
           \t}
           \tprompt := b.composePrompt("A", command)
           ''',
-          '''func (b *Bridge) runClaude(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
+          '''func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
+          \treturn b.runClaudeWithAttachments(ctx, command, sender, nil)
+          }
+
+          func (b *Bridge) runClaudeWithAttachments(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
           \tif b.claude == nil {
           \t\treturn "", errors.New("Claude Code unavailable")
           \t}
@@ -130,7 +134,11 @@ jobs:
           replace("bridge.go",
           '''func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
           ''',
-          '''func (b *Bridge) runCodex(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
+          '''func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
+          \treturn b.runCodexWithAttachments(ctx, command, sender, nil)
+          }
+
+          func (b *Bridge) runCodexWithAttachments(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
           ''')
 
           replace("bridge.go",
