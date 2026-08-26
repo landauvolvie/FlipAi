@@ -578,6 +578,23 @@ func mutateVoiceRuntime(dataDir string, fn func(*VoiceRuntimeState)) {
 // without launching a real window on the machine running the tests.
 var openGoogleVoiceWindow = platformOpenGoogleVoice
 
+// beginVoiceOpen starts one attempt at putting the window on screen, and is the
+// only thing that clears the reason the last attempt failed.
+//
+// recordVoiceOpen used to clear it on every note it wrote, failure or not. Two
+// processes write these notes -- the one handling the click and the one that
+// owns the window -- so a progress note from one could erase the reason the
+// other had just recorded. That is how a window process that died on startup
+// could leave behind "window opened" and nothing else: the click reported
+// success, the window was gone, and the explanation had been overwritten.
+func beginVoiceOpen(dataDir, outcome string) {
+	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+		s.LastOpen = outcome
+		s.LastOpenAt = time.Now()
+		s.LastOpenError = ""
+	})
+}
+
 // recordVoiceOpen leaves a trail for one step of opening the window. The window
 // lives in its own process, so the process handling the click cannot see why the
 // other one failed unless that one writes it down.
@@ -585,7 +602,6 @@ func recordVoiceOpen(dataDir, outcome string, err error) {
 	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 		s.LastOpen = outcome
 		s.LastOpenAt = time.Now()
-		s.LastOpenError = ""
 		if err != nil {
 			s.LastOpen = outcome + ": " + err.Error()
 			s.LastOpenError = s.LastOpen
