@@ -1,0 +1,159 @@
+name: One-shot Google Voice permission hotfix
+
+on:
+  push:
+    branches:
+      - claude/google-voice-calling-3ui1px
+    paths:
+      - .github/workflows/hotfix-google-voice-permissions.yml
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out calling branch
+        uses: actions/checkout@v4
+        with:
+          ref: claude/google-voice-calling-3ui1px
+          fetch-depth: 0
+
+      - name: Patch Google Voice WebView permissions and dialing
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import re
+
+          mod = Path("go.mod")
+          text = mod.read_text(encoding="utf-8")
+          old_dep = "github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808"
+          new_dep = "github.com/wailsapp/go-webview2 v1.0.23"
+          if old_dep not in text:
+              raise SystemExit("expected jchv WebView2 dependency was not found")
+          mod.write_text(text.replace(old_dep, new_dep, 1), encoding="utf-8")
+
+          win = Path("voice_call_windows.go")
+          text = win.read_text(encoding="utf-8")
+          text = text.replace('webview2 "github.com/jchv/go-webview2"', 'webview2 "github.com/wailsapp/go-webview2"', 1)
+          text = text.replace('"github.com/jchv/go-webview2/pkg/edge"', '"github.com/wailsapp/go-webview2/pkg/edge"', 1)
+
+          old_args = '''const voiceBrowserArguments = "--disable-background-timer-throttling " +
+          \t"--disable-backgrounding-occluded-windows " +
+          \t"--disable-renderer-backgrounding " +
+          \t"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling " +
+          \t"--autoplay-policy=no-user-gesture-required"'''
+          new_args = '''const voiceBrowserArguments = "--disable-background-timer-throttling " +
+          \t"--disable-backgrounding-occluded-windows " +
+          \t"--disable-renderer-backgrounding " +
+          \t"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling " +
+          \t"--autoplay-policy=no-user-gesture-required " +
+          \t"--disable-popup-blocking"'''
+          if old_args not in text:
+              raise SystemExit("expected voiceBrowserArguments block was not found")
+          text = text.replace(old_args, new_args, 1)
+
+          permission_pattern = re.compile(
+              r'\t// Per-kind permissions do not work with this WebView2 binding:.*?'
+              r'\n\tif chromium := voiceChromium\(w\); chromium != nil \{.*?'
+              r'\n\t\}\n\n\t// The agents',
+              re.S,
+          )
+          permission_replacement = '''\t// Google Voice needs microphone and notification permission to behave like
+          \t// the same account in Edge. The maintained WebView2 binding correctly
+          \t// identifies each requested permission, so grant only the call-related
+          \t// capabilities instead of globally allowing every site capability.
+          \t// This also removes the invisible permission prompt that a minimized
+          \t// embedded window could never answer.
+          \tif chromium := voiceChromium(w); chromium != nil {
+          \t\tchromium.SetPermission(edge.CoreWebView2PermissionKindMicrophone, edge.CoreWebView2PermissionStateAllow)
+          \t\tchromium.SetPermission(edge.CoreWebView2PermissionKindNotifications, edge.CoreWebView2PermissionStateAllow)
+          \t\tchromium.SetPermission(edge.CoreWebView2PermissionKindCamera, edge.CoreWebView2PermissionStateDeny)
+          \t\tchromium.SetPermission(edge.CoreWebView2PermissionKindGeolocation, edge.CoreWebView2PermissionStateDeny)
+          \t\tchromium.SetPermission(edge.CoreWebView2PermissionKindOtherSensors, edge.CoreWebView2PermissionStateDeny)
+          \t\tchromium.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateDeny)
+          \t} else {
+          \t\tmutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+          \t\t\ts.LastError = "FlipAi could not configure Google Voice site permissions in WebView2. Restart the Google Voice window before testing calls."
+          \t\t})
+          \t}
+
+          \t// The agents'''
+          text, count = permission_pattern.subn(permission_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one old permission block, replaced {count}")
+          win.write_text(text, encoding="utf-8")
+
+          page = Path("voice_page_script.go")
+          text = page.read_text(encoding="utf-8")
+          old_click = '''  document.addEventListener('click', (e) => {
+              const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+              if (a && !allowedTopLevel(a.href)) e.preventDefault();
+            }, true);'''
+          new_click = '''  document.addEventListener('click', (e) => {
+              const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+              if (!a) return;
+              const raw = (a.getAttribute('href') || '').trim().toLowerCase();
+              // Google Voice can dispatch an outgoing dial through a telephone URI.
+              // Do not cancel that protocol before Google's own call handler sees it.
+              if (raw.startsWith('tel:') || raw.startsWith('callto:')) return;
+              if (!allowedTopLevel(a.href)) e.preventDefault();
+            }, true);'''
+          if old_click not in text:
+              raise SystemExit("expected top-level click guard was not found")
+          page.write_text(text.replace(old_click, new_click, 1), encoding="utf-8")
+
+          Path("voice_permissions_windows_test.go").write_text(r'''//go:build windows
+
+          package main
+
+          import (
+          \t"strings"
+          \t"testing"
+          )
+
+          func TestGoogleVoiceWebViewAllowsRequiredCallCapabilities(t *testing.T) {
+          \tif !strings.Contains(voiceBrowserArguments, "--disable-popup-blocking") {
+          \t\tt.Fatal("Google Voice WebView must allow call-related popups")
+          \t}
+          \tfor _, protocol := range []string{"tel:", "callto:"} {
+          \t\tif !strings.Contains(googleVoiceInitScript, protocol) {
+          \t\t\tt.Fatalf("Google Voice script must preserve %s dialing links", protocol)
+          \t\t}
+          \t}
+          }
+          ''', encoding="utf-8")
+
+          Path("VERSION").write_text("0.26.1\n", encoding="utf-8")
+          '@ | Set-Content hotfix.py -Encoding utf8
+          python hotfix.py
+          Remove-Item hotfix.py
+          go mod tidy
+          gofmt -w voice_call_windows.go voice_permissions_windows_test.go
+
+      - name: Run full Go test suite
+        shell: pwsh
+        run: go test ./...
+
+      - name: Vet Windows build
+        shell: pwsh
+        run: go vet ./...
+
+      - name: Remove one-shot workflow and verify diff
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/hotfix-google-voice-permissions.yml
+          git diff --check
+          git status --short
+
+      - name: Commit hotfix back to calling branch
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Google Voice WebView permissions and dialing"
+          git push origin HEAD:claude/google-voice-calling-3ui1px
