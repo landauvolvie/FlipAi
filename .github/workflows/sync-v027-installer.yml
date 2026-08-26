@@ -1,0 +1,46 @@
+name: Sync v0.27.0 installer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sync-v027-installer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync installer version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('installer/FlipAi.iss')
+          text = p.read_text()
+          old = '#define MyVersion "0.26.2"'
+          new = '#define MyVersion "0.27.0"'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one {old!r}, got {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          grep -q '#define MyVersion "0.27.0"' installer/FlipAi.iss
+
+      - name: Commit installer sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add installer/FlipAi.iss
+          git commit -m 'Sync installer version to v0.27.0'
+          git push origin HEAD:main
