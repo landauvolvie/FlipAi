@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -213,10 +214,24 @@ func revealGoogleVoiceWindow(dataDir string, hwnd uintptr) error {
 // putting anything on screen. It is what the Connections page calls when it
 // wants the embedded panel: the window appears docked inside the app, so there
 // is nothing to press and no popup to dismiss.
+var voiceEnsureMu sync.Mutex
+var voiceEnsureAt time.Time
+
 func platformEnsureGoogleVoice(dataDir string) {
 	if googleVoiceHWND() != 0 {
 		return
 	}
+	// The page asks for the panel several times a second, and a first run has
+	// to unpack WebView2 before any window exists. Without this the wait for
+	// that first window would be spent starting a new window process four
+	// times a second, every one of which would find the mutex held and exit.
+	voiceEnsureMu.Lock()
+	if time.Since(voiceEnsureAt) < voiceWindowStartup {
+		voiceEnsureMu.Unlock()
+		return
+	}
+	voiceEnsureAt = time.Now()
+	voiceEnsureMu.Unlock()
 	go func() { _ = platformOpenGoogleVoice(dataDir, false) }()
 }
 
