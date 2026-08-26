@@ -40,13 +40,17 @@ const googleVoiceInitScript = `
   };
   document.addEventListener('click', (e) => {
     const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    if (a && !allowedTopLevel(a.href)) e.preventDefault();
+    if (!a) return;
+    const raw = (a.getAttribute('href') || '').trim().toLowerCase();
+    // An outgoing Google Voice dial can be dispatched through a phone URI.
+    // The old navigation guard cancelled it before Google's handler saw it.
+    if (raw.startsWith('tel:') || raw.startsWith('callto:')) return;
+    if (!allowedTopLevel(a.href)) e.preventDefault();
   }, true);
 
-  // WebView2 grants this window's permissions globally, because per-permission
-  // grants are broken in the browser binding FlipAi uses. Everything except
-  // what a phone call needs is therefore taken away here, before Google Voice
-  // can ask.
+  // FlipAi grants only the microphone and notification permissions a phone
+  // call needs at the WebView2 host. Keep defense-in-depth denials here for
+  // browser capabilities Google Voice does not need.
   const denied = (msg) => Promise.reject(new DOMException(msg, 'NotAllowedError'));
   try {
     const geo = {

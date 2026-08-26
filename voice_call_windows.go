@@ -457,7 +457,8 @@ const voiceBrowserArguments = "--disable-background-timer-throttling " +
 	"--disable-backgrounding-occluded-windows " +
 	"--disable-renderer-backgrounding " +
 	"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling " +
-	"--autoplay-policy=no-user-gesture-required"
+	"--autoplay-policy=no-user-gesture-required " +
+	"--disable-popup-blocking"
 
 // createGoogleVoiceWebView makes the window, and keeps trying when the first
 // way does not work.
@@ -546,8 +547,8 @@ func googleVoiceRenderModes() []googleVoiceRenderMode {
 	// that can be signed in and can take a call.
 	plain := googleVoiceRenderMode{
 		name: "plain",
-		note: "Google Voice started without FlipAi's background-timer switches, because WebView2 refused them. A call should still be answered; if one is ever missed while FlipAi is in the background, this is the first thing to look at.",
-		args: "",
+		note: "Google Voice started without FlipAi's background-timer switches, because WebView2 refused them. Call pop-ups remain enabled. If one is ever missed while FlipAi is in the background, this render mode is the first thing to look at.",
+		args: "--disable-popup-blocking",
 	}
 	// A copy of this process that was killed a moment ago can still hold the
 	// browser profile for a second or two.
@@ -603,27 +604,22 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 	defer w.Destroy()
 	applyFlipAiWindowIcon(uintptr(w.Window()))
 	w.SetSize(760, 560, webview2.HintMin)
-	// Per-kind permissions do not work with this WebView2 binding: its
-	// PermissionRequested handler passes the out-parameter of GetPermissionKind
-	// by value instead of by pointer, so every request reads back as kind 0 and
-	// falls through to "ask the user". FlipAi keeps the Google Voice window
-	// minimized, so that prompt is invisible and unanswerable — Google Voice
-	// silently never gets a microphone and the caller hears nothing. Only the
-	// global path skips that broken lookup, so the grant is made there and the
-	// permissions FlipAi does not want are removed inside the page instead (see
-	// googleVoiceInitScript, which deletes camera, geolocation and clipboard
-	// access before Google Voice can ask for them).
-	//
-	// Reaching the browser control means reading an unexported field of the
-	// WebView binding, so it can stop working when that package changes. Losing
-	// the microphone grant is not a reason to refuse to show the window: signing
-	// in to Google does not need a microphone, and a window that appears and
-	// vanishes is far worse than one that needs a permission click later.
+	// Google Voice needs microphone and notification permission before it will
+	// behave as a browser that can place and receive calls. FlipAi carries a
+	// one-line local fix for the WebView2 binding's permission-kind callback,
+	// so these can now be granted explicitly instead of using a global allow.
+	// The embedded window therefore never hides a permission prompt the user
+	// cannot reach, while unrelated capabilities stay denied.
 	if chromium := voiceChromium(w); chromium != nil {
-		chromium.SetGlobalPermission(edge.CoreWebView2PermissionStateAllow)
+		chromium.SetPermission(edge.CoreWebView2PermissionKindMicrophone, edge.CoreWebView2PermissionStateAllow)
+		chromium.SetPermission(edge.CoreWebView2PermissionKindNotifications, edge.CoreWebView2PermissionStateAllow)
+		chromium.SetPermission(edge.CoreWebView2PermissionKindCamera, edge.CoreWebView2PermissionStateDeny)
+		chromium.SetPermission(edge.CoreWebView2PermissionKindGeolocation, edge.CoreWebView2PermissionStateDeny)
+		chromium.SetPermission(edge.CoreWebView2PermissionKindOtherSensors, edge.CoreWebView2PermissionStateDeny)
+		chromium.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateDeny)
 	} else {
 		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-			s.LastError = "FlipAi could not pre-grant microphone access to Google Voice; if a call has no audio, allow the microphone in the Google Voice window when Windows asks."
+			s.LastError = "FlipAi could not configure Google Voice microphone and notification permissions in WebView2. Restart the Google Voice window before testing calls."
 		})
 	}
 

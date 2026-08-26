@@ -362,7 +362,7 @@ const voiceDesktopInitScript = `
     set('vcs-call',rt.inCall?pill(rt.caller?('Connected — '+rt.caller):'Connected','ok'):pill('Idle'));
     set('vcs-ring',rt.lastRingAt&&!/^0001/.test(rt.lastRingAt)?pill(new Date(rt.lastRingAt).toLocaleString(),'ok'):pill('Never','warn'));
     set('vcs-webview2',snapshot.webView2?pill(snapshot.webView2,'ok'):pill('Not installed','warn'));
-    set('vcs-permissions',pill('Handled by FlipAi','ok'));
+    set('vcs-permissions',pill('Mic + notifications allowed','ok'));
     const sw=q('#vc-enabled'); if(sw) sw.checked=!!cfg.enabled;
     renderPanel();
     const problems=q('#vc-problems');
