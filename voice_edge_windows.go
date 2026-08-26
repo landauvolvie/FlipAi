@@ -34,7 +34,10 @@ import (
 // browser prompt, reading the call controls/caller ID, and clicking Answer for
 // an authorized caller. It never exposes a port outside 127.0.0.1.
 
-var procEdgeSetWindowText = voiceUser32.NewProc("SetWindowTextW")
+var (
+	procEdgeSetWindowText = voiceUser32.NewProc("SetWindowTextW")
+	procEdgeIsWindow      = voiceUser32.NewProc("IsWindow")
+)
 
 const edgeVoiceControlInterval = 650 * time.Millisecond
 
@@ -70,7 +73,9 @@ func runGoogleVoiceEdgeWindow(dataDir string, initiallyVisible bool) error {
 		"--autoplay-policy=no-user-gesture-required",
 	}
 	cmd := exec.Command(edgePath, args...)
-	hideWindow(cmd)
+	// Edge is the actual Google Voice surface. Do not apply FlipAi's
+	// HideWindow helper here: on GUI programs it can start the app-mode
+	// window hidden before the dock controller ever gets its HWND.
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start Microsoft Edge for Google Voice: %w", err)
 	}
@@ -366,16 +371,29 @@ func edgeBrowserPID(c *edgeCDPClient) uint32 {
 }
 
 func grantEdgeVoicePermissions(c *edgeCDPClient) error {
-	for _, name := range []string{"notifications", "audioCapture", "speakerSelection"} {
+	// Browser.setPermission takes Web Permissions API descriptor names,
+	// not the older DevTools PermissionType enum. In particular the
+	// microphone descriptor is "microphone" (not "audioCapture") and
+	// speaker selection is "speaker-selection". Push is granted too:
+	// that is the browser capability Google Voice uses to wake an
+	// incoming call while its app window is in the background.
+	permissions := []map[string]any{
+		{"name": "notifications"},
+		{"name": "push", "userVisibleOnly": true},
+		{"name": "microphone"},
+		{"name": "speaker-selection"},
+	}
+	for _, permission := range permissions {
 		params := map[string]any{
-			"permission": map[string]any{"name": name},
+			"permission": permission,
 			"setting":    "granted",
 			"origin":     "https://voice.google.com",
 		}
 		if err := c.call("Browser.setPermission", params, nil); err != nil {
-			// speakerSelection is newer than the permissions Google Voice
-			// strictly requires. Older Edge builds can omit it safely.
-			if name == "speakerSelection" {
+			// Speaker selection is useful for enumerating/routing output
+			// devices, but microphone permission also exposes speakers on
+			// Edge builds that predate this descriptor.
+			if permission["name"] == "speaker-selection" {
 				continue
 			}
 			return err
@@ -569,11 +587,14 @@ func edgeWindowGone(hwnd uintptr) bool {
 	if hwnd == 0 {
 		return true
 	}
-	// Once WM_CLOSE destroys the app-mode window it disappears from the
-	// browser process's top-level windows. The exact-title lookup is kept as a
-	// second signal because the handle value itself can be recycled by Windows.
-	pid := windowProcessID(hwnd)
-	return pid == 0 || edgeWindowForPID(pid) == 0
+	// A docked/owned Edge window can temporarily be non-visible while
+	// FlipAi is minimized or while Windows moves it between dock states.
+	// Visibility therefore cannot be used as liveness: doing so shut down
+	// the incoming-call receiver exactly when the app was put away. Test
+	// the HWND itself instead; IsWindow stays true for minimized/hidden
+	// windows and becomes false only after the window is destroyed.
+	ok, _, _ := procEdgeIsWindow.Call(hwnd)
+	return ok == 0
 }
 
 func routeGoogleVoiceEdgeAudio(dataDir string, cfg VoiceCallConfig, pid uint32) error {
