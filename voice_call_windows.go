@@ -586,6 +586,14 @@ func destroyLeftoverGoogleVoiceFrame() {
 }
 
 func runGoogleVoiceWindow(dataDir string, visible bool) error {
+	return runGoogleVoiceEdgeWindow(dataDir, visible)
+}
+
+// runGoogleVoiceWebViewWindow is retained as a fallback implementation
+// for diagnostics, but it is no longer used for live calling because
+// WebView2 does not implement Web Push and therefore cannot reliably
+// receive Google Voice incoming calls.
+func runGoogleVoiceWebViewWindow(dataDir string, visible bool) error {
 	// A Win32 message pump only works on the thread that created the window.
 	// This currently runs inside init(), where the Go runtime happens to hold
 	// the main thread, but that is an implementation detail of the runtime and
