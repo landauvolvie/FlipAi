@@ -61,6 +61,7 @@ type gmailRaw struct {
 type GmailMessage struct {
 	ID, Subject, From, ReplyTo, AuthenticationResults, Body, Snippet string
 	InternalDate                                                     time.Time
+	Attachments                                                      []MailAttachment
 }
 type GmailClient struct {
 	cfg       GmailConfig
