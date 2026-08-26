@@ -22,7 +22,7 @@ jobs:
         with:
           go-version: '1.23.x'
 
-      - name: Apply inbound attachment feature
+      - name: Apply source integration
         shell: bash
         run: |
           set -euo pipefail
@@ -33,43 +33,58 @@ jobs:
               p = Path(path)
               text = p.read_text()
               if old not in text:
-                  raise SystemExit(f"expected patch target missing in {path}: {old[:100]!r}")
+                  raise SystemExit(f"expected patch target missing in {path}: {old[:120]!r}")
               p.write_text(text.replace(old, new, 1))
 
-          replace("gmail.go", '''type GmailMessage struct {
+          replace("gmail.go",
+          '''type GmailMessage struct {
           \tID, Subject, From, ReplyTo, AuthenticationResults, Body, Snippet string
           \tInternalDate                                                     time.Time
           }
-          ''', '''type GmailMessage struct {
+          ''',
+          '''type GmailMessage struct {
           \tID, Subject, From, ReplyTo, AuthenticationResults, Body, Snippet string
           \tInternalDate                                                     time.Time
           \tAttachments                                                      []MailAttachment
           }
           ''')
 
-          replace("imap.go", '''\tbody, _ := extractMailBody(m.Header, m.Body)
-          ''', '''\tbody, attachments, _ := extractMailContent(m.Header, m.Body)
-          ''')
-          replace("imap.go", '''\treturn GmailMessage{ID: id, Subject: subject, From: from, ReplyTo: replyTo, AuthenticationResults: authResults, Body: body, Snippet: snippet, InternalDate: internalDate}, nil
-          ''', '''\treturn GmailMessage{ID: id, Subject: subject, From: from, ReplyTo: replyTo, AuthenticationResults: authResults, Body: body, Snippet: snippet, InternalDate: internalDate, Attachments: attachments}, nil
+          replace("imap.go",
+          '''\tbody, _ := extractMailBody(m.Header, m.Body)
+          ''',
+          '''\tbody, attachments, _ := extractMailContent(m.Header, m.Body)
           ''')
 
-          replace("bridge.go", '''\tcmd := extractGoogleVoiceCommand(m.Body)
+          replace("imap.go",
+          '''\treturn GmailMessage{ID: id, Subject: subject, From: from, ReplyTo: replyTo, AuthenticationResults: authResults, Body: body, Snippet: snippet, InternalDate: internalDate}, nil
+          ''',
+          '''\treturn GmailMessage{ID: id, Subject: subject, From: from, ReplyTo: replyTo, AuthenticationResults: authResults, Body: body, Snippet: snippet, InternalDate: internalDate, Attachments: attachments}, nil
+          ''')
+
+          replace("bridge.go",
+          '''\tcmd := extractGoogleVoiceCommand(m.Body)
           \tif cmd == "" {
           \t\treturn "", sender, false, "Google Voice message contained no SMS command text"
           \t}
-          ''', '''\tcmd := extractGoogleVoiceCommand(m.Body)
+          ''',
+          '''\tcmd := extractGoogleVoiceCommand(m.Body)
           \tif cmd == "" && !hasSupportedMailAttachments(m.Attachments) {
           \t\treturn "", sender, false, "Google Voice message contained no SMS command text or supported attachment"
           \t}
           ''')
-          replace("bridge.go", '''\t\trc, err := parseRemoteCommand(raw, b.cfg, senderAgent)
-          ''', '''\t\trc, err := parseRemoteCommandForMessage(raw, b.cfg, senderAgent, m)
+
+          replace("bridge.go",
+          '''\t\trc, err := parseRemoteCommand(raw, b.cfg, senderAgent)
+          ''',
+          '''\t\trc, err := parseRemoteCommandForMessage(raw, b.cfg, senderAgent, m)
           ''')
-          replace("bridge.go", '''\tvar final string
+
+          replace("bridge.go",
+          '''\tvar final string
           \tvar err error
           \tif rc.Status {
-          ''', '''\tvar inbound []InboundAttachment
+          ''',
+          '''\tvar inbound []InboundAttachment
           \tvar cleanupInbound func()
           \tvar prepErr error
           \tif !rc.Status && !rc.New && len(m.Attachments) > 0 {
@@ -85,440 +100,46 @@ jobs:
           \t\terr = prepErr
           \t} else if rc.Status {
           ''')
-          replace("bridge.go", '''\t\tfinal, err = b.runClaude(ctx, rc.Text, rc.Sender)
-          ''', '''\t\tfinal, err = b.runClaude(ctx, rc.Text, rc.Sender, inbound)
+
+          replace("bridge.go",
+          '''\t\tfinal, err = b.runClaude(ctx, rc.Text, rc.Sender)
+          ''',
+          '''\t\tfinal, err = b.runClaude(ctx, rc.Text, rc.Sender, inbound)
           ''')
-          replace("bridge.go", '''\t\tfinal, err = b.runCodex(ctx, rc.Text, rc.Sender)
-          ''', '''\t\tfinal, err = b.runCodex(ctx, rc.Text, rc.Sender, inbound)
+
+          replace("bridge.go",
+          '''\t\tfinal, err = b.runCodex(ctx, rc.Text, rc.Sender)
+          ''',
+          '''\t\tfinal, err = b.runCodex(ctx, rc.Text, rc.Sender, inbound)
           ''')
-          replace("bridge.go", '''func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
+
+          replace("bridge.go",
+          '''func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
           \tif b.claude == nil {
           \t\treturn "", errors.New("Claude Code unavailable")
           \t}
           \tprompt := b.composePrompt("A", command)
-          ''', '''func (b *Bridge) runClaude(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
+          ''',
+          '''func (b *Bridge) runClaude(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
           \tif b.claude == nil {
           \t\treturn "", errors.New("Claude Code unavailable")
           \t}
           \tprompt := promptForInboundAttachments(b.composePrompt("A", command), attachments)
           ''')
-          replace("bridge.go", '''func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
-          ''', '''func (b *Bridge) runCodex(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
+
+          replace("bridge.go",
+          '''func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
+          ''',
+          '''func (b *Bridge) runCodex(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
           ''')
-          replace("bridge.go", '''\tparams := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt("C", command)}}}
-          ''', '''\tprompt := promptForInboundAttachments(b.composePrompt("C", command), attachments)
+
+          replace("bridge.go",
+          '''\tparams := map[string]any{"threadId": tid, "input": []map[string]any{{"type": "text", "text": b.composePrompt("C", command)}}}
+          ''',
+          '''\tprompt := promptForInboundAttachments(b.composePrompt("C", command), attachments)
           \tparams := map[string]any{"threadId": tid, "input": codexInputForInbound(prompt, attachments)}
           ''')
 
-          Path("attachments.go").write_text(r'''package main
-
-import (
-\t"bytes"
-\t"errors"
-\t"fmt"
-\t"io"
-\t"mime"
-\t"mime/multipart"
-\t"net/mail"
-\t"net/textproto"
-\t"os"
-\t"path/filepath"
-\t"strings"
-)
-
-const (
-\tmaxInboundAttachmentBytes = 8 << 20
-\tmaxInboundAttachmentCount = 6
-\tmaxInboundTextPartBytes    = 2 << 20
-)
-
-// MailAttachment is an attachment extracted from the authenticated Google Voice
-// notification itself. Data stays in memory only while the message waits for
-// its turn; it is materialized to a private temporary file immediately before
-// the selected desktop agent runs.
-type MailAttachment struct {
-\tFilename  string
-\tMediaType string
-\tData      []byte
-}
-
-// InboundAttachment is the short-lived local copy handed to Codex/Claude.
-type InboundAttachment struct {
-\tFilename  string
-\tMediaType string
-\tPath      string
-}
-
-func normalizeInboundMediaType(v string) string {
-\tmed, _, err := mime.ParseMediaType(strings.TrimSpace(v))
-\tif err == nil && med != "" {
-\t\treturn strings.ToLower(med)
-\t}
-\treturn strings.ToLower(strings.TrimSpace(strings.SplitN(v, ";", 2)[0]))
-}
-
-func supportedInboundMediaType(v string) bool {
-\tv = normalizeInboundMediaType(v)
-\treturn strings.HasPrefix(v, "image/") || strings.HasPrefix(v, "audio/") || v == "video/mp4"
-}
-
-func hasSupportedMailAttachments(in []MailAttachment) bool {
-\tfor _, a := range in {
-\t\tif supportedInboundMediaType(a.MediaType) && len(a.Data) > 0 {
-\t\t\treturn true
-\t\t}
-\t}
-\treturn false
-}
-
-func mediaTypeForPart(p *multipart.Part) string {
-\tmed := normalizeInboundMediaType(p.Header.Get("Content-Type"))
-\tif supportedInboundMediaType(med) {
-\t\treturn med
-\t}
-\tif name := strings.TrimSpace(p.FileName()); name != "" {
-\t\tif guessed := normalizeInboundMediaType(mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))); supportedInboundMediaType(guessed) {
-\t\t\treturn guessed
-\t\t}
-\t}
-\treturn med
-}
-
-func readBounded(r io.Reader, max int64) ([]byte, error) {
-\tb, err := io.ReadAll(io.LimitReader(r, max+1))
-\tif err != nil {
-\t\treturn nil, err
-\t}
-\tif int64(len(b)) > max {
-\t\treturn nil, fmt.Errorf("attachment exceeds FlipAi's %d MB inbound limit", maxInboundAttachmentBytes>>20)
-\t}
-\treturn b, nil
-}
-
-// extractMailContent walks nested MIME parts once and returns both the text body
-// and only the media types FlipAi intentionally relays. Google Voice voice notes
-// can be audio/mp4 with an empty filename, so Content-Type is authoritative.
-func extractMailContent(h mail.Header, r io.Reader) (string, []MailAttachment, error) {
-\tmed, params, _ := mime.ParseMediaType(h.Get("Content-Type"))
-\tmed = strings.ToLower(med)
-\tif strings.HasPrefix(med, "multipart/") {
-\t\tboundary := params["boundary"]
-\t\tif boundary == "" {
-\t\t\treturn "", nil, errors.New("multipart email has no boundary")
-\t\t}
-\t\tmr := multipart.NewReader(r, boundary)
-\t\tvar plain, html []string
-\t\tvar attachments []MailAttachment
-\t\tfor {
-\t\t\tp, err := mr.NextPart()
-\t\t\tif err == io.EOF {
-\t\t\t\tbreak
-\t\t\t}
-\t\t\tif err != nil {
-\t\t\t\treturn "", attachments, err
-\t\t\t}
-\t\t\tph := mail.Header(textproto.MIMEHeader(p.Header))
-\t\t\tpmed, _, _ := mime.ParseMediaType(p.Header.Get("Content-Type"))
-\t\t\tpmed = strings.ToLower(pmed)
-
-\t\t\tif strings.HasPrefix(pmed, "multipart/") {
-\t\t\t\tchildBody, childAttachments, err := extractMailContent(ph, p)
-\t\t\t\tif err != nil {
-\t\t\t\t\treturn "", attachments, err
-\t\t\t\t}
-\t\t\t\tif strings.TrimSpace(childBody) != "" {
-\t\t\t\t\tplain = append(plain, childBody)
-\t\t\t\t}
-\t\t\t\tattachments = append(attachments, childAttachments...)
-\t\t\t\tif len(attachments) > maxInboundAttachmentCount {
-\t\t\t\t\treturn "", attachments, fmt.Errorf("Google Voice message has more than %d supported attachments", maxInboundAttachmentCount)
-\t\t\t\t}
-\t\t\t\tcontinue
-\t\t\t}
-
-\t\t\tif strings.HasPrefix(pmed, "text/plain") || strings.HasPrefix(pmed, "text/html") {
-\t\t\t\tb, err := readBounded(decodeTransfer(ph, p), maxInboundTextPartBytes)
-\t\t\t\tif err != nil {
-\t\t\t\t\treturn "", attachments, err
-\t\t\t\t}
-\t\t\t\ts := strings.TrimSpace(string(b))
-\t\t\t\tif strings.HasPrefix(pmed, "text/html") {
-\t\t\t\t\thtml = append(html, stripHTML(s))
-\t\t\t\t} else {
-\t\t\t\t\tplain = append(plain, s)
-\t\t\t\t}
-\t\t\t\tcontinue
-\t\t\t}
-
-\t\t\tactualType := mediaTypeForPart(p)
-\t\t\tif !supportedInboundMediaType(actualType) {
-\t\t\t\tcontinue
-\t\t\t}
-\t\t\tb, err := readBounded(decodeTransfer(ph, p), maxInboundAttachmentBytes)
-\t\t\tif err != nil {
-\t\t\t\treturn "", attachments, err
-\t\t\t}
-\t\t\tif len(b) == 0 {
-\t\t\t\tcontinue
-\t\t\t}
-\t\t\tattachments = append(attachments, MailAttachment{Filename: p.FileName(), MediaType: actualType, Data: b})
-\t\t\tif len(attachments) > maxInboundAttachmentCount {
-\t\t\t\treturn "", attachments, fmt.Errorf("Google Voice message has more than %d supported attachments", maxInboundAttachmentCount)
-\t\t\t}
-\t\t}
-\t\tif len(plain) > 0 {
-\t\t\treturn strings.TrimSpace(strings.Join(plain, "\n")), attachments, nil
-\t\t}
-\t\treturn strings.TrimSpace(strings.Join(html, "\n")), attachments, nil
-\t}
-
-\tif strings.HasPrefix(med, "text/") {
-\t\tb, err := readBounded(decodeTransfer(h, r), maxInboundTextPartBytes)
-\t\tif err != nil {
-\t\t\treturn "", nil, err
-\t\t}
-\t\ts := strings.TrimSpace(string(b))
-\t\tif strings.HasPrefix(med, "text/html") {
-\t\t\ts = stripHTML(s)
-\t\t}
-\t\treturn s, nil, nil
-\t}
-\treturn "", nil, nil
-}
-
-func attachmentExtension(mediaType string) string {
-\tswitch normalizeInboundMediaType(mediaType) {
-\tcase "image/jpeg":
-\t\treturn ".jpg"
-\tcase "image/png":
-\t\treturn ".png"
-\tcase "image/gif":
-\t\treturn ".gif"
-\tcase "image/webp":
-\t\treturn ".webp"
-\tcase "audio/mp4":
-\t\treturn ".m4a"
-\tcase "audio/mpeg":
-\t\treturn ".mp3"
-\tcase "audio/wav", "audio/x-wav":
-\t\treturn ".wav"
-\tcase "audio/ogg":
-\t\treturn ".ogg"
-\tcase "video/mp4":
-\t\treturn ".mp4"
-\t}
-\tif exts, _ := mime.ExtensionsByType(mediaType); len(exts) > 0 {
-\t\treturn exts[0]
-\t}
-\treturn ".bin"
-}
-
-func safeAttachmentFilename(name string, index int, mediaType string) string {
-\tname = filepath.Base(strings.TrimSpace(name))
-\tif name == "" || name == "." {
-\t\tname = fmt.Sprintf("attachment-%d%s", index+1, attachmentExtension(mediaType))
-\t}
-\tvar b strings.Builder
-\tfor _, r := range name {
-\t\tif (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._-", r) {
-\t\t\tb.WriteRune(r)
-\t\t} else {
-\t\t\tb.WriteByte('_')
-\t\t}
-\t}
-\tclean := strings.Trim(b.String(), ". ")
-\tif clean == "" {
-\t\tclean = fmt.Sprintf("attachment-%d%s", index+1, attachmentExtension(mediaType))
-\t}
-\treturn clean
-}
-
-func prepareInboundAttachments(in []MailAttachment) ([]InboundAttachment, func(), error) {
-\tvar selected []MailAttachment
-\tfor _, a := range in {
-\t\tif supportedInboundMediaType(a.MediaType) && len(a.Data) > 0 {
-\t\t\tselected = append(selected, a)
-\t\t}
-\t}
-\tif len(selected) == 0 {
-\t\treturn nil, nil, nil
-\t}
-\tif len(selected) > maxInboundAttachmentCount {
-\t\treturn nil, nil, fmt.Errorf("too many inbound attachments: %d", len(selected))
-\t}
-\tdir, err := os.MkdirTemp("", "FlipAi-inbound-")
-\tif err != nil {
-\t\treturn nil, nil, fmt.Errorf("create inbound attachment folder: %w", err)
-\t}
-\tcleanup := func() { _ = os.RemoveAll(dir) }
-\tout := make([]InboundAttachment, 0, len(selected))
-\tfor i, a := range selected {
-\t\tif len(a.Data) > maxInboundAttachmentBytes {
-\t\t\tcleanup()
-\t\t\treturn nil, nil, fmt.Errorf("attachment exceeds FlipAi's %d MB inbound limit", maxInboundAttachmentBytes>>20)
-\t\t}
-\t\tname := safeAttachmentFilename(a.Filename, i, a.MediaType)
-\t\tpath := filepath.Join(dir, fmt.Sprintf("%02d-%s", i+1, name))
-\t\tif err := os.WriteFile(path, a.Data, 0600); err != nil {
-\t\t\tcleanup()
-\t\t\treturn nil, nil, fmt.Errorf("save inbound attachment: %w", err)
-\t\t}
-\t\tout = append(out, InboundAttachment{Filename: name, MediaType: normalizeInboundMediaType(a.MediaType), Path: path})
-\t}
-\treturn out, cleanup, nil
-}
-
-func parseRemoteCommandForMessage(raw string, cfg Config, agent string, m GmailMessage) (remoteCommand, error) {
-\tif strings.TrimSpace(raw) != "" {
-\t\treturn parseRemoteCommand(raw, cfg, agent)
-\t}
-\tif !hasSupportedMailAttachments(m.Attachments) {
-\t\treturn remoteCommand{}, errors.New("empty command")
-\t}
-\tif agent != "A" && agent != "C" {
-\t\tagent = "C"
-\t}
-\tif agentSettings(cfg, agent).RequireCode {
-\t\treturn remoteCommand{}, fmt.Errorf("attachment-only commands cannot supply the %s text security code; include text with the attachment or disable Require code for this agent", agentDisplayName(agent))
-\t}
-\treturn remoteCommand{Agent: agent}, nil
-}
-
-func promptForInboundAttachments(base string, in []InboundAttachment) string {
-\tif len(in) == 0 {
-\t\treturn base
-\t}
-\tvar b strings.Builder
-\tb.WriteString(strings.TrimSpace(base))
-\tb.WriteString("\n\n<flipai_attachments>\n")
-\tb.WriteString("These are the user's actual Google Voice attachments. Use them as input to the command above.\n")
-\thasAudio := false
-\tfor _, a := range in {
-\t\tfmt.Fprintf(&b, "- %s (%s)\n", a.Path, a.MediaType)
-\t\tif strings.HasPrefix(a.MediaType, "audio/") {
-\t\t\thasAudio = true
-\t\t}
-\t}
-\tb.WriteString("</flipai_attachments>")
-\tif hasAudio {
-\t\tb.WriteString("\n\n<flipai_voice_command>\n")
-\t\tb.WriteString("The audio attachment is the user's command. Listen to and understand its spoken content using your available capabilities, treat that spoken content as the user's command, carry it out, and respond with the result. Do not merely return a transcription unless the user asks for one.\n")
-\t\tb.WriteString("</flipai_voice_command>")
-\t}
-\treturn b.String()
-}
-
-func codexInputForInbound(prompt string, in []InboundAttachment) []map[string]any {
-\tout := []map[string]any{{"type": "text", "text": prompt}}
-\tfor _, a := range in {
-\t\tswitch {
-\t\tcase strings.HasPrefix(a.MediaType, "image/"):
-\t\t\tout = append(out, map[string]any{"type": "localImage", "path": a.Path})
-\t\tcase strings.HasPrefix(a.MediaType, "audio/"):
-\t\t\tout = append(out, map[string]any{"type": "localAudio", "path": a.Path})
-\t\t}
-\t}
-\treturn out
-}
-''')
-
-          Path("attachments_test.go").write_text(r'''package main
-
-import (
-\t"encoding/base64"
-\t"os"
-\t"strings"
-\t"testing"
-\t"time"
-)
-
-func TestParseRawGmailMessageExtractsBlankFilenameAudioMP4(t *testing.T) {
-\taudio := []byte{0, 1, 2, 3, 4, 5, 6, 7}
-\traw := strings.Join([]string{
-\t\t"From: Me (SMS) <18453842803.18453241813.test@txt.voice.google.com>",
-\t\t"To: test@example.com",
-\t\t"Subject: New text message from Me (845) 324-1813",
-\t\t"Authentication-Results: mx.google.com; dkim=pass header.d=google.com",
-\t\t"MIME-Version: 1.0",
-\t\t"Content-Type: multipart/mixed; boundary=flipai-test",
-\t\t"",
-\t\t"--flipai-test",
-\t\t"Content-Type: text/plain; charset=UTF-8",
-\t\t"",
-\t\t"Google Voice\r\nhttps://voice.google.com\r\nYOUR ACCOUNT\r\nHELP CENTER",
-\t\t"--flipai-test",
-\t\t"Content-Type: audio/mp4",
-\t\t"Content-Transfer-Encoding: base64",
-\t\t"",
-\t\tbase64.StdEncoding.EncodeToString(audio),
-\t\t"--flipai-test--",
-\t\t"",
-\t}, "\r\n")
-
-\tm, err := parseRawGmailMessage("test-id", []byte(raw), "", time.Now())
-\tif err != nil {
-\t\tt.Fatal(err)
-\t}
-\tif len(m.Attachments) != 1 {
-\t\tt.Fatalf("attachments=%d, want 1", len(m.Attachments))
-\t}
-\ta := m.Attachments[0]
-\tif a.Filename != "" {
-\t\tt.Fatalf("filename=%q, want blank (Google Voice voice-note shape)", a.Filename)
-\t}
-\tif a.MediaType != "audio/mp4" {
-\t\tt.Fatalf("media type=%q, want audio/mp4", a.MediaType)
-\t}
-\tif string(a.Data) != string(audio) {
-\t\tt.Fatalf("audio bytes changed: %v", a.Data)
-\t}
-}
-
-func TestAttachmentOnlyCommandRoutesWithoutLocalTranscription(t *testing.T) {
-\tm := GmailMessage{Attachments: []MailAttachment{{MediaType: "audio/mp4", Data: []byte{1, 2, 3}}}}
-\trc, err := parseRemoteCommandForMessage("", Config{}, "C", m)
-\tif err != nil {
-\t\tt.Fatal(err)
-\t}
-\tif rc.Agent != "C" || rc.Text != "" {
-\t\tt.Fatalf("unexpected command: %+v", rc)
-\t}
-}
-
-func TestPrepareInboundBlankFilenameAndCodexNativeInputs(t *testing.T) {
-\tin := []MailAttachment{
-\t\t{MediaType: "image/png", Data: []byte{137, 80, 78, 71}},
-\t\t{MediaType: "audio/mp4", Data: []byte{0, 0, 0, 24}},
-\t}
-\tfiles, cleanup, err := prepareInboundAttachments(in)
-\tif err != nil {
-\t\tt.Fatal(err)
-\t}
-\tdefer cleanup()
-\tif len(files) != 2 {
-\t\tt.Fatalf("files=%d, want 2", len(files))
-\t}
-\tfor _, f := range files {
-\t\tif _, err := os.Stat(f.Path); err != nil {
-\t\t\tt.Fatalf("materialized attachment missing: %v", err)
-\t\t}
-\t}
-\tprompt := promptForInboundAttachments("do the command", files)
-\tif !strings.Contains(prompt, "audio attachment is the user's command") {
-\t\tt.Fatalf("voice-command instruction missing: %s", prompt)
-\t}
-\titems := codexInputForInbound(prompt, files)
-\tif len(items) != 3 {
-\t\tt.Fatalf("Codex inputs=%d, want text + image + audio", len(items))
-\t}
-\tif items[1]["type"] != "localImage" || items[2]["type"] != "localAudio" {
-\t\tt.Fatalf("unexpected Codex media inputs: %#v", items)
-\t}
-}
-''')
-
-          # This workflow is only a one-shot patch vehicle. Remove it from the
-          # feature commit so no implementation backdoor remains in the repo.
           Path(".github/workflows/implement-inbound-attachments.yml").unlink()
           PY
 
