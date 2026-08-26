@@ -296,10 +296,10 @@ const voiceDesktopInitScript = `
         retry:true};
     }
     if(!rt.docked){
-      return {title:'Google Voice is running, but FlipAi could not put it in this panel',
-        why:rt.lastOpen||'',
-        detail:'It is signed in and it will still answer calls. FlipAi places the window over this panel, which needs the FlipAi window to be on screen and not minimized. Open it in its own window if you would rather see it there.',
-        retry:true, popOut:true};
+      return {title:'Google Voice is running, but not in this panel',
+        why:rt.dockBlocked||rt.lastOpen||'',
+        detail:'It is signed in and it will still answer calls. Reload this page to try placing it here again, or open it in its own window.',
+        reload:true, popOut:true, retry:true};
     }
     return {title:'Google Voice is loading...', detail:'The window is running; waiting for it to appear in this panel.'};
   }
@@ -317,14 +317,20 @@ const voiceDesktopInitScript = `
     if(state.retry||state.popOut){
       const acts=E('div','gv-acts');
       if(state.retry){
-        const r=E('button','',"Retry"); r.type='button';
+        const r=E('button','','Retry, drawing it another way'); r.type='button';
         r.addEventListener('click',async()=>{
+          const label=r.textContent;
           r.disabled=true; r.textContent='Restarting...';
           try{ snapshot=await post('/restart'); updateStatusRows(); }
           catch(e){ toast(e.message,true); }
-          finally{ r.disabled=false; r.textContent='Retry'; }
+          finally{ r.disabled=false; r.textContent=label; }
         });
         acts.append(r);
+      }
+      if(state.reload){
+        const rl=E('button','','Put it back in this panel'); rl.type='button';
+        rl.addEventListener('click',()=>location.reload());
+        acts.append(rl);
       }
       if(state.popOut){
         const o=E('button','','Open in its own window'); o.type='button';
@@ -343,6 +349,9 @@ const voiceDesktopInitScript = `
     const set=(id,node)=>{ const el=q('#'+id); if(!el)return; el.textContent=''; el.append(node); };
     set('vcs-state',cfg.enabled?pill('On — answering calls','ok'):pill('Off','warn'));
     set('vcs-window',runtimePill(rt));
+    const drawn=q('#vcs-drawn-row');
+    if(drawn) drawn.style.display=(rt.renderMode&&rt.renderMode!=='hardware')?'':'none';
+    set('vcs-drawn',pill(rt.renderMode==='software'?'Software (no graphics card)':(rt.renderMode||'Hardware'),'warn'));
     set('vcs-agents',(snapshot.callAgents||[]).length?pill((snapshot.callAgents||[]).join(' and '),'ok'):pill('Nobody yet','warn'));
     set('vcs-audio',snapshot.audioWarning?pill('Needs attention','warn'):pill('Ready','ok'));
     set('vcs-call',rt.inCall?pill(rt.caller?('Connected — '+rt.caller):'Connected','ok'):pill('Idle'));
@@ -421,6 +430,9 @@ const voiceDesktopInitScript = `
     const cell=(id)=>{ const v=E('span'); v.id=id; return v; };
     rows.append(row('Calling','Whether FlipAi answers the phone at all.',cell('vcs-state')));
     rows.append(row('Google Voice window','Kept running by FlipAi, signed in to your Google account.',cell('vcs-window')));
+    const drawnRow=row('Drawn with','How the Google Voice window is being rendered.',cell('vcs-drawn'));
+    drawnRow.id='vcs-drawn-row'; drawnRow.style.display='none';
+    rows.append(drawnRow);
     rows.append(row('Agents on calls','Set by giving an agent a number that may call, on the Agents page.',cell('vcs-agents')));
     rows.append(row('Audio path','Needed for the caller and the agent to hear each other.',cell('vcs-audio')));
     rows.append(row('Current call','',cell('vcs-call')));

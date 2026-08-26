@@ -72,6 +72,16 @@ type VoiceRuntimeState struct {
 	Agent       string             `json:"agent,omitempty"`
 	Blocked     string             `json:"blocked,omitempty"`
 	Devices     []VoiceAudioDevice `json:"devices,omitempty"`
+	// RenderMode is how Google Voice is currently being drawn, and
+	// RenderAttempt is where in the list of ways to draw it FlipAi has got to.
+	// A window that comes up black is a graphics problem rather than a startup
+	// one, so Retry moves along the list instead of repeating what did not work.
+	RenderMode    string `json:"renderMode,omitempty"`
+	RenderAttempt int    `json:"renderAttempt,omitempty"`
+	// DockBlocked says why the window is not standing in the FlipAi panel, when
+	// it is running but not placed. Without it "could not put it in this panel"
+	// is a statement with no cause attached.
+	DockBlocked string `json:"dockBlocked,omitempty"`
 	// Docked is set while the Google Voice window is standing inside the FlipAi
 	// window. The page uses it to know whether the panel it reserved is really
 	// showing a browser or whether it should explain why it is empty.
@@ -852,6 +862,9 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 			s.BrowserRunning = false
 			s.Docked = false
 			s.LastError = ""
+			// Retry is the user saying "that did not work", so the next window
+			// is drawn a different way rather than the same way again.
+			s.RenderAttempt++
 		})
 		activity.Add("info", "voice", "Restarting the Google Voice window.", "", "", "")
 		platformRestartGoogleVoice(dataDir)

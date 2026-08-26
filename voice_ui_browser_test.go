@@ -186,7 +186,7 @@ func TestVoiceCardTurnsCallingOnInARealBrowser(t *testing.T) {
 	}
 	found := false
 	for _, b := range report.PanelButtons {
-		if b == "Retry" {
+		if strings.HasPrefix(b, "Retry") {
 			found = true
 		}
 	}
