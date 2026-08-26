@@ -31,6 +31,8 @@ var (
 	procDockIsIconic        = voiceUser32.NewProc("IsIconic")
 	procDockGetClientRect   = voiceUser32.NewProc("GetClientRect")
 	procDockClientToScreen  = voiceUser32.NewProc("ClientToScreen")
+	procDockSendMessage     = voiceUser32.NewProc("SendMessageW")
+	procDockGetSystemMetric = voiceUser32.NewProc("GetSystemMetrics")
 )
 
 const (
@@ -56,7 +58,35 @@ const (
 	hwndTop = 0
 
 	voiceSWShowNoActivate = 4
+
+	wmSize = 0x0005
+
+	// SM_REMOTESESSION: this desktop is being viewed over Remote Desktop.
+	smRemoteSession = 0x1000
 )
+
+// forceBrowserRelayout makes the browser re-measure the window it is sitting in.
+//
+// The binding lays the browser out only when it receives WM_SIZE. Taking the
+// title bar off a window, or putting it back, changes the client area without
+// changing the window size -- so no WM_SIZE arrives, and the browser keeps
+// bounds that no longer match the window it is in. What that looks like is the
+// page shifted up under the title bar with a blank strip along the bottom, and
+// it is why an undocked Google Voice window came back unusable.
+func forceBrowserRelayout(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	procDockSendMessage.Call(hwnd, wmSize, 0, 0)
+}
+
+// remoteSession reports whether this desktop is being viewed over Remote
+// Desktop, where GPU compositing is unavailable and WebView2 is prone to
+// painting nothing at all.
+func remoteSession() bool {
+	r, _, _ := procDockGetSystemMetric.Call(smRemoteSession)
+	return r != 0
+}
 
 // pointerSizedWindowLong picks the window-long call this Windows build has.
 // Only 64-bit Windows exports the ...Ptr forms; asking for one on 32-bit
@@ -117,7 +147,8 @@ type voiceDockController struct {
 	docked  bool
 	placed  [4]int32 // the screen rectangle the window is currently standing on
 	owner   uintptr
-	restore bool // the undocked window should be shown rather than minimized
+	restore bool   // the undocked window should be shown rather than minimized
+	blocked string // why the window is not in the panel, when it is not
 }
 
 func newVoiceDockController(hwnd uintptr, visible bool) *voiceDockController {
@@ -145,9 +176,27 @@ func (c *voiceDockController) Apply(req VoiceDockRequest, now time.Time, owner u
 	}
 	want := false
 	var rect [4]int32
+	// Why not, when not. "FlipAi could not put it in this panel" with no cause
+	// attached is a dead end for whoever reads it.
+	switch {
+	case req.PopOut:
+		c.blocked = "Google Voice was opened in its own window. Reload the Connections page to put it back in the panel."
+	case !req.Visible || req.At.IsZero():
+		c.blocked = "the Connections page is not asking for the panel; open Connections in FlipAi and leave it on screen."
+	case req.Width < voiceDockMinSize || req.Height < voiceDockMinSize:
+		c.blocked = "the panel on the page is too small to put a browser in; make the FlipAi window larger."
+	case now.Sub(req.At) >= voiceDockTTL:
+		c.blocked = "the Connections page stopped reporting where the panel is; it may be scrolled out of view or the FlipAi window may be minimized."
+	case owner == 0:
+		c.blocked = "FlipAi could not find its own window on screen, so there is nowhere to put the panel. It is minimized, or another copy of FlipAi owns it."
+	default:
+		c.blocked = ""
+	}
 	if req.Active(now) && owner != 0 {
 		if x, y, w, h, ok := screenRectFor(owner, req); ok {
 			want, rect = true, [4]int32{x, y, w, h}
+		} else {
+			c.blocked = "the FlipAi window could not be measured, so the panel position could not be worked out."
 		}
 	}
 	switch {
@@ -191,6 +240,7 @@ func (c *voiceDockController) dock(rect [4]int32, owner uintptr) {
 
 	c.setOwner(owner)
 	c.docked = true
+	forceBrowserRelayout(c.hwnd)
 	// Docking settles where the window belongs when it is next put away: back
 	// in the background. Without this, one "Open in its own window" left the
 	// pop-out standing for the rest of the process's life, so every later
@@ -251,13 +301,40 @@ func (c *voiceDockController) undock() {
 	ex |= wsExAppWindow
 	setWindowStyle(c.hwnd, gwlExStyle, ex)
 
-	procDockSetWindowPos.Call(c.hwnd, hwndTop, 0, 0, 0, 0,
-		swpNoActivate|swpNoMove|swpNoSize|swpNoZOrder|swpFrameChanged)
+	// A real size, not SWP_NOSIZE. Putting the title bar back shrinks the
+	// client area, and without a size change the browser is never told: it
+	// keeps its old bounds and the page comes back shifted up under the title
+	// bar with a blank strip below it.
+	x, y, w, h := c.windowed()
+	procDockSetWindowPos.Call(c.hwnd, hwndTop,
+		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+		swpNoActivate|swpNoZOrder|swpFrameChanged)
+	forceBrowserRelayout(c.hwnd)
 	if c.restore {
 		procDockShowWindowAsync.Call(c.hwnd, voiceSWRestore)
+		forceBrowserRelayout(c.hwnd)
 		return
 	}
 	procDockShowWindowAsync.Call(c.hwnd, voiceSWMinimize)
+}
+
+// windowed is where the window goes when it is not standing in a panel: the
+// size it was created with, centred on the primary display.
+func (c *voiceDockController) windowed() (x, y, w, h int32) {
+	const (
+		smCXScreen = 0
+		smCYScreen = 1
+	)
+	w, h = 1080, 760
+	sw, _, _ := procDockGetSystemMetric.Call(smCXScreen)
+	sh, _, _ := procDockGetSystemMetric.Call(smCYScreen)
+	if int32(sw) > w {
+		x = (int32(sw) - w) / 2
+	}
+	if int32(sh) > h {
+		y = (int32(sh) - h) / 2
+	}
+	return x, y, w, h
 }
 
 // voiceDockOwner is the FlipAi window the panel belongs to, or 0 when there is
@@ -277,15 +354,19 @@ func voiceDockOwner() uintptr {
 // window right now, but only when the answer changes: this is asked several
 // times a second and the runtime file is read by the page just as often.
 var lastDockedState = -1
+var lastDockBlocked = "\x00"
 
-func mutateVoiceDockState(dataDir string, docked bool) {
+func mutateVoiceDockState(dataDir string, docked bool, blocked string) {
 	want := 0
 	if docked {
 		want = 1
 	}
-	if lastDockedState == want {
+	if lastDockedState == want && lastDockBlocked == blocked {
 		return
 	}
-	lastDockedState = want
-	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) { s.Docked = docked })
+	lastDockedState, lastDockBlocked = want, blocked
+	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+		s.Docked = docked
+		s.DockBlocked = blocked
+	})
 }

@@ -475,28 +475,20 @@ const voiceBrowserArguments = "--disable-background-timer-throttling " +
 // attempt therefore destroys its own frame first -- from this thread, which is
 // the thread that created it.
 func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
-	attempts := []struct {
-		note string
-		args string
-		wait time.Duration
-	}{
-		// The window FlipAi wants: its own profile, and the switches that keep
-		// a background window noticing a call.
-		{note: "", args: voiceBrowserArguments},
-		// WebView2 refuses to start at all if it does not like a switch, and it
-		// does not say which. A window that throttles in the background is
-		// still a window that can be signed in and can take a call.
-		{note: "Google Voice started without its background-timer switches, because WebView2 refused them. A call should still be answered; if one is ever missed while FlipAi is in the background, this is the first thing to look at.", args: ""},
-		// A copy of this process that was killed a moment ago can still hold the
-		// browser profile for a second or two.
-		{note: "Google Voice started on the second attempt; the browser profile was still held by a previous FlipAi window.", args: voiceBrowserArguments, wait: 3 * time.Second},
+	ways := googleVoiceRenderModes()
+	// A previous window that came up black is remembered, so Retry moves on to
+	// the next way of drawing rather than repeating the one that did not work.
+	start := loadVoiceRuntime(dataDir).RenderAttempt
+	if start < 0 || start >= len(ways) {
+		start = 0
 	}
 	var lastErr error
-	for i, attempt := range attempts {
-		if attempt.wait > 0 {
-			time.Sleep(attempt.wait)
+	for i := 0; i < len(ways); i++ {
+		way := ways[(start+i)%len(ways)]
+		if way.wait > 0 {
+			time.Sleep(way.wait)
 		}
-		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", attempt.args)
+		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args)
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			Debug:     false,
 			AutoFocus: true,
@@ -509,15 +501,65 @@ func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
 			},
 		})
 		if w != nil {
-			if attempt.note != "" {
-				mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) { s.LastError = attempt.note })
-			}
+			mode, note := way.name, way.note
+			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+				s.RenderMode = mode
+				s.RenderAttempt = (start + i) % len(ways)
+				if note != "" {
+					s.LastError = note
+				}
+			})
 			return w, nil
 		}
 		destroyLeftoverGoogleVoiceFrame()
 		lastErr = webView2CreateFailure(i)
 	}
 	return nil, lastErr
+}
+
+type googleVoiceRenderMode struct {
+	name string
+	note string
+	args string
+	wait time.Duration
+}
+
+// googleVoiceRenderModes are the ways FlipAi knows to draw Google Voice, best
+// first.
+//
+// A WebView2 that is created successfully and then paints nothing but black is
+// a GPU problem, not a startup problem, and it is the normal outcome over
+// Remote Desktop, where there is no GPU to composite with. Software rendering
+// draws a phone page perfectly well, so on a remote desktop that is where this
+// starts. Retry walks along this list, so a window that comes up black is one
+// press away from a window that does not.
+func googleVoiceRenderModes() []googleVoiceRenderMode {
+	gpu := googleVoiceRenderMode{name: "hardware", args: voiceBrowserArguments}
+	software := googleVoiceRenderMode{
+		name: "software",
+		note: "Google Voice is drawing without the graphics card. That is normal over Remote Desktop, where hardware drawing paints a black window.",
+		args: voiceBrowserArguments + " --disable-gpu --disable-gpu-compositing",
+	}
+	// WebView2 refuses to start at all if it does not like a switch, and it does
+	// not say which. A window that throttles in the background is still a window
+	// that can be signed in and can take a call.
+	plain := googleVoiceRenderMode{
+		name: "plain",
+		note: "Google Voice started without FlipAi's background-timer switches, because WebView2 refused them. A call should still be answered; if one is ever missed while FlipAi is in the background, this is the first thing to look at.",
+		args: "",
+	}
+	// A copy of this process that was killed a moment ago can still hold the
+	// browser profile for a second or two.
+	patient := googleVoiceRenderMode{
+		name: "retry",
+		note: "Google Voice started after waiting for a previous FlipAi window to let go of the browser profile.",
+		args: voiceBrowserArguments,
+		wait: 3 * time.Second,
+	}
+	if remoteSession() {
+		return []googleVoiceRenderMode{software, gpu, plain, patient}
+	}
+	return []googleVoiceRenderMode{gpu, software, plain, patient}
 }
 
 // webView2CreateFailure says what a failed creation means in words the person
@@ -643,7 +685,7 @@ func runGoogleVoiceWindow(dataDir string, visible bool) error {
 				}
 				req := loadVoiceDock(dataDir)
 				docked := dock.Apply(req, time.Now(), voiceDockOwner())
-				mutateVoiceDockState(dataDir, docked)
+				mutateVoiceDockState(dataDir, docked, dock.blocked)
 			}
 		}
 	}()
