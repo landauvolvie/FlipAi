@@ -172,8 +172,14 @@ func voiceDockPath(dataDir string) string    { return filepath.Join(dataDir, "vo
 // Google Voice embedded beside it, while remaining a window FlipAi can keep
 // alive on its own.
 //
-// The rectangle is in physical screen pixels, which is what Windows positions
-// windows in; the page converts from CSS pixels using its device pixel ratio.
+// The rectangle is an offset inside the FlipAi window's client area, in
+// physical pixels: the page reports where the panel sits in its own viewport,
+// converted from CSS pixels with its device pixel ratio, and the window process
+// turns that into a screen position from the FlipAi window itself. Going
+// through the client area rather than the page's own idea of its screen
+// position is what keeps the panel aligned to the pixel: a window frame, a
+// title bar, or a display scale the page reports differently would otherwise
+// shift it.
 type VoiceDockRequest struct {
 	// Visible is the page saying it currently wants the panel on screen.
 	Visible bool `json:"visible"`
@@ -218,10 +224,10 @@ func normalizeVoiceDock(d VoiceDockRequest, now time.Time) VoiceDockRequest {
 		}
 		return v
 	}
-	// A rectangle is only ever a position on this desktop. Absurd values are
+	// A rectangle is only ever a position inside a window. Absurd values are
 	// clamped rather than refused so a stray layout frame cannot break docking.
-	d.X = clamp(d.X, -32000, 32000)
-	d.Y = clamp(d.Y, -32000, 32000)
+	d.X = clamp(d.X, 0, 32000)
+	d.Y = clamp(d.Y, 0, 32000)
 	d.Width = clamp(d.Width, 0, 32000)
 	d.Height = clamp(d.Height, 0, 32000)
 	d.At = now
