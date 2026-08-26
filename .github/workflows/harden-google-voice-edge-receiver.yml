@@ -1,0 +1,241 @@
+name: Harden Google Voice Edge receiver
+
+on:
+  push:
+    branches:
+      - fix/google-voice-incoming-edge
+    paths:
+      - .github/workflows/harden-google-voice-edge-receiver.yml
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/google-voice-incoming-edge
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Fix Edge lifecycle and permission descriptors
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          p = Path('voice_edge_windows.go')
+          text = p.read_text(encoding='utf-8')
+
+          old = 'var procEdgeSetWindowText = voiceUser32.NewProc("SetWindowTextW")'
+          new = '''var (
+          \tprocEdgeSetWindowText = voiceUser32.NewProc("SetWindowTextW")
+          \tprocEdgeIsWindow      = voiceUser32.NewProc("IsWindow")
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one Edge window proc declaration, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''\tcmd := exec.Command(edgePath, args...)
+          \thideWindow(cmd)
+          \tif err := cmd.Start(); err != nil {'''
+          new = '''\tcmd := exec.Command(edgePath, args...)
+          \t// Edge is the actual Google Voice surface. Do not apply FlipAi's
+          \t// HideWindow helper here: on GUI programs it can start the app-mode
+          \t// window hidden before the dock controller ever gets its HWND.
+          \tif err := cmd.Start(); err != nil {'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one hidden Edge launch, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''func grantEdgeVoicePermissions(c *edgeCDPClient) error {
+          \tfor _, name := range []string{"notifications", "audioCapture", "speakerSelection"} {
+          \t\tparams := map[string]any{
+          \t\t\t"permission": map[string]any{"name": name},
+          \t\t\t"setting":    "granted",
+          \t\t\t"origin":     "https://voice.google.com",
+          \t\t}
+          \t\tif err := c.call("Browser.setPermission", params, nil); err != nil {
+          \t\t\t// speakerSelection is newer than the permissions Google Voice
+          \t\t\t// strictly requires. Older Edge builds can omit it safely.
+          \t\t\tif name == "speakerSelection" {
+          \t\t\t\tcontinue
+          \t\t\t}
+          \t\t\treturn err
+          \t\t}
+          \t}
+          \treturn nil
+          }'''
+          new = '''func grantEdgeVoicePermissions(c *edgeCDPClient) error {
+          \t// Browser.setPermission takes Web Permissions API descriptor names,
+          \t// not the older DevTools PermissionType enum. In particular the
+          \t// microphone descriptor is "microphone" (not "audioCapture") and
+          \t// speaker selection is "speaker-selection". Push is granted too:
+          \t// that is the browser capability Google Voice uses to wake an
+          \t// incoming call while its app window is in the background.
+          \tpermissions := []map[string]any{
+          \t\t{"name": "notifications"},
+          \t\t{"name": "push", "userVisibleOnly": true},
+          \t\t{"name": "microphone"},
+          \t\t{"name": "speaker-selection"},
+          \t}
+          \tfor _, permission := range permissions {
+          \t\tparams := map[string]any{
+          \t\t\t"permission": permission,
+          \t\t\t"setting":    "granted",
+          \t\t\t"origin":     "https://voice.google.com",
+          \t\t}
+          \t\tif err := c.call("Browser.setPermission", params, nil); err != nil {
+          \t\t\t// Speaker selection is useful for enumerating/routing output
+          \t\t\t// devices, but microphone permission also exposes speakers on
+          \t\t\t// Edge builds that predate this descriptor.
+          \t\t\tif permission["name"] == "speaker-selection" {
+          \t\t\t\tcontinue
+          \t\t\t}
+          \t\t\treturn err
+          \t\t}
+          \t}
+          \treturn nil
+          }'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one old Edge permission function, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''func edgeWindowGone(hwnd uintptr) bool {
+          \tif hwnd == 0 {
+          \t\treturn true
+          \t}
+          \t// Once WM_CLOSE destroys the app-mode window it disappears from the
+          \t// browser process's top-level windows. The exact-title lookup is kept as a
+          \t// second signal because the handle value itself can be recycled by Windows.
+          \tpid := windowProcessID(hwnd)
+          \treturn pid == 0 || edgeWindowForPID(pid) == 0
+          }'''
+          new = '''func edgeWindowGone(hwnd uintptr) bool {
+          \tif hwnd == 0 {
+          \t\treturn true
+          \t}
+          \t// A docked/owned Edge window can temporarily be non-visible while
+          \t// FlipAi is minimized or while Windows moves it between dock states.
+          \t// Visibility therefore cannot be used as liveness: doing so shut down
+          \t// the incoming-call receiver exactly when the app was put away. Test
+          \t// the HWND itself instead; IsWindow stays true for minimized/hidden
+          \t// windows and becomes false only after the window is destroyed.
+          \tok, _, _ := procEdgeIsWindow.Call(hwnd)
+          \treturn ok == 0
+          }'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one old edgeWindowGone implementation, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          test = Path('voice_edge_windows_test.go')
+          test.write_text(r'''//go:build windows
+
+          package main
+
+          import (
+          	"os"
+          	"strings"
+          	"testing"
+          )
+
+          func TestEdgeGoogleVoiceUsesWebPermissionDescriptorNames(t *testing.T) {
+          	b, err := os.ReadFile("voice_edge_windows.go")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	s := string(b)
+          	for _, want := range []string{`"notifications"`, `"push"`, `"microphone"`, `"speaker-selection"`} {
+          		if !strings.Contains(s, want) {
+          			t.Fatalf("Edge Google Voice receiver missing permission descriptor %s", want)
+          		}
+          	}
+          	for _, wrong := range []string{`{"notifications", "audioCapture"`, `"speakerSelection"`} {
+          		if strings.Contains(s, wrong) {
+          			t.Fatalf("Edge Google Voice receiver still contains old PermissionType name %s", wrong)
+          		}
+          	}
+          }
+
+          func TestEdgeReceiverDoesNotStartBrowserHidden(t *testing.T) {
+          	b, err := os.ReadFile("voice_edge_windows.go")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	s := string(b)
+          	start := strings.Index(s, "cmd := exec.Command(edgePath, args...)")
+          	if start < 0 {
+          		t.Fatal("Edge launch block missing")
+          	}
+          	end := strings.Index(s[start:], "if err := cmd.Start()")
+          	if end < 0 {
+          		t.Fatal("Edge cmd.Start block missing")
+          	}
+          	if strings.Contains(s[start:start+end], "hideWindow(cmd)") {
+          		t.Fatal("Edge Google Voice app-mode window must not be started with HideWindow")
+          	}
+          }
+
+          func TestEdgeReceiverLivenessUsesHWNDNotVisibility(t *testing.T) {
+          	b, err := os.ReadFile("voice_edge_windows.go")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	s := string(b)
+          	start := strings.Index(s, "func edgeWindowGone")
+          	if start < 0 {
+          		t.Fatal("edgeWindowGone missing")
+          	}
+          	end := strings.Index(s[start:], "\n}\n")
+          	if end < 0 {
+          		t.Fatal("edgeWindowGone end missing")
+          	}
+          	fn := s[start : start+end]
+          	if !strings.Contains(fn, "procEdgeIsWindow.Call(hwnd)") {
+          		t.Fatal("edgeWindowGone must use IsWindow so minimized/hidden receiver remains alive")
+          	}
+          	if strings.Contains(fn, "edgeWindowForPID") {
+          		t.Fatal("edgeWindowGone must not require a visible Edge window")
+          	}
+          }
+          ''', encoding='utf-8')
+          '@ | Set-Content harden_edge_receiver.py -Encoding utf8
+          python harden_edge_receiver.py
+          Remove-Item harden_edge_receiver.py
+          gofmt -w voice_edge_windows.go voice_edge_windows_test.go
+          go mod tidy
+
+      - name: Test
+        shell: pwsh
+        run: go test ./...
+
+      - name: Vet
+        shell: pwsh
+        run: go vet ./...
+
+      - name: Race test
+        shell: pwsh
+        run: go test -race ./...
+
+      - name: Remove one-shot workflow and verify diff
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/harden-google-voice-edge-receiver.yml
+          git diff --check
+          git status --short
+
+      - name: Commit hardened receiver
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Harden Google Voice Edge receiver lifecycle"
+          git push origin HEAD:fix/google-voice-incoming-edge
