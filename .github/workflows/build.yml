@@ -66,9 +66,24 @@ jobs:
             throw 'FlipAi desktop window did not open'
           }
           Start-Process '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
-          Start-Sleep -Seconds 2
-          $left=@(Get-Process -Name FlipAi -ErrorAction SilentlyContinue)
-          if($left.Count -gt 0){$left|Stop-Process -Force -ErrorAction SilentlyContinue;throw 'FlipAi processes survived Quit'}
+
+          # --quit waits for the host and Google Voice receiver to stop, while
+          # the tray/window/watchdog can need a few more scheduler ticks to
+          # finish their Win32 message loops. Treat shutdown as successful only
+          # when every FlipAi process is actually gone, but allow that graceful
+          # cleanup up to 20 seconds instead of racing it with a fixed 2s sleep.
+          $left=@()
+          $deadline=(Get-Date).AddSeconds(20)
+          do {
+            $left=@(Get-Process -Name FlipAi -ErrorAction SilentlyContinue)
+            if($left.Count -eq 0){break}
+            Start-Sleep -Milliseconds 250
+          } while((Get-Date)-lt $deadline)
+          if($left.Count -gt 0){
+            @($left | Select-Object Id,MainWindowTitle,Path | Format-Table | Out-String) | Write-Host
+            $left | Stop-Process -Force -ErrorAction SilentlyContinue
+            throw 'FlipAi processes survived Quit for more than 20 seconds'
+          }
 
       - name: Real Microsoft Edge Google Voice receiver smoke test
         shell: pwsh
