@@ -193,6 +193,9 @@ func sendGoogleVoiceMMSInPage(d voiceDevTools, phone, caption, imagePath string)
 	if err != nil {
 		return fmt.Errorf("Google Voice image picker did not expose a file input: %w", err)
 	}
+	// Some builds will not accept an element handle until the DOM domain is
+	// on. Failing that check looks exactly like an image that was never sent.
+	_ = d.Call("DOM.enable", map[string]any{}, nil)
 	if err := d.Call("DOM.setFileInputFiles", map[string]any{
 		"files":    []string{imagePath},
 		"objectId": objectID,

@@ -240,6 +240,35 @@ const googleVoiceInitScript = `
     } catch (_) {}
   }
 
+  // FlipAi grants Google Voice's microphone and notification permissions at the
+  // WebView2 host, before any prompt can appear. A page that asks
+  // navigator.permissions instead of asking for the device can be told
+  // "prompt" all the same -- and Google Voice partly decides whether it may
+  // ring in a browser from answers like that one. This reports what FlipAi has
+  // in fact already granted, and nothing else: every other permission is
+  // answered by the real implementation.
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const realQuery = navigator.permissions.query.bind(navigator.permissions);
+      const granted = {microphone: true, notifications: true};
+      navigator.permissions.query = function(descriptor) {
+        const name = descriptor && descriptor.name;
+        if (granted[name]) {
+          return Promise.resolve({
+            name: name,
+            state: 'granted',
+            status: 'granted',
+            onchange: null,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false
+          });
+        }
+        return realQuery(descriptor);
+      };
+    }
+  } catch (_) {}
+
   /* ---------- notifications as a ring signal ----------
 
      Google Voice sometimes announces an incoming call through the

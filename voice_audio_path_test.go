@@ -142,3 +142,28 @@ func TestTheNotificationsAPIIsSuppliedOnlyWhenMissing(t *testing.T) {
 		t.Error("the page no longer keeps a real Notifications implementation")
 	}
 }
+
+// FlipAi grants Google Voice's microphone and notification permissions at the
+// WebView2 host, before any prompt can appear. A page that asks
+// navigator.permissions instead of asking for the device can still be told
+// "prompt" -- and Google Voice partly decides whether it may ring in a browser
+// from answers like that. The page reports what FlipAi has really granted, and
+// nothing beyond it.
+func TestOnlyTheGrantedPermissionsAreReportedAsGranted(t *testing.T) {
+	if !strings.Contains(googleVoiceInitScript, "navigator.permissions.query = function(descriptor)") {
+		t.Fatal("the page no longer reports the permissions FlipAi granted at the host")
+	}
+	if !strings.Contains(googleVoiceInitScript, "const granted = {microphone: true, notifications: true};") {
+		t.Fatal("the set of permissions reported as granted has changed")
+	}
+	// Everything else has to reach the real implementation, or FlipAi would be
+	// telling the page it has capabilities nobody granted it.
+	if !strings.Contains(googleVoiceInitScript, "return realQuery(descriptor);") {
+		t.Error("permissions FlipAi never granted are not answered by the browser")
+	}
+	for _, mustNotClaim := range []string{"camera", "geolocation", "clipboard-read"} {
+		if strings.Contains(googleVoiceInitScript, mustNotClaim+": true") {
+			t.Errorf("the page claims %s is granted; FlipAi denies it at the host", mustNotClaim)
+		}
+	}
+}
