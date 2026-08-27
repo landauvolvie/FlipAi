@@ -1,5 +1,5 @@
 #ifndef MyVersion
-  #define MyVersion "0.31.0"
+  #define MyVersion "0.32.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist"
@@ -67,7 +67,7 @@ Filename: "{app}\FlipAi.exe"; WorkingDir: "{app}"; Flags: nowait; Check: Restart
 Filename: "{app}\FlipAi.exe"; Parameters: "--resume"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartBridgeOnly
 
 [UninstallRun]
-Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopFlipAi"
+Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifsdoesntexist; RunOnceId: "StopFlipAi"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\AISMSBridge"
