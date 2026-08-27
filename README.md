@@ -497,6 +497,12 @@ an override only applies while a matching device is actually present.
    window**, and until this is on, an incoming call goes to your forwarding
    phones instead. The status card reminds you while no ring has ever been
    seen.
+
+   Google Voice partly decides whether a browser may take calls from what that
+   browser can do, and one thing it looks at is whether it can raise a
+   notification. FlipAi supplies that capability to its own view when the
+   WebView2 runtime does not, and says so among the controls on the status
+   card when it had to.
 4. Install two virtual audio cables (once): VB-CABLE A+B or VoiceMeeter.
    FlipAi finds them and wires everything by itself.
 5. Agents → pick the agent → add your phone number and set it to **Texts and
@@ -540,8 +546,15 @@ view with background throttling, renderer backgrounding and occlusion detection
 switched off, and does not rely on a timer to notice a call in the first place:
 the page change a ringing call makes -- in the main document or in any
 same-origin frame -- drives the check, an incoming-call notification triggers an
-immediate burst of checks, and FlipAi's own loopback control channel reads the
-page several times a second as an independent second pair of eyes.
+immediate burst of checks, and FlipAi reads the page itself several times a
+second as an independent second pair of eyes.
+
+That second view uses WebView2's own in-process DevTools call, against FlipAi's
+view and no other. **No debugging port is opened and nothing listens for it**,
+which is both safer and the only thing that works: the WebView2 runtime ignores
+the loopback debugging switch a browser would honour. It is also what delivers
+a real pointer press to a ringing call, and what attaches an image to an
+outgoing message.
 
 ### If Google Voice does not appear
 

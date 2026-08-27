@@ -15,9 +15,12 @@ proves is the part CI can prove.
      window is the duplicate-window bug.
   4. That window is a tool window: no taskbar button, no Alt-Tab entry. It has
      nowhere to be except inside the FlipAi panel.
-  5. Its loopback control channel answers. That channel is how FlipAi presses
-     Answer when a scripted click is ignored, and how it sends an MMS; without
-     it an incoming call has one fewer way to be answered.
+  5. FlipAi's own endpoint inside that process answers, and refuses a request
+     that does not carry its token. That endpoint is how the FlipAi host asks
+     this process to send an image through the signed-in Google Voice session
+     it owns. (The DevTools channel FlipAi uses to press Answer is
+     in-process and opens no port, so there is nothing there to check from
+     outside.)
 
 Everything past this -- a real Google Voice ring, a real answered call, a real
 Codex desktop voice session, real audio over the cables -- needs a signed-in
@@ -152,30 +155,36 @@ try {
   if (-not $w.ToolWindow) { throw 'The Google Voice window is not a tool window, so it appears in Alt-Tab' }
   if ($w.AppWindow) { throw 'The Google Voice window claims a taskbar button' }
 
-  # 5. The loopback control channel is open.
-  #
-  # A WebView2 runtime that refuses the switch that opens it is a real machine
-  # FlipAi still has to work on: Google Voice runs, calls are answered from
-  # inside the page, and only the second way of pressing Answer and sending an
-  # image are lost. So this reports rather than fails when the runtime said no.
+  # 5. FlipAi's own endpoint is up and is not open to anything else.
   $state = Get-Content $stateFile -Raw | ConvertFrom-Json
   if (-not $state.controlPort) {
-    Write-Host 'NOTE: this WebView2 runtime refused the loopback control channel; Google Voice is running without it.'
-    Write-Host "renderMode: $($state.renderMode)"
-    Write-Host "lastError: $($state.lastError)"
-    Write-Host 'Google Voice receiver checks passed (without the control channel).'
-    return
+    Show-Diagnostics 'the Google Voice process opened no local endpoint'
+    throw 'The Google Voice process opened no local endpoint, so an image could never be sent through it'
   }
+  $endpoint = "http://127.0.0.1:$($state.controlPort)/health"
+  $token = $state.controlToken
+  if (-not $token) { throw 'The Google Voice endpoint has no token, so it can never be reached' }
+
   $answered = $false
   $deadline = (Get-Date).AddSeconds(30)
   do {
     try {
-      if (Invoke-RestMethod "http://127.0.0.1:$($state.controlPort)/json/version" -TimeoutSec 2) { $answered = $true; break }
+      if (Invoke-RestMethod $endpoint -Headers @{ 'X-FlipAi-Token' = $token } -TimeoutSec 2) { $answered = $true; break }
     } catch {}
     Start-Sleep -Milliseconds 500
   } while ((Get-Date) -lt $deadline)
-  if (-not $answered) { throw "The Google Voice control channel on port $($state.controlPort) did not answer" }
-  Write-Host "Control channel answered on 127.0.0.1:$($state.controlPort)"
+  if (-not $answered) {
+    Show-Diagnostics "the local endpoint on port $($state.controlPort) did not answer"
+    throw "FlipAi's Google Voice endpoint on port $($state.controlPort) did not answer"
+  }
+  Write-Host "FlipAi's Google Voice endpoint answered on 127.0.0.1:$($state.controlPort)"
+
+  # An endpoint that would answer without the token would let anything on this
+  # machine drive a signed-in Google Voice session.
+  $refused = $false
+  try { Invoke-RestMethod $endpoint -TimeoutSec 2 | Out-Null } catch { $refused = $true }
+  if (-not $refused) { throw "FlipAi's Google Voice endpoint answered a request with no token" }
+  Write-Host 'The endpoint refused a request with no token.'
   Write-Host 'Google Voice receiver checks passed.'
 }
 finally {

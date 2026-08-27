@@ -4,9 +4,11 @@
 package edge
 
 import (
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -146,6 +148,95 @@ func (e *Chromium) Eval(script string) {
 		uintptr(unsafe.Pointer(_script)),
 		0,
 	)
+}
+
+// CallDevToolsProtocolMethod is a local addition for FlipAi.
+//
+// It reaches the DevTools protocol in-process, against this WebView2 and no
+// other. Nothing listens on a port, so there is no local debugging endpoint for
+// anything else on the machine to connect to.
+//
+// Like every WebView2 call it must be made on the thread that created the
+// WebView2, and the result arrives on that thread through done.
+func (e *Chromium) CallDevToolsProtocolMethod(method, parametersAsJSON string, done func(errorCode uintptr, result string)) error {
+	if e.webview == nil {
+		return errors.New("the WebView2 is not ready")
+	}
+	name, err := windows.UTF16PtrFromString(method)
+	if err != nil {
+		return err
+	}
+	if parametersAsJSON == "" {
+		parametersAsJSON = "{}"
+	}
+	params, err := windows.UTF16PtrFromString(parametersAsJSON)
+	if err != nil {
+		return err
+	}
+	handler := newICoreWebView2CallDevToolsProtocolMethodCompletedHandler(&devToolsCompletion{done: done})
+	// COM holds this pointer until it invokes the handler, and Go must be told
+	// so: without a reference the collector is free to move or free it, and
+	// the callback would land somewhere else entirely.
+	devToolsKeep(handler)
+	_, _, callErr := e.webview.vtbl.CallDevToolsProtocolMethod.Call(
+		uintptr(unsafe.Pointer(e.webview)),
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(params)),
+		uintptr(unsafe.Pointer(handler)),
+	)
+	if callErr != nil && callErr != windows.ERROR_SUCCESS {
+		devToolsDrop(handler)
+		return callErr
+	}
+	return nil
+}
+
+// devToolsCompletion turns one DevTools reply into a Go call.
+type devToolsCompletion struct {
+	done    func(errorCode uintptr, result string)
+	handler *iCoreWebView2CallDevToolsProtocolMethodCompletedHandler
+}
+
+func (c *devToolsCompletion) QueryInterface(_, _ uintptr) uintptr { return 0 }
+func (c *devToolsCompletion) AddRef() uintptr                     { return 1 }
+func (c *devToolsCompletion) Release() uintptr                    { return 1 }
+
+func (c *devToolsCompletion) CallDevToolsProtocolMethodCompleted(errorCode uintptr, returnObjectAsJson *uint16) uintptr {
+	result := ""
+	if returnObjectAsJson != nil {
+		result = windows.UTF16PtrToString(returnObjectAsJson)
+	}
+	if c.done != nil {
+		c.done(errorCode, result)
+	}
+	devToolsDropImpl(c)
+	return 0
+}
+
+var (
+	devToolsHandlersMu sync.Mutex
+	devToolsHandlers   = map[*iCoreWebView2CallDevToolsProtocolMethodCompletedHandler]struct{}{}
+)
+
+func devToolsKeep(h *iCoreWebView2CallDevToolsProtocolMethodCompletedHandler) {
+	if impl, ok := h.impl.(*devToolsCompletion); ok {
+		impl.handler = h
+	}
+	devToolsHandlersMu.Lock()
+	devToolsHandlers[h] = struct{}{}
+	devToolsHandlersMu.Unlock()
+}
+
+func devToolsDrop(h *iCoreWebView2CallDevToolsProtocolMethodCompletedHandler) {
+	devToolsHandlersMu.Lock()
+	delete(devToolsHandlers, h)
+	devToolsHandlersMu.Unlock()
+}
+
+func devToolsDropImpl(c *devToolsCompletion) {
+	if c.handler != nil {
+		devToolsDrop(c.handler)
+	}
 }
 
 func (e *Chromium) Show() error {

@@ -498,10 +498,7 @@ const voiceBrowserArguments = "--disable-background-timer-throttling " +
 // attempt would find "a window" that can never load anything. Each failed
 // attempt therefore destroys its own frame first -- from this thread, which is
 // the thread that created it.
-// createGoogleVoiceWebView returns the view and the control-channel port it
-// actually ended up with, which is 0 when the runtime would not accept the
-// switch that opens it.
-func createGoogleVoiceWebView(dataDir string, controlPort int) (webview2.WebView, int, error) {
+func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
 	ways := googleVoiceRenderModes()
 	// A previous window that came up black is remembered, so Retry moves on to
 	// the next way of drawing rather than repeating the one that did not work.
@@ -509,69 +506,55 @@ func createGoogleVoiceWebView(dataDir string, controlPort int) (webview2.WebView
 	if start < 0 || start >= len(ways) {
 		start = 0
 	}
-	// The control channel is a browser switch, and WebView2 refuses to start at
-	// all if it does not like a switch -- without saying which. A window with no
-	// control channel loses the second way of pressing Answer and the ability to
-	// send an MMS; a window that never appears loses everything. So every way of
-	// drawing it is tried with the channel, and then every way without it.
-	ports := []int{controlPort}
-	if controlPort > 0 {
-		ports = append(ports, 0)
-	}
 	var lastErr error
-	for _, port := range ports {
-		for i := 0; i < len(ways); i++ {
-			way := ways[(start+i)%len(ways)]
-			if way.wait > 0 {
-				time.Sleep(way.wait)
-			}
-			_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args+voiceCDPArguments(port))
-			// Created where it will live: off every display, as a tool window, and
-			// without taking focus. The binding shows its window before it embeds
-			// the browser, and embedding takes seconds while WebView2 starts, so
-			// creating it any other way puts an empty titled window on the user's
-			// desktop at every start -- which is the complaint this whole change
-			// exists to answer. There is no moment at which this window is visible
-			// anywhere except inside the FlipAi panel.
-			parkX, parkY := parkedWindowOrigin()
-			w := webview2.NewWithOptions(webview2.WebViewOptions{
-				Debug: false,
-				// Focus follows the panel, not the browser: a view that grabs
-				// focus while parked would type into itself.
-				AutoFocus: false,
-				DataPath:  voiceProfilePath(dataDir),
-				WindowOptions: webview2.WindowOptions{
-					Title:      googleVoiceWindowTitle,
-					Width:      voiceParkedWidth,
-					Height:     voiceParkedHeight,
-					X:          parkX,
-					Y:          parkY,
-					Position:   true,
-					ExStyle:    wsExToolWin | wsExNoActivate,
-					NoActivate: true,
-				},
-			})
-			if w != nil {
-				mode := "FlipAi (Edge WebView2, " + way.name + " drawing)"
-				note := way.note
-				if port == 0 && controlPort > 0 {
-					note = "Google Voice started without FlipAi's control channel, because WebView2 refused it. Calls are still answered from inside the page; the second way of pressing Answer and sending an image over Google Voice are unavailable."
-				}
-				attempt := (start + i) % len(ways)
-				mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-					s.RenderMode = mode
-					s.RenderAttempt = attempt
-					if note != "" {
-						s.LastError = note
-					}
-				})
-				return w, port, nil
-			}
-			destroyLeftoverGoogleVoiceFrame()
-			lastErr = webView2CreateFailure(i)
+	for i := 0; i < len(ways); i++ {
+		way := ways[(start+i)%len(ways)]
+		if way.wait > 0 {
+			time.Sleep(way.wait)
 		}
+		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args)
+		// Created where it will live: off every display, as a tool window, and
+		// without taking focus. The binding shows its window before it embeds
+		// the browser, and embedding takes seconds while WebView2 starts, so
+		// creating it any other way puts an empty titled window on the user's
+		// desktop at every start -- which is the complaint this whole change
+		// exists to answer. There is no moment at which this window is visible
+		// anywhere except inside the FlipAi panel.
+		parkX, parkY := parkedWindowOrigin()
+		w := webview2.NewWithOptions(webview2.WebViewOptions{
+			Debug: false,
+			// Focus follows the panel, not the browser: a view that grabs
+			// focus while parked would type into itself.
+			AutoFocus: false,
+			DataPath:  voiceProfilePath(dataDir),
+			WindowOptions: webview2.WindowOptions{
+				Title:      googleVoiceWindowTitle,
+				Width:      voiceParkedWidth,
+				Height:     voiceParkedHeight,
+				X:          parkX,
+				Y:          parkY,
+				Position:   true,
+				ExStyle:    wsExToolWin | wsExNoActivate,
+				NoActivate: true,
+			},
+		})
+		if w != nil {
+			mode := "FlipAi (Edge WebView2, " + way.name + " drawing)"
+			note := way.note
+			attempt := (start + i) % len(ways)
+			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+				s.RenderMode = mode
+				s.RenderAttempt = attempt
+				if note != "" {
+					s.LastError = note
+				}
+			})
+			return w, nil
+		}
+		destroyLeftoverGoogleVoiceFrame()
+		lastErr = webView2CreateFailure(i)
 	}
-	return nil, 0, lastErr
+	return nil, lastErr
 }
 
 type googleVoiceRenderMode struct {

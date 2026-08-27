@@ -62,10 +62,22 @@ once that is true; otherwise the status says which controls the app offered.
 **The status tells the truth.** Ringing, answered-but-not-yet-talking, and a
 live conversation are now three different things instead of one "connected".
 
-Also in this release: a single supervisor with backoff so a failing view cannot
-spawn windows in a loop; the Google Voice MMS sender driven from the recorded
-control port instead of guessing at listeners; and the retired "open in its own
-window" path removed.
+**The second view of the page opens no port.** FlipAi reads its own Google
+Voice page, and delivers a real pointer press to a ringing call, through
+WebView2's in-process DevTools call. An earlier attempt asked WebView2 for a
+loopback debugging port, which the runtime ignores -- so that channel silently
+did not exist, and with it the second way of pressing Answer and the ability to
+send an image over Google Voice. Nothing listens for it now. The Google Voice
+process serves exactly one loopback endpoint, holding a token it generates
+itself, so the FlipAi host can ask it to send an image.
+
+Also in this release: the view is created already parked, as a tool window,
+without focus, so not even an empty frame flashes on the desktop while WebView2
+starts; the Notifications API is supplied to the view when the runtime lacks it,
+because Google Voice may otherwise decline to ring in a browser at all; a single
+supervisor with backoff so a failing view cannot spawn windows in a loop; the
+Google Voice MMS sender driven from the recorded control port instead of
+guessing at listeners; and the retired "open in its own window" path removed.
 
 ## Verified
 

@@ -59,7 +59,7 @@ func TestGoogleVoiceViewIsFlipAiOwned(t *testing.T) {
 		t.Fatal("the Google Voice receiver is gone")
 	}
 	for _, want := range []string{
-		"createGoogleVoiceWebView(dataDir, port)",
+		"createGoogleVoiceWebView(dataDir)",
 		"googleVoiceInitScript",
 		"webViewVoicePermissions",
 		"dock.park()",
@@ -77,25 +77,83 @@ func TestGoogleVoiceViewIsFlipAiOwned(t *testing.T) {
 	}
 }
 
-// The control channel is loopback-only and its port is never fixed, so it
-// cannot collide with anything and cannot be reached from another machine.
-func TestTheControlChannelIsLoopbackOnly(t *testing.T) {
-	args := voiceCDPArguments(43210)
-	if !strings.Contains(args, "--remote-debugging-address=127.0.0.1") {
-		t.Errorf("the control channel is not bound to loopback: %q", args)
+// The DevTools channel opens no port at all. An earlier version asked WebView2
+// for a loopback debugging port, which the runtime turns out to ignore -- so
+// the channel silently did not exist, and with it the second way of pressing
+// Answer and the ability to send an image. It is reached in-process now, and
+// nothing may put a debugging port back.
+func TestTheControlChannelOpensNoDebuggingPort(t *testing.T) {
+	for name, body := range goSources(t) {
+		for _, forbidden := range []string{"--remote-debugging-port", "--remote-allow-origins"} {
+			if strings.Contains(body, forbidden) {
+				t.Errorf("%s asks WebView2 for %s; the DevTools channel is in-process", name, forbidden)
+			}
+		}
 	}
-	if !strings.Contains(args, "--remote-debugging-port=43210") {
-		t.Errorf("the control channel did not take the chosen port: %q", args)
+	body := goSources(t)["voice_cdp_windows.go"]
+	if !strings.Contains(body, "CallDevToolsProtocolMethod") {
+		t.Fatal("the control channel no longer uses WebView2's own in-process DevTools call")
 	}
-	if voiceCDPArguments(0) != "" {
-		t.Error("a machine with no spare port still got debugging switches")
+	// Every WebView2 call has to be made on the thread that created it.
+	if !strings.Contains(body, "d.view.Dispatch(") {
+		t.Error("the control channel calls WebView2 off its own thread")
 	}
-	first, err := freeLoopbackPort()
+	if !strings.Contains(body, "voiceDevToolsTimeout") {
+		t.Error("a DevTools call that never answers would stall the observation loop")
+	}
+}
+
+// The vendored WebView2 binding carries the local change that makes the
+// in-process channel possible.
+func TestTheWebViewBindingCanCallDevTools(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("third_party", "go-webview2", "pkg", "edge", "chromium.go"))
 	if err != nil {
-		t.Skipf("no loopback port available in this environment: %v", err)
+		t.Fatal(err)
 	}
-	if first <= 0 || first > 65535 {
-		t.Fatalf("chosen port %d is not a port", first)
+	if !strings.Contains(string(b), "func (e *Chromium) CallDevToolsProtocolMethod(") {
+		t.Fatal("the WebView2 binding lost the local change that reaches DevTools in-process")
+	}
+}
+
+// The one thing the Google Voice process does listen on is FlipAi's own
+// endpoint, so the host can ask it to send an image through the signed-in
+// session it owns. It must be loopback-only and must refuse anything that does
+// not carry FlipAi's local token.
+func TestTheGoogleVoiceEndpointIsLocalAndAuthenticated(t *testing.T) {
+	body := goSources(t)["voice_receiver_windows.go"]
+	i := strings.Index(body, "func startVoiceWindowEndpoint(")
+	if i < 0 {
+		t.Fatal("the Google Voice process serves no endpoint, so an image can never be sent")
+	}
+	endpoint := body[i:]
+	if !strings.Contains(endpoint, `net.Listen("tcp", "127.0.0.1:0")`) {
+		t.Error("the Google Voice endpoint is not bound to loopback on a free port")
+	}
+	if !strings.Contains(endpoint, `r.Header.Get("X-FlipAi-Token") == token`) {
+		t.Error("the Google Voice endpoint does not check its token")
+	}
+	if !strings.Contains(endpoint, `return token != "" &&`) {
+		t.Error("an endpoint with no token to check must refuse rather than allow")
+	}
+}
+
+// That token is what stands between anything else on this machine and a
+// signed-in Google Voice session, so the desktop UI must never be handed it.
+func TestTheGoogleVoiceEndpointTokenIsNeverServedToAPage(t *testing.T) {
+	dir := t.TempDir()
+	mutateVoiceRuntime(dir, func(s *VoiceRuntimeState) {
+		s.ControlPort = 5555
+		s.ControlToken = "a-secret-nobody-else-may-have"
+	})
+	snap := voiceSnapshot(dir, func() Config { return Config{} })
+	if snap.Runtime.ControlToken != "" {
+		t.Fatalf("the status a page reads carries the endpoint token: %q", snap.Runtime.ControlToken)
+	}
+	if snap.Runtime.ControlPort != 5555 {
+		t.Errorf("the port was stripped along with the token: %d", snap.Runtime.ControlPort)
+	}
+	if got := loadVoiceRuntime(dir).ControlToken; got == "" {
+		t.Error("stripping the token for the page also removed it from disk")
 	}
 }
 
@@ -115,8 +173,8 @@ func TestTheAnswerLadderHasThreeDistinctRungs(t *testing.T) {
 	end := strings.Index(body[i:], "\n}\n")
 	press := body[i : i+end]
 	for rung, want := range map[int]string{
-		1: "clickAnswerScripted",
-		2: "clickAnswerTrusted",
+		1: "voiceClickAnswerScripted",
+		2: "voiceClickAnswerTrusted",
 		3: "invokeGoogleVoiceAnswerAccessibly",
 	} {
 		if !strings.Contains(press, want) {

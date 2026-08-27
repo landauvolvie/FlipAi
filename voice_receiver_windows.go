@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -58,16 +60,7 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 		return err
 	}
 
-	// The control channel's port is chosen before the view is created, because
-	// it is a browser argument. A machine that cannot spare a loopback port
-	// still gets a working Google Voice window; it just loses the second way of
-	// pressing Answer and the ability to send an MMS.
-	port, portErr := freeLoopbackPort()
-	if portErr != nil {
-		port = 0
-	}
-
-	w, port, err := createGoogleVoiceWebView(dataDir, port)
+	w, err := createGoogleVoiceWebView(dataDir)
 	if err != nil {
 		recordVoiceOpen(dataDir, "WebView2 could not create the Google Voice view", err)
 		return err
@@ -94,8 +87,9 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 		return cfg
 	}
 
-	control := newVoiceControlChannel(port)
-	defer control.close()
+	// The DevTools channel is in-process: WebView2's own CallDevToolsProtocolMethod,
+	// against this view and no other, with nothing listening on the machine.
+	control := newVoiceControlChannel(newWebViewDevTools(w))
 
 	bridge := newVoiceBridge(dataDir, mainConfig,
 		func(cfg VoiceCallConfig, agent string) error { return startAgentVoiceSession(dataDir, cfg, agent) },
@@ -114,6 +108,14 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 	_ = w.Bind("flipVoicePage", bridge.Page)
 
 	w.Init(googleVoiceInitScript)
+
+	// The one thing that does listen is FlipAi's own endpoint, so the host
+	// process can ask this one to send an image through the signed-in Google
+	// Voice session it owns. It is loopback-only and needs FlipAi's local token.
+	port, endpoint := startVoiceWindowEndpoint(dataDir, control)
+	if endpoint != nil {
+		defer endpoint.Close()
+	}
 
 	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 		s.BrowserRunning = true
@@ -150,6 +152,7 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 		s.BrowserRunning = false
 		s.ControlPort = 0
+		s.ControlToken = ""
 		s.Docked = false
 		s.LastEvent = "browser-closed"
 	})
@@ -165,7 +168,6 @@ func runVoiceReceiverLoops(dataDir string, hwnd uintptr, bridge *voiceBridge, co
 	defer controlTicker.Stop()
 
 	quitCheck := 0
-	granted := false
 	lastDevices := ""
 
 	for {
@@ -192,12 +194,6 @@ func runVoiceReceiverLoops(dataDir string, hwnd uintptr, bridge *voiceBridge, co
 				// the call is over -- see voiceObservation.Unreadable.
 				bridge.Observe(voiceObservation{Unreadable: true})
 				continue
-			}
-			if !granted {
-				// Granting at the browser level is what makes Google Voice
-				// treat this window as a browser that can take calls at all,
-				// and it can only be done once a page exists.
-				granted = control.grantPermissions() == nil
 			}
 			bridge.Page(snap.Href, snap.SignedIn, joinControls(snap.Controls))
 			if len(snap.Devices) > 0 {
@@ -233,84 +229,25 @@ func marshalDevices(devices []VoiceAudioDevice) string {
 	return string(b)
 }
 
-// voiceControlChannel is FlipAi's loopback view of its own Google Voice page.
-// It reconnects on its own: the socket is dropped by every page navigation, and
-// a channel that stayed dead after the first sign-in would be no channel at all.
+// voiceControlChannel is FlipAi's own view of its own Google Voice page.
 type voiceControlChannel struct {
-	port int
-
-	// The observation loop reads the page while the answer queue presses
-	// Answer, on two different goroutines. Both go through the one socket, so
-	// both go through this lock.
-	mu     sync.Mutex
-	client *voiceCDPClient
+	devTools voiceDevTools
 }
 
-func newVoiceControlChannel(port int) *voiceControlChannel {
-	return &voiceControlChannel{port: port}
-}
-
-func (c *voiceControlChannel) close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.dropLocked()
-}
-
-func (c *voiceControlChannel) connected() (*voiceCDPClient, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.port <= 0 {
-		return nil, errors.New("the Google Voice control channel is not available on this PC")
+func newVoiceControlChannel(d voiceDevTools) *voiceControlChannel {
+	if d == nil {
+		return &voiceControlChannel{}
 	}
-	if c.client != nil {
-		return c.client, nil
-	}
-	client, err := connectVoiceCDP(c.port)
-	if err != nil {
-		return nil, err
-	}
-	c.client = client
-	return client, nil
+	return &voiceControlChannel{devTools: d}
 }
 
-// drop closes the socket after a failure. Every page navigation ends the old
-// connection, so this is the ordinary case rather than an exceptional one.
-func (c *voiceControlChannel) drop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.dropLocked()
-}
-
-func (c *voiceControlChannel) dropLocked() {
-	if c.client != nil {
-		c.client.close()
-		c.client = nil
-	}
-}
+func (c *voiceControlChannel) available() bool { return c != nil && c.devTools != nil }
 
 func (c *voiceControlChannel) snapshot() (voicePageSnapshot, error) {
-	client, err := c.connected()
-	if err != nil {
-		return voicePageSnapshot{}, err
+	if !c.available() {
+		return voicePageSnapshot{}, errNoVoiceControlChannel
 	}
-	snap, err := client.voiceSnapshot()
-	if err != nil {
-		c.drop()
-		return voicePageSnapshot{}, err
-	}
-	return snap, nil
-}
-
-func (c *voiceControlChannel) grantPermissions() error {
-	client, err := c.connected()
-	if err != nil {
-		return err
-	}
-	if err := client.grantVoicePermissions(); err != nil {
-		c.drop()
-		return err
-	}
-	return nil
+	return voiceReadSnapshot(c.devTools)
 }
 
 // pressAnswer is the answer ladder. Rung 1 is the page's own click, rung 2 is a
@@ -320,13 +257,11 @@ func (c *voiceControlChannel) grantPermissions() error {
 func (c *voiceControlChannel) pressAnswer(effect voiceCallEffect) error {
 	switch effect.Attempt {
 	case 1:
-		client, err := c.connected()
-		if err != nil {
-			return err
+		if !c.available() {
+			return errNoVoiceControlChannel
 		}
-		pressed, err := client.clickAnswerScripted()
+		pressed, err := voiceClickAnswerScripted(c.devTools)
 		if err != nil {
-			c.drop()
 			return err
 		}
 		if !pressed {
@@ -334,13 +269,11 @@ func (c *voiceControlChannel) pressAnswer(effect voiceCallEffect) error {
 		}
 		return nil
 	case 2:
-		client, err := c.connected()
-		if err != nil {
-			return err
+		if !c.available() {
+			return errNoVoiceControlChannel
 		}
-		pressed, err := client.clickAnswerTrusted()
+		pressed, err := voiceClickAnswerTrusted(c.devTools)
 		if err != nil {
-			c.drop()
 			return err
 		}
 		if !pressed {
@@ -381,10 +314,89 @@ func invokeGoogleVoiceAnswerAccessibly() error {
 	return errors.New("Windows refused to press the Answer control")
 }
 
-// platformVoiceControlPort is the loopback DevTools port of the running Google
-// Voice window, for the host process. It is 0 when there is no window.
-func platformVoiceControlPort(dataDir string) int {
-	return loadVoiceRuntime(dataDir).ControlPort
+// platformVoiceControlEndpoint is the loopback endpoint the running Google
+// Voice process serves, for the host process. The port is 0 when there is none.
+func platformVoiceControlEndpoint(dataDir string) (int, string) {
+	rt := loadVoiceRuntime(dataDir)
+	return rt.ControlPort, rt.ControlToken
 }
 
-var errNoVoiceControlChannel = errors.New("the Google Voice window has no control channel open")
+// startVoiceWindowEndpoint opens the one loopback endpoint the Google Voice
+// process serves.
+//
+// It exists because WebView2 is reached in-process: there is no port for the
+// FlipAi host to connect to, so when the host has an image to send it asks this
+// process to send it. The endpoint is bound to 127.0.0.1 and every request has
+// to carry FlipAi's own local token, so nothing else on the machine can drive
+// the signed-in Google Voice session.
+//
+// It returns the port it is listening on, which goes into the runtime state
+// file for the host to find, and 0 when no endpoint could be opened -- in which
+// case calls still work and only sending an image does not.
+func startVoiceWindowEndpoint(dataDir string, control *voiceControlChannel) (int, io.Closer) {
+	if !control.available() {
+		return 0, nil
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+			s.RoutingNote = "FlipAi could not open its local Google Voice endpoint, so sending an image over Google Voice is unavailable: " + err.Error()
+		})
+		return 0, nil
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	// The endpoint's own secret, made here and written down beside its port.
+	// Borrowing the main configuration's token would mean depending on a file
+	// another process creates, and racing it on a first run.
+	token, err := secureRandomToken(24)
+	if err != nil {
+		_ = listener.Close()
+		return 0, nil
+	}
+	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) { s.ControlToken = token })
+
+	mux := http.NewServeMux()
+	authorized := func(r *http.Request) bool {
+		// A token that is not set cannot be checked, and an endpoint that
+		// cannot check is one that does not answer.
+		return token != "" && r.Header.Get("X-FlipAi-Token") == token
+	}
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r) {
+			http.Error(w, "FlipAi local token required", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("/mms", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if !authorized(r) {
+			http.Error(w, "FlipAi local token required", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			Phone   string `json:"phone"`
+			Caption string `json:"caption"`
+			Image   string `json:"image"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+			http.Error(w, "could not read the request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := sendGoogleVoiceMMSInPage(control.devTools, body.Phone, body.Caption, body.Image); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 150 * time.Second}
+	go func() { _ = server.Serve(listener) }()
+	return port, server
+}

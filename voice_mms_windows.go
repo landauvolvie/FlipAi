@@ -3,12 +3,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -62,15 +66,7 @@ func sendGoogleVoiceImageMMS(ctx context.Context, original GmailMessage, body st
 	defer os.Remove(imagePath)
 	imagePath, _ = filepath.Abs(imagePath)
 
-	page, err := waitForGoogleVoiceMMSPage(ctx, dataDir)
-	if err != nil {
-		return err
-	}
-	defer page.close()
-	if err := page.sendGoogleVoiceMMS(phone, strings.TrimSpace(body), imagePath); err != nil {
-		return err
-	}
-	return nil
+	return requestGoogleVoiceMMS(ctx, dataDir, phone, strings.TrimSpace(body), imagePath)
 }
 
 func googleVoiceImageRecipient(m GmailMessage) string {
@@ -88,79 +84,97 @@ func googleVoiceImageRecipient(m GmailMessage) string {
 	return ""
 }
 
-// The Google Voice window writes down the loopback control port it opened, so
-// sending an image is a matter of connecting to it rather than guessing which
-// of a process's listeners is the right one. That guesswork was the old way,
-// and it stopped working the moment Google Voice moved into FlipAi's own
-// browser view, where the listener belongs to the WebView2 runtime process
-// rather than to FlipAi.
-func waitForGoogleVoiceMMSPage(ctx context.Context, dataDir string) (*voiceCDPClient, error) {
+// The image is sent by the process that owns the Google Voice view, not by the
+// one that decided to send it.
+//
+// WebView2 is reached in-process -- there is no port to connect to from
+// outside -- so the host asks the Google Voice process to do it, over a
+// loopback endpoint that process opens for exactly this. The port is written
+// into the runtime state file and the request carries FlipAi's own local token,
+// so nothing else on the machine can drive the signed-in Google Voice session.
+func requestGoogleVoiceMMS(ctx context.Context, dataDir, phone, caption, imagePath string) error {
 	if err := platformOpenGoogleVoice(dataDir, false); err != nil {
-		return nil, fmt.Errorf("open Google Voice for MMS: %w", err)
+		return fmt.Errorf("open Google Voice for MMS: %w", err)
 	}
-	deadline := time.Now().Add(25 * time.Second)
+	body, err := json.Marshal(map[string]string{
+		"phone":   phone,
+		"caption": caption,
+		"image":   imagePath,
+	})
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(90 * time.Second)
 	var last error
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
-		if port := platformVoiceControlPort(dataDir); port > 0 {
-			page, err := connectVoiceCDP(port)
+		port, token := platformVoiceControlEndpoint(dataDir)
+		if port <= 0 || token == "" {
+			last = errNoVoiceControlChannel
+		} else {
+			err := postVoiceControl(ctx, port, token, "/mms", body)
 			if err == nil {
-				return page, nil
+				return nil
 			}
 			last = err
-		} else if last == nil {
-			last = errNoVoiceControlChannel
+			// A refusal from the page itself will not become a success by
+			// being repeated; only a channel that is not up yet will.
+			if !errors.Is(err, errVoiceControlUnreachable) {
+				return err
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(250 * time.Millisecond):
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	if last == nil {
-		last = errors.New("the Google Voice control channel was not found")
+		last = errNoVoiceControlChannel
 	}
-	return nil, fmt.Errorf("Google Voice MMS is unavailable: %w", last)
+	return fmt.Errorf("Google Voice MMS is unavailable: %w", last)
 }
 
-type voiceCDPObjectEval struct {
-	Result struct {
-		Type        string `json:"type"`
-		Subtype     string `json:"subtype,omitempty"`
-		ObjectID    string `json:"objectId,omitempty"`
-		Description string `json:"description,omitempty"`
-	} `json:"result"`
-	ExceptionDetails json.RawMessage `json:"exceptionDetails,omitempty"`
+// errVoiceControlUnreachable separates "the Google Voice process is not
+// listening yet" from "it listened and said no".
+var errVoiceControlUnreachable = errors.New("the Google Voice process is not listening yet")
+
+func postVoiceControl(ctx context.Context, port int, token, path string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://127.0.0.1:"+strconv.Itoa(port)+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-FlipAi-Token", token)
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errVoiceControlUnreachable, err)
+	}
+	defer resp.Body.Close()
+	text, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		return fmt.Errorf("%w: %s", errVoiceControlUnreachable, strings.TrimSpace(string(text)))
+	}
+	return fmt.Errorf("%s", strings.TrimSpace(string(text)))
 }
 
-func (c *voiceCDPClient) evalObject(expression string) (string, error) {
-	var got voiceCDPObjectEval
-	params := map[string]any{
-		"expression":    expression,
-		"returnByValue": false,
-		"awaitPromise":  false,
-	}
-	if err := c.call("Runtime.evaluate", params, &got); err != nil {
-		return "", err
-	}
-	if len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
-		return "", errors.New("Google Voice page script failed while locating the image input")
-	}
-	if got.Result.ObjectID == "" || got.Result.Subtype == "null" || got.Result.Type == "undefined" {
-		return "", errors.New("Google Voice image picker did not expose a file input")
-	}
-	return got.Result.ObjectID, nil
-}
-
-func (c *voiceCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) error {
-	var snap voicePageSnapshot
-	if err := c.voiceSnapshotInto(&snap); err != nil {
+// sendGoogleVoiceMMSInPage is the half that runs inside the Google Voice
+// process: prepare the conversation, attach the image to the picker's file
+// input, and send.
+func sendGoogleVoiceMMSInPage(d voiceDevTools, phone, caption, imagePath string) error {
+	snap, err := voiceReadSnapshot(d)
+	if err != nil {
 		return err
 	}
 	if !snap.SignedIn {
-		return errors.New("Google Voice is not signed in in the FlipAi Edge window")
+		return errors.New("Google Voice is not signed in inside FlipAi")
 	}
 
 	phoneJSON, _ := json.Marshal(phone)
@@ -168,40 +182,31 @@ func (c *voiceCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) er
 	prepare := strings.ReplaceAll(voicePrepareMMSJS, "__PHONE__", string(phoneJSON))
 	prepare = strings.ReplaceAll(prepare, "__CAPTION__", string(captionJSON))
 	var stage string
-	if err := c.eval(prepare, true, &stage); err != nil {
+	if err := voiceEval(d, prepare, true, &stage); err != nil {
 		return fmt.Errorf("prepare Google Voice MMS: %w", err)
 	}
 	if stage != "ready" {
 		return fmt.Errorf("prepare Google Voice MMS: %s", stage)
 	}
 
-	objectID, err := c.evalObject(voiceImageInputObjectJS)
+	objectID, err := voiceEvalObject(d, voiceImageInputObjectJS)
 	if err != nil {
-		return err
+		return fmt.Errorf("Google Voice image picker did not expose a file input: %w", err)
 	}
-	if err := c.call("DOM.setFileInputFiles", map[string]any{
+	if err := d.Call("DOM.setFileInputFiles", map[string]any{
 		"files":    []string{imagePath},
 		"objectId": objectID,
 	}, nil); err != nil {
 		return fmt.Errorf("attach image in Google Voice: %w", err)
 	}
 
-	if err := c.eval(voiceAfterFileSelectJS, true, &stage); err != nil {
+	if err := voiceEval(d, voiceAfterFileSelectJS, true, &stage); err != nil {
 		return fmt.Errorf("send Google Voice MMS: %w", err)
 	}
 	if stage != "sent" {
 		return fmt.Errorf("send Google Voice MMS: %s", stage)
 	}
 	return nil
-}
-
-// voiceSnapshotInto is kept separate from voiceSnapshot so the image sender can
-// share the existing signed-in check without changing the call receiver code.
-func (c *voiceCDPClient) voiceSnapshotInto(out *voicePageSnapshot) error {
-	if out == nil {
-		return errors.New("nil Google Voice snapshot")
-	}
-	return c.eval(voicePageSnapshotJS, true, out)
 }
 
 const voicePrepareMMSJS = `(async () => {

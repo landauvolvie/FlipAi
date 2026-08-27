@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,10 +119,13 @@ type VoiceRuntimeState struct {
 	Controls   string    `json:"controls,omitempty"`
 	LastRingAt time.Time `json:"lastRingAt,omitempty"`
 
-	// ControlPort is the loopback DevTools port the Google Voice window opened
-	// for FlipAi. It is written down rather than discovered so the host process
-	// can reach the same window to send an MMS without guessing at listeners.
-	ControlPort int `json:"controlPort,omitempty"`
+	// ControlPort and ControlToken are the loopback endpoint the Google Voice
+	// process serves so the FlipAi host can ask it to send an image through the
+	// signed-in session it owns. They are written here rather than derived from
+	// the main configuration so the two processes cannot race over creating it,
+	// and the token is stripped before this state is ever served to a page.
+	ControlPort  int    `json:"controlPort,omitempty"`
+	ControlToken string `json:"controlToken,omitempty"`
 
 	LastOpen string `json:"lastOpen,omitempty"`
 	// LastOpenError is only ever set by a step that failed, so a progress note
@@ -157,6 +161,9 @@ func voiceSnapshot(dataDir string, mainConfig func() Config) voiceControlSnapsho
 	vc := loadVoiceCallConfig(dataDir)
 	rt := loadVoiceRuntime(dataDir)
 	plan := applyCableOverrides(planVoiceCables(rt.Devices), vc, rt.Devices)
+	// The desktop UI reads this. The token that lets a caller drive the
+	// signed-in Google Voice session is not part of what a page needs.
+	rt.ControlToken = ""
 	snap := voiceControlSnapshot{
 		Config:       vc,
 		Runtime:      rt,
@@ -594,11 +601,24 @@ func loadVoiceRuntimeUnlocked(dataDir string) VoiceRuntimeState {
 func mutateVoiceRuntime(dataDir string, fn func(*VoiceRuntimeState)) {
 	voiceRuntimeMu.Lock()
 	defer voiceRuntimeMu.Unlock()
-	s := loadVoiceRuntimeUnlocked(dataDir)
+	before := loadVoiceRuntimeUnlocked(dataDir)
+	s := before
 	fn(&s)
-	s.UpdatedAt = time.Now()
+	// Several things report what they see, several times a second, and almost
+	// all of those reports say exactly what the last one said. Rewriting the
+	// file for each of them is disk churn for as long as FlipAi runs, so a
+	// report that changes nothing changes nothing on disk either -- including
+	// the timestamp, which is what made every no-op look like a change.
+	s.UpdatedAt = before.UpdatedAt
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
+		return
+	}
+	if prev, err := json.MarshalIndent(before, "", "  "); err == nil && bytes.Equal(prev, b) {
+		return
+	}
+	s.UpdatedAt = time.Now()
+	if b, err = json.MarshalIndent(s, "", "  "); err != nil {
 		return
 	}
 	tmp := voiceRuntimePath(dataDir) + ".tmp"

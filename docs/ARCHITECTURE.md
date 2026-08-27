@@ -48,10 +48,10 @@ claims a taskbar button or an Alt-Tab entry.
 One call at a time is owned by the state machine in `voice_session.go`:
 
 1. Something sees a ring. Two things can: the script FlipAi injects into the
-   page, which reacts to the DOM change carrying the ring, and FlipAi's own
-   loopback DevTools channel, which reads the page several times a second and
-   keeps working when the page's script has been replaced by a navigation.
-   Neither decides anything; both report.
+   page, which reacts to the DOM change carrying the ring, and FlipAi reading
+   the page itself several times a second through WebView2's in-process
+   DevTools call, which keeps working when the page's own script has been
+   replaced by a navigation. Neither decides anything; both report.
 2. The machine authorizes the caller against the agents' own number lists
    (`decideVoiceCall`). An unauthorized caller is left completely alone, so
    Google Voice takes them to voicemail exactly as if FlipAi were not there.
@@ -66,6 +66,11 @@ One call at a time is owned by the state machine in `voice_session.go`:
    then is the call reported as a working conversation.
 6. On hang-up the session is ended and confirmed ended. The next call starts
    from nothing.
+
+No debugging port is opened for any of this: the DevTools call is in-process,
+against FlipAi's own view. The Google Voice process does serve one loopback
+endpoint, holding a token it generates itself, so the host can ask it to send an
+image through the signed-in session it owns.
 
 Audio never passes through FlipAi. Google Voice's speaker and microphone are
 pinned inside the page to two virtual cable ends; the desktop app's are written

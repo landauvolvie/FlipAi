@@ -3,10 +3,94 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	webview2 "github.com/jchv/go-webview2"
 	"github.com/jchv/go-webview2/pkg/edge"
 )
 
-// webViewVoicePermissions is the in-process half of the same grant: the
+// webViewDevTools is the DevTools protocol reached through WebView2 itself.
+//
+// Every WebView2 call has to be made on the thread that created it, and that
+// thread is inside the window's message loop, so each call is dispatched there
+// and its reply is waited for here. It must therefore never be called *from*
+// that thread -- from inside a page binding, for instance -- or it would wait
+// for a loop that is waiting for it.
+type webViewDevTools struct {
+	view     webview2.WebView
+	chromium *edge.Chromium
+}
+
+// voiceDevToolsTimeout bounds one DevTools call. The page can be mid-navigation
+// or busy, and a call that never returns would stall the observation loop for
+// as long as the window lived.
+const voiceDevToolsTimeout = 8 * time.Second
+
+func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
+	chromium := voiceChromium(view)
+	if view == nil || chromium == nil {
+		return nil
+	}
+	return &webViewDevTools{view: view, chromium: chromium}
+}
+
+func (d *webViewDevTools) Call(method string, params any, out any) error {
+	if d == nil || d.view == nil || d.chromium == nil {
+		return errNoVoiceControlChannel
+	}
+	body := "{}"
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		body = string(b)
+	}
+
+	type reply struct {
+		code   uintptr
+		result string
+		err    error
+	}
+	// Buffered so a reply arriving after the timeout below does not block the
+	// window's message loop forever.
+	answered := make(chan reply, 1)
+	d.view.Dispatch(func() {
+		err := d.chromium.CallDevToolsProtocolMethod(method, body, func(code uintptr, result string) {
+			select {
+			case answered <- reply{code: code, result: result}:
+			default:
+			}
+		})
+		if err != nil {
+			select {
+			case answered <- reply{err: err}:
+			default:
+			}
+		}
+	})
+
+	select {
+	case got := <-answered:
+		if got.err != nil {
+			return got.err
+		}
+		if got.code != 0 {
+			return fmt.Errorf("%s failed in the Google Voice page (0x%X)", method, got.code)
+		}
+		if out == nil || got.result == "" {
+			return nil
+		}
+		return json.Unmarshal([]byte(got.result), out)
+	case <-time.After(voiceDevToolsTimeout):
+		return errors.New("the Google Voice page did not answer " + method)
+	}
+}
+
+// webViewVoicePermissions is the in-process half of the permission grant: the
 // WebView2 host answers the page's permission prompts itself, so a call never
 // waits behind a dialog in a window nobody is looking at.
 func webViewVoicePermissions(chromium *edge.Chromium) {
