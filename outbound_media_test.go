@@ -7,6 +7,8 @@ import (
 	"image/color"
 	"image/png"
 	"net/mail"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -44,13 +46,13 @@ func TestFindImageGenerationResult(t *testing.T) {
 func TestNewestCodexGeneratedImageUsesGeneratedImages(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
-	dir := home + "/generated_images/thread"
-	if err := osMkdirAllForTest(dir); err != nil {
+	dir := filepath.Join(home, "generated_images", "thread")
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	data := testPNG(t)
-	path := dir + "/ig_test.png"
-	if err := osWriteFileForTest(path, data); err != nil {
+	path := filepath.Join(dir, "ig_test.png")
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	img, err := newestCodexGeneratedImageSince(time.Now().Add(-time.Minute))
