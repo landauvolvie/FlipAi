@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
@@ -97,7 +98,7 @@ func TestStartingNewCodexTurnClearsPreviousCapturedImage(t *testing.T) {
 	// stdin nil intentionally makes the request fail immediately after that
 	// invariant, without needing to launch a real Codex process in this unit test.
 	c := NewCodexClient("", "")
-	_, _ = c.Request(t.Context(), "turn/start", map[string]any{"threadId": "thread-1"})
+	_, _ = c.Request(context.Background(), "turn/start", map[string]any{"threadId": "thread-1"})
 	if img := takeCapturedCodexImage(); img != nil {
 		t.Fatal("a previous turn's image survived the next turn/start")
 	}
