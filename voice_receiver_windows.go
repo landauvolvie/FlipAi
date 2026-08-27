@@ -30,9 +30,10 @@ import (
 //
 //   - the script injected into the page (voice_page_script.go), which sees a
 //     ring the instant the DOM changes;
-//   - the control loop below, reading the page through FlipAi's loopback
-//     DevTools channel, which keeps working when the page's own script has been
-//     replaced by a navigation or has wedged.
+//   - the control loop below, reading the page through WebView2's own
+//     in-process DevTools call, which keeps working when the page's script has
+//     been replaced by a navigation or has wedged. No port is opened for it and
+//     nothing listens: this is the same process talking to its own view.
 //
 // Both report to the one call machine in voice_session.go. That is what makes
 // an allowed caller reliably answered instead of occasionally answered.
