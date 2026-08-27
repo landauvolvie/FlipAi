@@ -155,6 +155,7 @@ jobs:
             "- FlipAi reads Codex's generated image output directly and falls back to the session rollout image bytes when no saved image file is available.",
             "- Oversized still images are compressed in memory to stay within Google Voice's image size boundary.",
             "- Ack and progress texts stay plain SMS, and each generated image is attached at most once per inbound SMS.",
+            "- App, VERSION, and installer metadata are synchronized at v0.29.0.",
             "",
             "A real Google Voice MMS is still the final end-to-end validation because GitHub CI cannot send a carrier MMS."
           ) -join "`n"
