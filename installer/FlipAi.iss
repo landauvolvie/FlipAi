@@ -67,7 +67,7 @@ Filename: "{app}\FlipAi.exe"; WorkingDir: "{app}"; Flags: nowait; Check: Restart
 Filename: "{app}\FlipAi.exe"; Parameters: "--resume"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartBridgeOnly
 
 [UninstallRun]
-Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifsdoesntexist; RunOnceId: "StopFlipAi"
+Filename: "{app}\FlipAi.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopFlipAi"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\AISMSBridge"
