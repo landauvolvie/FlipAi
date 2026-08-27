@@ -148,15 +148,15 @@ jobs:
           $tag='v'+$version
           $setup=".\installer-output\FlipAi-Setup-v$version.exe"
           $notes=@(
-            "FlipAi $tag improves Google Voice phone calling:",
+            "FlipAi $tag adds outbound Google Voice image replies:",
             "",
-            "- Authorized incoming Google Voice calls now have a Windows accessibility fallback that invokes Answer when Google ignores a synthetic browser click.",
-            "- Google Voice stays alive in Microsoft Edge in the background; Connections no longer exposes the jumping pop-out workflow and hides the native panel while scrolling.",
-            "- A watchdog restarts/repaints the Google Voice receiver if it disappears or renders black.",
-            "- Desktop ChatGPT/Claude Voice gets a broader accessibility retry when the app opens but Voice does not start.",
-            "- Settings includes a free one-click virtual audio bridge installer. It verifies pinned downloads and the driver signature and never changes test-signing, Secure Boot, or certificate trust stores.",
+            "- Codex-generated images from SMS turns are automatically returned through Google Voice as an image reply.",
+            "- FlipAi reuses the image Codex already generated; it does not add a second model prompt or token round-trip just to save the file.",
+            "- FlipAi reads Codex's generated image output directly and falls back to the session rollout image bytes when no saved image file is available.",
+            "- Oversized still images are compressed in memory to stay within Google Voice's image size boundary.",
+            "- Ack and progress texts stay plain SMS, and each generated image is attached at most once per inbound SMS.",
             "",
-            "A real phone call is still the final end-to-end validation because GitHub CI cannot place or receive a Google Voice call."
+            "A real Google Voice MMS is still the final end-to-end validation because GitHub CI cannot send a carrier MMS."
           ) -join "`n"
           if(gh release view $tag *> $null){
             gh release upload $tag $setup .\installer-output\SHA256SUMS.txt --clobber

@@ -169,7 +169,8 @@ func (g *GmailClient) SendReply(ctx context.Context, original GmailMessage, body
 	if err != nil {
 		return err
 	}
-	rawMessage, err := buildThreadedReplyMessage("", target, meta, body)
+	image, imageKey := generatedImageForVoiceReply(original, body)
+	rawMessage, err := buildThreadedReplyMessageWithImage("", target, meta, body, image)
 	if err != nil {
 		return err
 	}
@@ -192,6 +193,9 @@ func (g *GmailClient) SendReply(ctx context.Context, original GmailMessage, body
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return fmt.Errorf("Gmail threaded reply HTTP %d: %s", resp.StatusCode, string(b))
+	}
+	if image != nil {
+		markGeneratedImageDelivered(imageKey)
 	}
 	return nil
 }
@@ -292,7 +296,8 @@ func (c *IMAPMailClient) SendReply(ctx context.Context, original GmailMessage, b
 	if err != nil {
 		return err
 	}
-	rawMessage, err := buildThreadedReplyMessage(c.email, target, meta, body)
+	image, imageKey := generatedImageForVoiceReply(original, body)
+	rawMessage, err := buildThreadedReplyMessageWithImage(c.email, target, meta, body, image)
 	if err != nil {
 		return err
 	}
@@ -309,6 +314,9 @@ func (c *IMAPMailClient) SendReply(ctx context.Context, original GmailMessage, b
 		}
 		if err := sc.Noop(); err == nil {
 			if err := c.sendThreadedOnce(sc, addr, rawMessage); err == nil {
+				if image != nil {
+					markGeneratedImageDelivered(imageKey)
+				}
 				return nil
 			}
 			_ = sc.Reset()
@@ -326,5 +334,8 @@ func (c *IMAPMailClient) SendReply(ctx context.Context, original GmailMessage, b
 		return err
 	}
 	c.sendCli, c.sendConn = sc, conn
+	if image != nil {
+		markGeneratedImageDelivered(imageKey)
+	}
 	return nil
 }
