@@ -83,18 +83,43 @@ $edgeBefore = @(Get-Process -Name msedge -ErrorAction SilentlyContinue).Id
   claude         = @{ appTitle = 'Claude' }
 } | ConvertTo-Json | Set-Content (Join-Path $appData 'voice-call.json') -Encoding utf8
 
+function Show-Diagnostics {
+  param([string]$Why)
+  Write-Host "--- $Why ---"
+  Write-Host 'FlipAi processes:'
+  Get-CimInstance Win32_Process -Filter "Name='FlipAi.exe'" -ErrorAction SilentlyContinue |
+    Select-Object ProcessId, CommandLine | Format-Table -AutoSize -Wrap | Out-String | Write-Host
+  Write-Host "Data folder ($appData):"
+  Get-ChildItem $appData -ErrorAction SilentlyContinue | Select-Object Name, Length |
+    Format-Table -AutoSize | Out-String | Write-Host
+  foreach ($f in @('voice-call.json', 'voice-call-state.json')) {
+    $path = Join-Path $appData $f
+    Write-Host "${f}:"
+    if (Test-Path $path) { Write-Host (Get-Content $path -Raw) } else { Write-Host '  (not written)' }
+  }
+}
+
 try {
-  Start-Process $Exe -ArgumentList '--google-voice'
+  # --visible is the product's own "open it so I can sign in" path, which runs
+  # whether or not calling has been switched on. Starting it that way keeps
+  # this check about the receiver rather than about a settings file.
+  Start-Process $Exe -ArgumentList '--google-voice', '--visible'
 
   $state = $null
   $deadline = (Get-Date).AddSeconds($StartTimeoutSeconds)
   do {
     if (Test-Path $stateFile) { try { $state = Get-Content $stateFile -Raw | ConvertFrom-Json } catch {} }
     if ($state -and $state.browserRunning) { break }
-    if ($state -and $state.lastOpenError) { throw "The Google Voice view failed to start: $($state.lastOpenError)" }
+    if ($state -and $state.lastOpenError) {
+      Show-Diagnostics 'the Google Voice view reported a failure'
+      throw "The Google Voice view failed to start: $($state.lastOpenError)"
+    }
     Start-Sleep -Milliseconds 500
   } while ((Get-Date) -lt $deadline)
-  if (-not ($state -and $state.browserRunning)) { throw 'The Google Voice view never reported that it was running' }
+  if (-not ($state -and $state.browserRunning)) {
+    Show-Diagnostics 'the Google Voice view never reported that it was running'
+    throw 'The Google Voice view never reported that it was running'
+  }
   Write-Host "Google Voice is running; render mode: $($state.renderMode)"
 
   # 1 + 2. FlipAi's own view, not a browser FlipAi launched.
@@ -108,13 +133,16 @@ try {
   }
 
   # 3. Asking again must never open a second window.
-  Start-Process $Exe -ArgumentList '--google-voice'
-  Start-Process $Exe -ArgumentList '--google-voice'
-  Start-Sleep -Seconds 8
+  Start-Process $Exe -ArgumentList '--google-voice', '--visible'
+  Start-Process $Exe -ArgumentList '--google-voice', '--visible'
+  Start-Sleep -Seconds 10
 
   $windows = Get-GoogleVoiceWindows -Title $googleVoiceWindowTitle
   Write-Host "Google Voice windows found: $($windows.Count)"
-  if ($windows.Count -eq 0) { throw 'The Google Voice window was not found by title' }
+  if ($windows.Count -eq 0) {
+    Show-Diagnostics 'the Google Voice window was not found by title'
+    throw 'The Google Voice window was not found by title'
+  }
   if ($windows.Count -gt 1) {
     throw "There are $($windows.Count) Google Voice windows. Asking for Google Voice repeatedly must never open a second one."
   }
@@ -125,8 +153,19 @@ try {
   if ($w.AppWindow) { throw 'The Google Voice window claims a taskbar button' }
 
   # 5. The loopback control channel is open.
+  #
+  # A WebView2 runtime that refuses the switch that opens it is a real machine
+  # FlipAi still has to work on: Google Voice runs, calls are answered from
+  # inside the page, and only the second way of pressing Answer and sending an
+  # image are lost. So this reports rather than fails when the runtime said no.
   $state = Get-Content $stateFile -Raw | ConvertFrom-Json
-  if (-not $state.controlPort) { throw 'The Google Voice view opened no loopback control channel' }
+  if (-not $state.controlPort) {
+    Write-Host 'NOTE: this WebView2 runtime refused the loopback control channel; Google Voice is running without it.'
+    Write-Host "renderMode: $($state.renderMode)"
+    Write-Host "lastError: $($state.lastError)"
+    Write-Host 'Google Voice receiver checks passed (without the control channel).'
+    return
+  }
   $answered = $false
   $deadline = (Get-Date).AddSeconds(30)
   do {

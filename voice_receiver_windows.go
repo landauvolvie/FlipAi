@@ -67,7 +67,7 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 		port = 0
 	}
 
-	w, err := createGoogleVoiceWebView(dataDir, port)
+	w, port, err := createGoogleVoiceWebView(dataDir, port)
 	if err != nil {
 		recordVoiceOpen(dataDir, "WebView2 could not create the Google Voice view", err)
 		return err
