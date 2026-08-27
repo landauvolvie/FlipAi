@@ -34,7 +34,6 @@ const voiceDesktopInitScript = `
   const checked = (id) => !!q('#'+id)?.checked;
   const value = (id) => q('#'+id)?.value || '';
   let snapshot = null;
-  let poppedOut = false;
 
   function E(tag, cls, text) {
     const e=document.createElement(tag);
@@ -71,8 +70,6 @@ const voiceDesktopInitScript = `
     q('#voice-call-toast')?.remove();
     const b=E('div','banner '+(bad?'bad':'ok')); b.id='voice-call-toast'; b.append(E('span','',message));
     q('.content')?.prepend(b);
-    // A failure explains what to do next and can be several lines long, so it
-    // stays until it is dismissed. Only the success note times itself out.
     if(bad){ const x=btn('Dismiss'); x.addEventListener('click',()=>b.remove()); b.append(x); }
     else setTimeout(()=>b.remove(),4000);
     b.scrollIntoView({block:'nearest'});
@@ -94,50 +91,60 @@ const voiceDesktopInitScript = `
   }
 
   /* ---------- the embedded Google Voice panel (Connections) ----------
-     Google Voice runs in its own window so it can stay signed in and listening
-     with FlipAi closed. That window is placed over the empty panel below and
-     stripped of its frame, so what the user sees is Google Voice inside the
-     app rather than a second window that appeared on its own. The rectangle is
-     reported continuously; the moment this page stops reporting it, the window
-     goes back to running quietly in the background -- still answering calls. */
+     Google Voice stays alive in its own Edge process so Web Push can wake an
+     incoming call. While Connections is open, that window is visually docked
+     into the panel below. While the page is moving/scrolling, FlipAi briefly
+     hides the native window instead of making it chase the page around. */
   let dockTimer=0;
+  let lastDockJSON='';
+  let desiredDockJSON='';
+  let dockStableSince=0;
+  const hiddenDock={visible:false,x:0,y:0,width:0,height:0};
+
   function panelRect(){
     const el=q('#gv-embed-slot');
     if(!el) return null;
     const r=el.getBoundingClientRect();
-    // Only the part of the panel that is really on screen is reported. The
-    // card is taller than the window, so a panel scrolled half out of view
-    // would otherwise hang the Google Voice window over the page above it.
-    const left=Math.max(r.left,0), top=Math.max(r.top,0);
-    const right=Math.min(r.right,innerWidth), bottom=Math.min(r.bottom,innerHeight);
-    if(right-left<160||bottom-top<160) return null;
+    // A native Edge window cannot be clipped by HTML. Only show it when the
+    // whole reserved panel is actually visible; otherwise it would float over
+    // unrelated FlipAi content as the user scrolls.
+    if(r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight) return null;
+    if(r.width<160||r.height<160) return null;
     const dpr=devicePixelRatio||1;
-    // Reported against the page's own viewport, in physical pixels. FlipAi
-    // turns that into a screen position from its own window, so nothing here
-    // has to guess where a title bar or a display scale put the page.
     return {
       visible:true,
-      x:Math.round(left*dpr),
-      y:Math.round(top*dpr),
-      width:Math.round((right-left)*dpr),
-      height:Math.round((bottom-top)*dpr)
+      x:Math.round(r.left*dpr),
+      y:Math.round(r.top*dpr),
+      width:Math.round(r.width*dpr),
+      height:Math.round(r.height*dpr)
     };
   }
-  let lastDockJSON='';
+
   async function reportDock(force){
     if(!snapshot) return;
-    let want=null;
-    if(!poppedOut && !document.hidden) want=panelRect();
-    const body=want||{visible:false,x:0,y:0,width:0,height:0};
+    const want=!document.hidden?panelRect():null;
+    const body=want||hiddenDock;
     const raw=JSON.stringify(body);
-    // The window has to be told repeatedly that the panel is still wanted, or
-    // the dock expires; a hidden panel only needs saying once.
-    if(!force && !body.visible && raw===lastDockJSON) return;
+    if(raw!==desiredDockJSON){
+      desiredDockJSON=raw;
+      dockStableSince=Date.now();
+    }
+    // Scrolling/resizing used to make the separate Edge window jump after the
+    // page every 250 ms. Withdraw it while the rectangle is moving, then dock
+    // once after the panel has been still for a moment.
+    if(body.visible&&Date.now()-dockStableSince<220){
+      const hiddenRaw=JSON.stringify(hiddenDock);
+      if(lastDockJSON!==hiddenRaw){
+        lastDockJSON=hiddenRaw;
+        try{ await post('/dock',hiddenDock); }catch(_){}
+      }
+      return;
+    }
+    if(!force&&raw===lastDockJSON) return;
     lastDockJSON=raw;
     try{ await post('/dock',body); }catch(_){}
   }
-  // Leaving the page is not popping the window out: the panel is withdrawn,
-  // but nothing about this page's next visit is decided here.
+
   function leavingPage(){ flushSave(); withdrawPanel(); }
   function startDockReporting(){
     if(dockTimer) return;
@@ -146,24 +153,14 @@ const voiceDesktopInitScript = `
     addEventListener('beforeunload',leavingPage);
     document.addEventListener('visibilitychange',()=>{ if(document.hidden){ flushSave(); reportDock(true); } });
   }
-  // withdrawPanel takes the Google Voice window off this page. Leaving the page
-  // is the one moment a plain fetch cannot be relied on -- the navigation
-  // cancels it -- and the panel would then stand over the app until its own
-  // timeout expired, which is a visible second of Google Voice sitting on top
-  // of whatever the user opened next. A beacon is handed to the browser to
-  // deliver instead, exactly as a pending save is.
   function withdrawPanel(){
     if(dockTimer){clearInterval(dockTimer);dockTimer=0;}
-    lastDockJSON='';
-    const body=JSON.stringify({visible:false,x:0,y:0,width:0,height:0});
+    lastDockJSON=''; desiredDockJSON=''; dockStableSince=0;
+    const body=JSON.stringify(hiddenDock);
     try{
-      if(navigator.sendBeacon && navigator.sendBeacon(VOICE+'/dock',new Blob([body],{type:'text/plain'}))) return;
+      if(navigator.sendBeacon&&navigator.sendBeacon(VOICE+'/dock',new Blob([body],{type:'text/plain'}))) return;
     }catch(_){}
-    post('/dock',{visible:false,x:0,y:0,width:0,height:0}).catch(()=>{});
-  }
-  function stopDockReporting(){
-    poppedOut=true;
-    withdrawPanel();
+    post('/dock',hiddenDock).catch(()=>{});
   }
 
   function embedStyle(){
@@ -189,68 +186,32 @@ const voiceDesktopInitScript = `
   }
 
   /* ---------- saving (Settings) ---------- */
-
   let saveTimer=0;
   let savePending=false;
   function collectConfig(){
-    // Start from what the server has, and only overwrite what this card
-    // actually edits. Fields the card does not carry -- the hand-edit-only
-    // audio overrides among them -- must survive a save untouched.
     const next=JSON.parse(JSON.stringify(snapshot.config));
     next.defaultAgent=value('vc-default');
-    next.codex=Object.assign({},next.codex,{
-      appTitle:value('vcc-title'),
-      voiceShortcut:value('vcc-shortcut'),
-      appCommand:value('vcc-command')
-    });
-    next.claude=Object.assign({},next.claude,{
-      appTitle:value('vca-title'),
-      voiceShortcut:value('vca-shortcut'),
-      appCommand:value('vca-command')
-    });
+    next.codex=Object.assign({},next.codex,{appTitle:value('vcc-title'),voiceShortcut:value('vcc-shortcut'),appCommand:value('vcc-command')});
+    next.claude=Object.assign({},next.claude,{appTitle:value('vca-title'),voiceShortcut:value('vca-shortcut'),appCommand:value('vca-command')});
     return next;
   }
   function markSaving(text){ const s=q('#vc-saved'); if(s){ s.textContent=text; } }
   async function saveNow(){
     clearTimeout(saveTimer); saveTimer=0; savePending=false;
-    try{
-      snapshot=await post('/config',collectConfig());
-      markSaving('Saved');
-      updateStatusRows();
-    }catch(e){ markSaving('Not saved'); toast(e.message,true); }
+    try{ snapshot=await post('/config',collectConfig()); markSaving('Saved'); updateStatusRows(); }
+    catch(e){ markSaving('Not saved'); toast(e.message,true); }
   }
-  function scheduleSave(){
-    markSaving('Saving...');
-    savePending=true;
-    clearTimeout(saveTimer);
-    saveTimer=setTimeout(saveNow,500);
-  }
-  // A change made and then navigated away from within the debounce would be
-  // lost, silently, while the card promises that changes save as they are made.
-  // The page is going away here, so fetch cannot be relied on to finish: a
-  // beacon is handed to the browser to deliver instead. It is sent as plain
-  // text on purpose, which keeps it a request the browser sends immediately
-  // rather than one it must ask permission for first; the endpoint reads the
-  // body as JSON either way.
+  function scheduleSave(){ markSaving('Saving...'); savePending=true; clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,500); }
   function flushSave(){
     if(!savePending) return;
-    savePending=false;
-    clearTimeout(saveTimer); saveTimer=0;
-    let body;
-    try{ body=JSON.stringify(collectConfig()); }catch(_){ return; }
-    try{
-      if(navigator.sendBeacon && navigator.sendBeacon(VOICE+'/config',new Blob([body],{type:'text/plain'}))) return;
-    }catch(_){}
+    savePending=false; clearTimeout(saveTimer); saveTimer=0;
+    let body; try{ body=JSON.stringify(collectConfig()); }catch(_){ return; }
+    try{ if(navigator.sendBeacon&&navigator.sendBeacon(VOICE+'/config',new Blob([body],{type:'text/plain'}))) return; }catch(_){}
     try{ fetch(VOICE+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:body,keepalive:true}); }catch(_){}
   }
-  function autosave(node){
-    node.addEventListener('change',scheduleSave);
-    if(node.tagName==='INPUT'&&node.type!=='checkbox') node.addEventListener('input',scheduleSave);
-    return node;
-  }
+  function autosave(node){ node.addEventListener('change',scheduleSave); if(node.tagName==='INPUT'&&node.type!=='checkbox') node.addEventListener('input',scheduleSave); return node; }
 
   /* ---------- shared status ---------- */
-
   function runtimePill(rt){
     if(rt?.inCall) return pill('On a call','ok');
     if(!rt?.browserRunning) return pill('Not running','warn');
@@ -266,89 +227,39 @@ const voiceDesktopInitScript = `
     const body=E('div','card-body');
     const c=E('p','callout'); c.append(E('b','','Voice service error: '),document.createTextNode(err?.message||String(err||'unknown error'))); body.append(c);
     body.append(E('p','hint','Restart FlipAi first. The calling controls will reappear automatically when the local voice component is available. SMS is unaffected.'));
-    card.append(body);
-    q('.content')?.append(card);
-    retry.addEventListener('click',()=>location.reload());
+    card.append(body); q('.content')?.append(card); retry.addEventListener('click',()=>location.reload());
   }
 
   /* ---------- the Connections preview panel ---------- */
-
-  // panelState answers the only question the dark panel has ever been asked:
-  // why is Google Voice not in it? Everything below is a state FlipAi actually
-  // knows it is in, and each one that a person can do something about says
-  // what.
   function panelState(){
     const rt=snapshot.runtime||{},cfg=snapshot.config||{};
     if(rt.docked&&rt.browserRunning) return null;
-    // The user's own switch comes first: with calling off, nothing is being
-    // attempted, so nothing else is the reason yet.
-    if(!cfg.enabled){
-      return {title:'Calling is off',
-        detail:'Turn on Google Voice calling under Settings and the live Google Voice browser appears here.'};
-    }
-    if(!snapshot.webView2){
-      return {title:'Windows is missing the component that shows Google Voice',
-        detail:'FlipAi draws Google Voice with the Microsoft Edge WebView2 Runtime, which is not installed on this PC. Microsoft distributes it free as the Evergreen Standalone Installer. Install it, then press Retry.',
-        retry:true};
-    }
-    if(rt.lastOpenError){
-      return {title:'Google Voice could not start', why:rt.lastOpenError, retry:true, popOut:true,
-        detail:'Nothing else in FlipAi is affected — texts and Gmail routing carry on.'};
-    }
-    if(!rt.browserRunning){
-      return {title:'Starting Google Voice...', why:rt.lastOpen||'',
-        detail:'The first run has to unpack Microsoft WebView2, which can take a minute. If it stays like this, press Retry.',
-        retry:true};
-    }
-    if(!rt.docked){
-      return {title:'Google Voice is running, but not in this panel',
-        why:rt.dockBlocked||rt.lastOpen||'',
-        detail:'It is signed in and it will still answer calls. Reload this page to try placing it here again, or open it in its own window.',
-        reload:true, popOut:true, retry:true};
-    }
-    return {title:'Google Voice is loading...', detail:'The window is running; waiting for it to appear in this panel.'};
+    if(!cfg.enabled) return {title:'Calling is off',detail:'Turn on Google Voice calling under Settings and the live Google Voice browser appears here.'};
+    if(!snapshot.webView2) return {title:'Windows is missing the component that shows Google Voice',detail:'FlipAi draws Google Voice with Microsoft Edge. Install or repair Microsoft Edge/WebView2, then press Retry.',retry:true};
+    if(rt.lastOpenError) return {title:'Google Voice could not start',why:rt.lastOpenError,retry:true,detail:'Nothing else in FlipAi is affected — texts and Gmail routing carry on.'};
+    if(!rt.browserRunning) return {title:'Starting Google Voice...',why:rt.lastOpen||'',detail:'FlipAi is starting the persistent Google Voice receiver. If it stays here, press Retry.',retry:true};
+    if(!rt.docked) return {title:'Google Voice is listening in the background',why:rt.dockBlocked||'',detail:'Scroll until this whole panel is visible and Google Voice will appear here. It stays signed in and keeps taking calls while hidden.',retry:true};
+    return {title:'Google Voice is loading...',detail:'The receiver is running; waiting for it to paint in this panel.'};
   }
 
   function renderPanel(){
-    const empty=q('#gv-embed-empty');
-    if(!empty) return;
-    const state=panelState();
-    if(!state){ empty.style.display='none'; return; }
-    empty.style.display='flex';
-    empty.textContent='';
-    empty.append(E('b','',state.title));
+    const empty=q('#gv-embed-empty'); if(!empty) return;
+    const state=panelState(); if(!state){ empty.style.display='none'; return; }
+    empty.style.display='flex'; empty.textContent=''; empty.append(E('b','',state.title));
     if(state.detail) empty.append(E('span','',state.detail));
     if(state.why) empty.append(E('p','gv-why',state.why));
-    if(state.retry||state.popOut){
+    if(state.retry){
       const acts=E('div','gv-acts');
-      if(state.retry){
-        const r=E('button','','Retry, drawing it another way'); r.type='button';
-        r.addEventListener('click',async()=>{
-          const label=r.textContent;
-          r.disabled=true; r.textContent='Restarting...';
-          try{ snapshot=await post('/restart'); updateStatusRows(); }
-          catch(e){ toast(e.message,true); }
-          finally{ r.disabled=false; r.textContent=label; }
-        });
-        acts.append(r);
-      }
-      if(state.reload){
-        const rl=E('button','','Put it back in this panel'); rl.type='button';
-        rl.addEventListener('click',()=>location.reload());
-        acts.append(rl);
-      }
-      if(state.popOut){
-        const o=E('button','','Open in its own window'); o.type='button';
-        o.addEventListener('click',()=>q('#vc-pop-out')?.click());
-        acts.append(o);
-      }
-      empty.append(acts);
+      const r=E('button','','Retry Google Voice'); r.type='button';
+      r.addEventListener('click',async()=>{
+        const label=r.textContent; r.disabled=true; r.textContent='Restarting...';
+        try{ snapshot=await post('/restart'); updateStatusRows(); } catch(e){ toast(e.message,true); }
+        finally{ r.disabled=false; r.textContent=label; }
+      });
+      acts.append(r); empty.append(acts);
     }
   }
 
-  // updateStatusRows redraws only the parts that change on their own, so a
-  // control the user is in the middle of using is never rebuilt underneath
-  // them. It tolerates either card: rows that are not on this page are skipped.
   function updateStatusRows(){
     const rt=snapshot.runtime||{},cfg=snapshot.config||{};
     const set=(id,node)=>{ const el=q('#'+id); if(!el)return; el.textContent=''; el.append(node); };
@@ -365,33 +276,25 @@ const voiceDesktopInitScript = `
     set('vcs-permissions',pill('Mic + notifications allowed','ok'));
     const sw=q('#vc-enabled'); if(sw) sw.checked=!!cfg.enabled;
     renderPanel();
-    const problems=q('#vc-problems');
-    if(problems){ problems.textContent=''; for(const node of problemNodes()) problems.append(node); }
+    const problems=q('#vc-problems'); if(problems){ problems.textContent=''; for(const node of problemNodes()) problems.append(node); }
   }
 
   function problemNodes(){
     const out=[],rt=snapshot.runtime||{},cfg=snapshot.config||{};
-    if(!(snapshot.callAgents||[]).length){
-      out.push(callout('No agent can take a call yet. ','Open the Agents page, add your phone number under the agent you want to talk to, and set that number to "Texts and calls" or "Calls only". A number allowed under one agent can never reach the other one.'));
-    }
+    if(!(snapshot.callAgents||[]).length) out.push(callout('No agent can take a call yet. ','Open the Agents page, add your phone number under the agent you want to talk to, and set that number to "Texts and calls" or "Calls only".'));
     if(snapshot.audioWarning) out.push(callout('Audio path: ',snapshot.audioWarning));
     if(rt.routingNote&&!/Applied automatically|is wired to the cables/.test(rt.routingNote)) out.push(callout('Desktop app audio: ',rt.routingNote));
-    if(cfg.enabled&&rt.browserRunning&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))){
-      out.push(callout('No call has ever rung here. ','Google Voice only rings in a browser when you have switched that on in Google Voice itself: open the live view on Connections, then in Google Voice open Settings, then Calls, and turn on receiving calls on this device. Until then an incoming call goes to your forwarding phones and never reaches FlipAi.'));
-    }
+    if(cfg.enabled&&rt.browserRunning&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))) out.push(callout('No call has ever rung here. ','In Google Voice itself, open Settings → Calls and make sure receiving calls on this device is on.'));
     if(rt.blocked) out.push(callout('Last call was not connected: ',rt.blocked));
     if(rt.lastError&&!rt.lastOpenError) out.push(callout('Google Voice window: ',rt.lastError));
     return out;
   }
 
   /* ---------- the Settings card ---------- */
-
   function actionButton(b, doIt, busyLabel){
     b.addEventListener('click',async()=>{
-      const label=b.textContent;
-      b.disabled=true; b.textContent=busyLabel||'Working...';
-      try{ await doIt(); }
-      catch(e){ toast(e.message,true); }
+      const label=b.textContent; b.disabled=true; b.textContent=busyLabel||'Working...';
+      try{ await doIt(); } catch(e){ toast(e.message,true); }
       finally{ b.disabled=false; b.textContent=label; try{ await refresh(); updateStatusRows(); }catch(_){} }
     });
     return b;
@@ -399,143 +302,103 @@ const voiceDesktopInitScript = `
 
   function settingsCard(){
     const cfg=snapshot.config,card=E('section','card'); card.id='voice-call-card';
-    const [head,actions]=sectionHead('Google Voice calling','FlipAi answers calls to your Google Voice number and puts the caller through to the ChatGPT/Codex desktop app\u2019s voice mode \u2014 the same agent that can work on this PC. All setup lives here; the live Google Voice view is on Connections.');
+    const [head,actions]=sectionHead('Google Voice calling','FlipAi answers calls to your Google Voice number and puts the caller through to the ChatGPT/Codex desktop app’s voice mode — the same agent that can work on this PC.');
     head.querySelector('h2').append(document.createTextNode(' '),pill('Experimental','brand'));
-    const saved=E('span','hint','Changes save as you make them'); saved.id='vc-saved';
-    actions.append(saved); card.append(head);
-
+    const saved=E('span','hint','Changes save as you make them'); saved.id='vc-saved'; actions.append(saved); card.append(head);
     const body=E('div','card-body');
 
-    // 1. The one switch that matters. There is deliberately no separate
-    //    auto-answer option: enabled means an authorized caller is answered,
-    //    and an unauthorized one never is.
-    const sw=toggle('vc-enabled','Answer phone calls with an agent',
-      'FlipAi opens Google Voice at Windows sign-in, keeps it running while the PC is locked, and reopens it if it is ever closed. When an allowed number calls, FlipAi clicks Answer itself and starts the desktop app\u2019s voice mode; anyone else keeps ringing. Texts and Gmail routing are unchanged.',cfg.enabled);
+    const sw=toggle('vc-enabled','Answer phone calls with an agent','When an allowed number calls, FlipAi automatically picks up Google Voice and starts the selected desktop app’s voice mode. There is no separate auto-answer setting.',cfg.enabled);
     body.append(sw);
     q('input',sw).addEventListener('change',async(e)=>{
-      const want=e.target.checked;
-      e.target.disabled=true; markSaving('Saving...');
+      const want=e.target.checked; e.target.disabled=true; markSaving('Saving...');
       try{ snapshot=await post('/enable',{enabled:want}); markSaving('Saved'); updateStatusRows(); }
       catch(err){ e.target.checked=!want; markSaving('Not saved'); toast(err.message,true); }
       finally{ e.target.disabled=false; }
     });
 
-    // 2. Set up: one sign-in, one Google Voice setting, one driver install.
     body.append(E('div','section-label','Set up'));
-    body.append(E('p','hint','Sign in to Google once, turn on receiving calls in Google Voice itself once, and have two virtual audio cables installed once (VB-CABLE A+B, or VoiceMeeter which includes two). FlipAi wires everything from there: Google Voice\u2019s microphone and speaker, and the desktop app\u2019s own audio, are all pointed at the cables automatically \u2014 nothing to select anywhere, nothing audible on your speakers, no real microphone in the path.'));
-    const signin=btn('Sign in to Google Voice','btn'); signin.id='vc-signin';
-    actionButton(signin,async()=>{ stopDockReporting(); await post('/open'); toast('The Google Voice window is open. Sign in to the Google account that owns your Voice number, then in Google Voice open Settings \u2192 Calls and turn on receiving calls on this device.'); },'Opening...');
+    body.append(E('p','hint','Google Voice stays signed in and listening in the background. Open Connections to see and use the same persistent Google Voice session.'));
+    const signin=btn('Open Google Voice','btn'); signin.id='vc-signin';
+    signin.addEventListener('click',()=>{ location.href='/connections'; });
     const signout=btn('Sign out','btn'); signout.id='vc-signout';
     actionButton(signout,async()=>{
-      if(!confirm('Sign out of Google Voice? FlipAi forgets the saved browser session; calls stop being answered until you sign in again.')) return;
-      snapshot=await post('/signout'); updateStatusRows();
-      toast('Signed out. The Google Voice window restarts signed out; use Sign in when you are ready.');
+      if(!confirm('Sign out of Google Voice? Calls stop being answered until you sign in again.')) return;
+      snapshot=await post('/signout'); updateStatusRows(); toast('Signed out. Open Connections when you are ready to sign in again.');
     },'Signing out...');
-    body.append(row('Google Voice account','The Google account whose Voice number FlipAi answers.',(()=>{const w=E('div');w.append(signin,document.createTextNode(' '),signout);return w;})()));
+    body.append(row('Google Voice account','The persistent Google Voice session FlipAi uses for incoming and outgoing calls.',(()=>{const w=E('div');w.append(signin,document.createTextNode(' '),signout);return w;})()));
 
-    // 3. Status and permission checks, live.
     body.append(E('div','section-label','Status'));
-    const rows=E('div','rows');
-    const cell=(id)=>{ const v=E('span'); v.id=id; return v; };
+    const rows=E('div','rows'); const cell=(id)=>{ const v=E('span'); v.id=id; return v; };
     rows.append(row('Calling','Whether FlipAi answers the phone at all.',cell('vcs-state')));
     rows.append(row('Google Voice window','Kept running in the background by FlipAi.',cell('vcs-window')));
-    rows.append(row('Google account','Signed-in state of the Google Voice window.',cell('vcs-google')));
-    rows.append(row('Virtual audio cables','Found automatically; each direction of the call uses its own cable.',cell('vcs-cables')));
-    rows.append(row('Audio path','Silent on this PC\u2019s speakers; no real microphone involved.',cell('vcs-audio')));
-    rows.append(row('Desktop app audio','The app\u2019s own microphone and speaker, pointed at the cables per-app by FlipAi.',cell('vcs-routing')));
+    rows.append(row('Google account','Signed-in state of the Google Voice receiver.',cell('vcs-google')));
+    rows.append(row('Virtual audio cables','The internal two-way audio path used between Google Voice and the desktop agent.',cell('vcs-cables')));
+    rows.append(row('Audio path','Silent on this PC’s speakers; no real microphone involved.',cell('vcs-audio')));
+    rows.append(row('Desktop app audio','The desktop app’s microphone and speaker route.',cell('vcs-routing')));
     rows.append(row('Agents on calls','Set by giving an agent a number that may call, on the Agents page.',cell('vcs-agents')));
     rows.append(row('Current call','',cell('vcs-call')));
-    rows.append(row('Ring seen','Whether a call has ever reached the Google Voice window.',cell('vcs-ring')));
-    rows.append(row('Edge WebView2 runtime','Windows component FlipAi needs to show Google Voice.',cell('vcs-webview2')));
-    rows.append(row('Browser permissions','Microphone, notifications, autoplay and pop-ups inside FlipAi\u2019s Google Voice window are granted by FlipAi itself; no Windows prompt ever needs answering.',cell('vcs-permissions')));
+    rows.append(row('Ring seen','Whether a call has reached Google Voice.',cell('vcs-ring')));
+    rows.append(row('Edge WebView2 runtime','Windows component FlipAi uses for its desktop UI.',cell('vcs-webview2')));
+    rows.append(row('Browser permissions','Microphone and notifications for Google Voice are granted by FlipAi.',cell('vcs-permissions')));
     body.append(rows);
 
-    // 4. Everything that is currently wrong, in one place, kept live.
     const problems=E('div'); problems.id='vc-problems'; body.append(problems);
 
-    // 5. The desktop apps a call is put through to.
     body.append(E('div','section-label','Desktop apps'));
-    body.append(field('Default voice agent',autosave(select('vc-default',[['C','ChatGPT / Codex desktop app'],['A','Claude Desktop']],cfg.defaultAgent)),
-      'Only used if a caller is somehow allowed under both agents. A phone number belongs to exactly one agent, so normally the number itself decides.'));
+    body.append(field('Default voice agent',autosave(select('vc-default',[['C','ChatGPT / Codex desktop app'],['A','Claude Desktop']],cfg.defaultAgent)),'Normally the caller’s agent allowlist decides.'));
     for(const agent of ['C','A']){
       const isClaude=agent==='A', own=(isClaude?cfg.claude:cfg.codex)||{}, p=isClaude?'vca':'vcc';
-      body.append(E('p','hint',(isClaude?'Claude Desktop':'ChatGPT / Codex desktop app')+' \u2014 the caller talks to this app\u2019s voice mode.'));
+      body.append(E('p','hint',(isClaude?'Claude Desktop':'ChatGPT / Codex desktop app')+' — the caller talks to this app’s voice mode.'));
       const g=E('div','grid-2');
       g.append(field('Desktop window title contains',autosave(input(p+'-title',own.appTitle,isClaude?'Claude':'ChatGPT')),'FlipAi uses it to find the app when a call connects.'));
-      g.append(field('Voice shortcut (optional)',autosave(input(p+'-shortcut',own.voiceShortcut,'Ctrl+Shift+V')),'The Voice shortcut set inside that app. If blank, FlipAi clicks its accessible Voice button instead.'));
+      g.append(field('Voice shortcut (optional)',autosave(input(p+'-shortcut',own.voiceShortcut,'Ctrl+Shift+V')),'If blank, FlipAi uses the app’s accessible Voice control.'));
       body.append(g);
       body.append(field('Launch command (optional)',autosave(input(p+'-command',own.appCommand,'Path or app command')),'Used only if the desktop window is not already open.'));
       const test=btn('Start '+(isClaude?'Claude':'ChatGPT')+' voice test');
-      actionButton(test,async()=>{ await post('/test-agent?agent='+agent); toast((isClaude?'Claude':'ChatGPT')+' voice start requested \u2014 the app\u2019s voice mode should be listening now.'); },'Testing...');
+      actionButton(test,async()=>{ await post('/test-agent?agent='+agent); toast((isClaude?'Claude':'ChatGPT')+' voice start requested.'); },'Testing...');
       body.append(test);
     }
 
-    body.append(E('p','hint','Who may call, and whether a number may call at all, is set with the agent it reaches on the Agents page. Each agent has its own list; a number allowed under one agent cannot reach the other.'));
-    card.append(body);
-    q('.content')?.append(card);
-
-    // A change made and immediately navigated away from still has to land;
-    // these are the moments the debounce cannot be trusted to finish.
-    addEventListener('pagehide',flushSave);
-    addEventListener('beforeunload',flushSave);
+    body.append(E('p','hint','Who may call is set on the Agents page. A number allowed under one agent cannot reach the other.'));
+    card.append(body); q('.content')?.append(card);
+    addEventListener('pagehide',flushSave); addEventListener('beforeunload',flushSave);
     document.addEventListener('visibilitychange',()=>{ if(document.hidden) flushSave(); });
-
     updateStatusRows();
     setInterval(async()=>{ try{ await refresh(); updateStatusRows(); }catch(_){} },4000);
   }
 
   /* ---------- the Connections card ---------- */
-
   function connectionsCard(){
     embedStyle();
     const card=E('section','card'); card.id='voice-preview-card';
-    const [head,actions]=sectionHead('Google Voice','The real Google Voice, live, running in a window FlipAi owns and keeps alive. It stays signed in and keeps answering calls after you close this page or the whole app.');
+    const [head,actions]=sectionHead('Google Voice','Your persistent Google Voice session. It stays signed in and listening even when you leave Connections; this page only shows or hides the live view.');
     head.querySelector('h2').append(document.createTextNode(' '),cellSpan('vcs-window'));
-    const popOut=btn('Open in its own window'); popOut.id='vc-pop-out';
-    const setup=btn('Set up in Settings'); setup.id='vc-open-settings';
-    setup.addEventListener('click',()=>{ location.href='/settings'; });
-    actions.append(setup,popOut); card.append(head);
+    const setup=btn('Set up in Settings'); setup.id='vc-open-settings'; setup.addEventListener('click',()=>{ location.href='/settings'; });
+    actions.append(setup); card.append(head);
 
     const body=E('div','card-body');
     const wrap=E('div','gv-embed-wrap');
     const slot=E('div'); slot.id='gv-embed-slot';
-    const empty=E('div','gv-empty'); empty.id='gv-embed-empty';
-    slot.append(empty); wrap.append(slot);
+    const empty=E('div','gv-empty'); empty.id='gv-embed-empty'; slot.append(empty); wrap.append(slot);
     const note=E('div','gv-embed-note');
-    note.append(E('p','hint','Closing or leaving this preview never stops Google Voice: the window only leaves the panel and keeps running in the background, detecting and answering incoming calls. Turning calling on and off, sign-in and sign-out, and all status checks live under Settings.'));
-    wrap.append(note);
-    body.append(wrap);
-    card.append(body);
-    q('.content')?.append(card);
+    note.append(E('p','hint','Google Voice remains alive in the background on every FlipAi tab. When this full panel is visible it is shown here; while you scroll or leave Connections, the native window is hidden instead of floating over the app.'));
+    wrap.append(note); body.append(wrap); card.append(body); q('.content')?.append(card);
 
-    popOut.addEventListener('click',async()=>{
-      const label=popOut.textContent;
-      popOut.disabled=true; popOut.textContent='Opening...';
-      stopDockReporting();
-      try{ await post('/open'); toast('Google Voice is now a window of its own. Reload this page to put it back inside FlipAi.'); }
-      catch(e){ toast(e.message,true); poppedOut=false; startDockReporting(); }
-      finally{ popOut.disabled=false; popOut.textContent=label; }
-    });
-
-    updateStatusRows();
-    startDockReporting();
-    reportDock(true);
+    updateStatusRows(); startDockReporting(); reportDock(true);
     setInterval(async()=>{ try{ await refresh(); updateStatusRows(); }catch(_){} },4000);
   }
   function cellSpan(id){ const v=E('span'); v.id=id; return v; }
 
   async function install(){
-    if(!globalThis.__flipaiDesktop && !document.documentElement?.dataset.flipaiDesktop)return;
+    if(!globalThis.__flipaiDesktop&&!document.documentElement?.dataset.flipaiDesktop)return;
     const here=location.pathname;
     if(here!=='/connections'&&here!=='/settings'){
-      // Any other page: make sure no stale panel request keeps a window docked.
-      post('/dock',{visible:false,x:0,y:0,width:0,height:0}).catch(()=>{});
+      post('/dock',hiddenDock).catch(()=>{});
       return;
     }
     try{await refresh()}catch(e){serviceErrorCard(e);return}
     q('#voice-call-unavailable')?.remove();
-    if(here==='/settings') settingsCard();
-    else connectionsCard();
+    if(here==='/settings') settingsCard(); else connectionsCard();
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
 })();
