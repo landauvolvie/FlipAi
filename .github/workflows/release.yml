@@ -148,15 +148,15 @@ jobs:
           $tag='v'+$version
           $setup=".\installer-output\FlipAi-Setup-v$version.exe"
           $notes=@(
-            "FlipAi $tag fixes the remaining Codex generated-image detection failure before Google Voice MMS delivery:",
+            "FlipAi $tag reads Codex-generated images from the completed Codex conversation before Google Voice MMS delivery:",
             "",
-            "- Current Codex saves generated images under the active turn working directory in generated_images. FlipAi v0.30/v0.31 incorrectly used CODEX_HOME as the primary disk fallback.",
-            "- FlipAi now resolves the configured Codex working directory and reads the exact recent image from its generated_images folder when the App Server image event is unavailable.",
-            "- Direct item/completed imageGeneration capture remains first choice and reuses the exact bytes Codex already generated.",
-            "- The disk fallback is limited to image-generation SMS requests so a later text-only command cannot accidentally inherit a recent picture from another turn.",
-            "- No extra Codex prompt, save instruction, image generation, or model-token round-trip is added.",
-            "- Image delivery still uses FlipAi's signed-in Microsoft Edge Google Voice window and Google Voice's normal image/MMS composer.",
-            "- If Google Voice MMS automation receives an image but cannot send it, FlipAi falls back to a text notice rather than silently dropping the final response.",
+            "- Live item/completed imageGeneration capture remains the first-choice path.",
+            "- If that live item is missed, FlipAi now reads the persisted imageGeneration item back from the active Codex thread with thread/read and extracts its exact base64 result or savedPath.",
+            "- This no longer depends on guessing the generated_images location; Codex can use a separate image save root instead of the turn working directory.",
+            "- Working-directory and CODEX_HOME scans remain compatibility fallbacks only.",
+            "- No extra model prompt, image generation, save instruction, or AI-token round-trip is used.",
+            "- The resolved image is sent through FlipAi's signed-in Microsoft Edge Google Voice MMS composer.",
+            "- If Google Voice receives an image but its MMS UI cannot send it, FlipAi falls back to a text notice instead of silently dropping the response.",
             "",
             "A real Google Voice MMS remains the final end-to-end validation because GitHub CI cannot send a carrier MMS."
           ) -join "`n"
