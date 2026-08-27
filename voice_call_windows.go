@@ -513,19 +513,33 @@ func createGoogleVoiceWebView(dataDir string, controlPort int) (webview2.WebView
 			time.Sleep(way.wait)
 		}
 		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args+voiceCDPArguments(controlPort))
+		// Created where it will live: off every display, as a tool window, and
+		// without taking focus. The binding shows its window before it embeds
+		// the browser, and embedding takes seconds while WebView2 starts, so
+		// creating it any other way puts an empty titled window on the user's
+		// desktop at every start -- which is the complaint this whole change
+		// exists to answer. There is no moment at which this window is visible
+		// anywhere except inside the FlipAi panel.
+		parkX, parkY := parkedWindowOrigin()
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
-			Debug:     false,
-			AutoFocus: true,
+			Debug: false,
+			// Focus follows the panel, not the browser: a view that grabs
+			// focus while parked would type into itself.
+			AutoFocus: false,
 			DataPath:  voiceProfilePath(dataDir),
 			WindowOptions: webview2.WindowOptions{
-				Title:  googleVoiceWindowTitle,
-				Width:  1080,
-				Height: 760,
-				Center: true,
+				Title:      googleVoiceWindowTitle,
+				Width:      voiceParkedWidth,
+				Height:     voiceParkedHeight,
+				X:          parkX,
+				Y:          parkY,
+				Position:   true,
+				ExStyle:    wsExToolWin | wsExNoActivate,
+				NoActivate: true,
 			},
 		})
 		if w != nil {
-			mode, note := way.name, way.note
+			mode, note := "FlipAi (Edge WebView2, "+way.name+" drawing)", way.note
 			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 				s.RenderMode = mode
 				s.RenderAttempt = (start + i) % len(ways)

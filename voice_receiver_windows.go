@@ -120,13 +120,11 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 		s.ControlPort = port
 		s.LastError = ""
 		s.LastEvent = "browser-starting"
-		s.RenderMode = googleVoiceRenderModeName(dataDir)
 	})
 
+	// The view was created parked, as a tool window, without focus. This only
+	// records that, and takes the title bar off the frame the binding gave it.
 	dock := newVoiceDockController(hwnd)
-	// Whatever happens next, this window is never an ordinary desktop window.
-	// It starts parked off-screen and only ever moves into the FlipAi panel.
-	applyVoiceWindowChrome(hwnd, false)
 	dock.park()
 	if showInPanel {
 		// The panel is what the user asked for, and the Connections page is
@@ -383,20 +381,10 @@ func invokeGoogleVoiceAnswerAccessibly() error {
 	return errors.New("Windows refused to press the Answer control")
 }
 
-// googleVoiceRenderModeName describes, in the words the settings page shows,
-// how Google Voice is being drawn.
-func googleVoiceRenderModeName(dataDir string) string {
-	mode := loadVoiceRuntime(dataDir).RenderMode
-	if mode == "" {
-		return "FlipAi (Edge WebView2)"
-	}
-	return mode
-}
-
 // platformVoiceControlPort is the loopback DevTools port of the running Google
 // Voice window, for the host process. It is 0 when there is no window.
 func platformVoiceControlPort(dataDir string) int {
 	return loadVoiceRuntime(dataDir).ControlPort
 }
 
-var errNoVoiceControlChannel = fmt.Errorf("the Google Voice window has no control channel open")
+var errNoVoiceControlChannel = errors.New("the Google Voice window has no control channel open")

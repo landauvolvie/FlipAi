@@ -287,6 +287,10 @@ func (c *voiceDockController) park() {
 		return
 	}
 	c.parked = true
+	// The window is created at this position already, but its frame still
+	// carries the binding's default title bar; taking it off here is what makes
+	// the panel borderless the first time it is docked.
+
 	applyVoiceWindowChrome(c.hwnd, false)
 	x, y := parkedWindowOrigin()
 	procDockSetWindowPos.Call(c.hwnd, hwndTop,

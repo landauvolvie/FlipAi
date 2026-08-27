@@ -64,6 +64,23 @@ type WindowOptions struct {
 	Height uint
 	IconId uint
 	Center bool
+
+	// The fields below are a local addition for FlipAi.
+	//
+	// This binding creates its window with WS_OVERLAPPEDWINDOW, shows it and
+	// gives it focus before it embeds the browser -- and embedding can take
+	// seconds while WebView2 starts. For a window the user is meant to see
+	// that is right. For FlipAi's Google Voice view, which is only ever a
+	// panel inside the FlipAi window, it meant an empty titled window
+	// appearing on the desktop and stealing focus at every start.
+	//
+	// X/Y place the window at creation, ExStyle adds extended styles (FlipAi
+	// uses WS_EX_TOOLWINDOW so the window is never in the taskbar or Alt-Tab),
+	// and NoActivate shows it without taking focus.
+	X, Y       int32
+	Position   bool
+	ExStyle    uint32
+	NoActivate bool
 }
 
 type WebViewOptions struct {
@@ -304,7 +321,10 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	}
 
 	var posX, posY uint
-	if opts.Center {
+	if opts.Position {
+		posX = uint(uint32(opts.X))
+		posY = uint(uint32(opts.Y))
+	} else if opts.Center {
 		// get screen size
 		screenWidth, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CXSCREEN)
 		screenHeight, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CYSCREEN)
@@ -318,7 +338,7 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	}
 
 	w.hwnd, _, _ = w32.User32CreateWindowExW.Call(
-		0,
+		uintptr(opts.ExStyle),
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(windowName)),
 		0xCF0000, // WS_OVERLAPPEDWINDOW
@@ -333,9 +353,17 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	)
 	setWindowContext(w.hwnd, w)
 
-	_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
-	_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
-	_, _, _ = w32.User32SetFocus.Call(w.hwnd)
+	if opts.NoActivate {
+		// SW_SHOWNOACTIVATE. The window still counts as visible, which is what
+		// keeps the browser inside it running at full speed, but nothing the
+		// user is doing loses focus to it.
+		_, _, _ = w32.User32ShowWindow.Call(w.hwnd, 4)
+		_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
+	} else {
+		_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
+		_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
+		_, _, _ = w32.User32SetFocus.Call(w.hwnd)
+	}
 
 	if !w.browser.Embed(w.hwnd) {
 		return false

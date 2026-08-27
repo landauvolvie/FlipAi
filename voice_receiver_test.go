@@ -62,7 +62,6 @@ func TestGoogleVoiceViewIsFlipAiOwned(t *testing.T) {
 		"createGoogleVoiceWebView(dataDir, port)",
 		"googleVoiceInitScript",
 		"webViewVoicePermissions",
-		"applyVoiceWindowChrome(hwnd, false)",
 		"dock.park()",
 	} {
 		if !strings.Contains(body, want) {
@@ -170,6 +169,59 @@ func TestTheCompetingCallGuardsAreGone(t *testing.T) {
 	for name, body := range goSources(t) {
 		if strings.Contains(body, "runGoogleVoiceReceiverWatchdog") || strings.Contains(body, "runAgentVoiceActivationGuard") {
 			t.Errorf("%s still runs a competing voice guard", name)
+		}
+	}
+}
+
+// The binding shows its window, and gives it focus, before it embeds the
+// browser -- and embedding takes seconds while WebView2 starts. If the Google
+// Voice view is created any other way, an empty titled window appears on the
+// user's desktop at every start and takes focus from whatever they are doing.
+// That is the complaint this whole change exists to answer, so the creation
+// options are held here.
+func TestTheGoogleVoiceViewIsCreatedAlreadyOutOfSight(t *testing.T) {
+	body := goSources(t)["voice_call_windows.go"]
+	i := strings.Index(body, "func createGoogleVoiceWebView(")
+	if i < 0 {
+		t.Fatal("createGoogleVoiceWebView is gone")
+	}
+	end := strings.Index(body[i:], "\n}\n")
+	create := body[i : i+end]
+	for _, want := range []string{
+		"parkedWindowOrigin()",
+		"Position:   true",
+		"NoActivate: true",
+		"wsExToolWin | wsExNoActivate",
+	} {
+		if !strings.Contains(create, want) {
+			t.Errorf("the Google Voice view is created without %s, so it can appear on the desktop", want)
+		}
+	}
+	if strings.Contains(create, "Center: true") {
+		t.Error("the Google Voice view is still created in the middle of the screen")
+	}
+	if strings.Contains(create, "AutoFocus: true") {
+		t.Error("the parked Google Voice view would take focus from the user")
+	}
+}
+
+// The vendored WebView2 binding carries a local change for the above. A
+// dependency update that dropped it would silently bring the flashing window
+// back, so the change is asserted rather than assumed.
+func TestTheWebViewBindingCanCreateAWindowOutOfSight(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("third_party", "go-webview2", "webview.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.ReplaceAll(string(b), "\r\n", "\n")
+	for _, want := range []string{
+		"NoActivate bool",
+		"ExStyle    uint32",
+		"if opts.Position {",
+		"uintptr(opts.ExStyle),",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the WebView2 binding lost the local change that lets FlipAi create a window out of sight (%s)", want)
 		}
 	}
 }
