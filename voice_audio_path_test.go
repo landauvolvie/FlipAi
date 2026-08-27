@@ -117,3 +117,28 @@ func TestRingingAlreadyWiresTheDesktopApp(t *testing.T) {
 		t.Fatal("an authorized ring did not start wiring the desktop app")
 	}
 }
+
+// Google Voice decides whether a browser can take calls partly from what the
+// browser can do, and WebView2 does not always expose the Notifications API. A
+// page that finds it missing can decline to ring here at all -- which looks,
+// from outside, exactly like FlipAi failing to notice calls. So it is supplied
+// when it is absent, and never when it is present.
+func TestTheNotificationsAPIIsSuppliedOnlyWhenMissing(t *testing.T) {
+	if !strings.Contains(googleVoiceInitScript, "typeof window.Notification === 'undefined'") {
+		t.Fatal("the page no longer supplies the Notifications API to a browser that lacks it")
+	}
+	if !strings.Contains(googleVoiceInitScript, "notifications supplied by FlipAi") {
+		t.Error("a browser that had to be given the Notifications API does not say so on the status page")
+	}
+	// The shim must answer the two questions a page asks before it decides a
+	// browser can notify: what the permission is, and how to request it.
+	for _, want := range []string{"Shim.requestPermission", "get: () => 'granted'"} {
+		if !strings.Contains(googleVoiceInitScript, want) {
+			t.Errorf("the supplied Notifications API is missing %s", want)
+		}
+	}
+	// A real implementation is wrapped for the ring hint, never replaced.
+	if !strings.Contains(googleVoiceInitScript, "const RealNotification = window.Notification;") {
+		t.Error("the page no longer keeps a real Notifications implementation")
+	}
+}

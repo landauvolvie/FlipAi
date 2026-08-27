@@ -251,6 +251,48 @@ const googleVoiceInitScript = `
 
   let noteHint = '';
   let noteHintAt = 0;
+  let notificationsPolyfilled = false;
+
+  // Google Voice decides whether a browser can take calls partly from what the
+  // browser can do, and one of the things it looks at is whether it can raise a
+  // notification. WebView2 does not always expose the Notifications API, and a
+  // page that finds it missing can simply not offer to ring here at all --
+  // which looks, from the outside, exactly like FlipAi failing to notice calls.
+  //
+  // So when it is missing it is supplied: a notification object that behaves
+  // correctly to the page and shows nothing. FlipAi does not want a Windows
+  // toast for an incoming call; it wants the ring, and it takes the ring from
+  // the page. A real Notification implementation is never replaced.
+  try {
+    if (typeof window.Notification === 'undefined') {
+      notificationsPolyfilled = true;
+      const listeners = 'onclick onclose onerror onshow'.split(' ');
+      const Shim = function(title, options) {
+        this.title = String(title == null ? '' : title);
+        const opts = options || {};
+        this.body = String(opts.body || '');
+        this.tag = String(opts.tag || '');
+        this.data = opts.data;
+        for (const name of listeners) this[name] = null;
+        // The wrapper below wraps this shim and reports the ring too. Doing it
+        // twice costs nothing -- a hint is a hint and the tick it schedules is
+        // single-flighted -- and doing it here means a ring is still noticed if
+        // that wrapper ever fails to install.
+        ringHint(this.title, this.body);
+      };
+      Shim.prototype.close = function() {};
+      Shim.prototype.addEventListener = function() {};
+      Shim.prototype.removeEventListener = function() {};
+      Shim.prototype.dispatchEvent = function() { return false; };
+      Shim.requestPermission = (cb) => {
+        if (typeof cb === 'function') { try { cb('granted'); } catch (_) {} }
+        return Promise.resolve('granted');
+      };
+      Object.defineProperty(Shim, 'permission', {get: () => 'granted'});
+      Object.defineProperty(Shim, 'maxActions', {get: () => 0});
+      window.Notification = Shim;
+    }
+  } catch (_) {}
   function ringHint(title, body) {
     const text = (String(title || '') + ' ' + String(body || '')).trim();
     if (!/incoming|call/i.test(text)) return;
@@ -389,6 +431,9 @@ const googleVoiceInitScript = `
   // even when no Answer control ever appeared.
   function controlsSnapshot() {
     const names = [];
+    // Worth knowing on the status page: a browser FlipAi had to supply the
+    // Notifications API to is one Google Voice might have refused to ring in.
+    if (notificationsPolyfilled) names.push('[notifications supplied by FlipAi]');
     if (noteHint && Date.now() - noteHintAt < 60000) names.push('[notification: ' + noteHint + ']');
     for (const b of buttons()) {
       const name = buttonName(b).replace(/\s+/g, ' ').trim();
