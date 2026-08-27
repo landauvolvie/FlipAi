@@ -1,0 +1,165 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $version=(Get-Content VERSION -Raw).Trim()
+          if($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$'){throw "Invalid VERSION: $version"}
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Generate branded FlipAi icon
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          .\scripts\Generate-FlipAiIcon.ps1 -OutputPath .\dist\FlipAi.ico
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Race test
+        run: go test -race ./...
+
+      - name: Build Windows x64
+        shell: pwsh
+        run: |
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist\FlipAi.exe .
+          if(-not (Test-Path .\dist\FlipAi.exe)){throw 'FlipAi.exe was not built'}
+
+      - name: Microsoft Edge Google Voice receiver smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dataDir=Join-Path $env:RUNNER_TEMP 'FlipAi-Release-Edge-Voice'
+          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $env:LOCALAPPDATA=$dataDir
+          $env:AISMSBRIDGE_NO_BROWSER='1'
+          $stateFile=Join-Path $dataDir 'AISMSBridge\voice-call-state.json'
+          $before=@(Get-Process -Name msedge -ErrorAction SilentlyContinue).Id
+          Start-Process '.\dist\FlipAi.exe' -ArgumentList '--google-voice','--visible'
+          $deadline=(Get-Date).AddSeconds(120)
+          $state=$null
+          do {
+            if(Test-Path $stateFile){try{$state=Get-Content $stateFile -Raw|ConvertFrom-Json}catch{}}
+            if($state -and $state.browserRunning){break}
+            if($state -and $state.lastOpenError){throw "Google Voice receiver failed: $($state.lastOpenError)"}
+            Start-Sleep -Milliseconds 500
+          } while((Get-Date)-lt $deadline)
+          if(-not ($state -and $state.browserRunning)){throw 'Google Voice receiver never reported browserRunning'}
+          if("$($state.renderMode)" -notmatch 'Microsoft Edge'){throw "Google Voice is not using Edge: $($state.renderMode)"}
+          $edge=$null
+          $deadline=(Get-Date).AddSeconds(30)
+          do {
+            $edge=Get-Process -Name msedge -ErrorAction SilentlyContinue|Where-Object {$_.Id -notin $before -and ($_.MainWindowTitle -like '*Google Voice*' -or $_.MainWindowTitle -like 'FlipAi*')}|Select-Object -First 1
+            if($edge){break}
+            Start-Sleep -Milliseconds 500
+          } while((Get-Date)-lt $deadline)
+          if(-not $edge){throw 'Edge receiver reported running but its app-mode window was not found'}
+          Get-Process -Name FlipAi -ErrorAction SilentlyContinue|Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name msedge -ErrorAction SilentlyContinue|Where-Object {$_.Id -notin $before}|Stop-Process -Force -ErrorAction SilentlyContinue
+
+      - name: Install Inno Setup compiler if needed
+        shell: pwsh
+        run: |
+          $candidates=@("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe","$env:ProgramFiles\Inno Setup 6\ISCC.exe")
+          $iscc=$candidates|Where-Object {Test-Path $_}|Select-Object -First 1
+          if(-not $iscc){choco install innosetup --yes --no-progress;$iscc=$candidates|Where-Object {Test-Path $_}|Select-Object -First 1}
+          if(-not $iscc){throw 'Inno Setup compiler was not found'}
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $version='${{ steps.version.outputs.version }}'
+          Remove-Item .\installer-output -Recurse -Force -ErrorAction SilentlyContinue
+          & $env:ISCC "/DMyVersion=$version" "/DSourceDir=$((Resolve-Path .\dist).Path)" .\installer\FlipAi.iss
+          if($LASTEXITCODE -ne 0){throw "ISCC failed with exit code $LASTEXITCODE"}
+          $setup=".\installer-output\FlipAi-Setup-v$version.exe"
+          if(-not (Test-Path $setup)){throw "Setup EXE not found: $setup"}
+
+      - name: Real installer smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $version='${{ steps.version.outputs.version }}'
+          $setup=(Resolve-Path ".\installer-output\FlipAi-Setup-v$version.exe").Path
+          $target=Join-Path $env:LOCALAPPDATA 'Programs\FlipAi'
+          Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          if(-not (Test-Path (Join-Path $target 'FlipAi.exe'))){throw 'Installer did not install FlipAi.exe'}
+          $unins=Join-Path $target 'unins000.exe'
+          if(-not (Test-Path $unins)){throw 'Installer did not create uninstaller'}
+          Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          if(Test-Path (Join-Path $target 'FlipAi.exe')){throw 'Uninstaller left FlipAi.exe behind'}
+
+      - name: Microsoft Defender scan installer when available
+        shell: pwsh
+        run: |
+          if(-not (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue)){exit 0}
+          $status=Get-MpComputerStatus -ErrorAction SilentlyContinue
+          if($null -eq $status -or -not $status.AntivirusEnabled){exit 0}
+          $version='${{ steps.version.outputs.version }}'
+          $setup=(Resolve-Path ".\installer-output\FlipAi-Setup-v$version.exe").Path
+          Start-MpScan -ScanType CustomScan -ScanPath $setup
+          if(Get-Command Get-MpThreatDetection -ErrorAction SilentlyContinue){
+            $hits=@(Get-MpThreatDetection -ErrorAction SilentlyContinue|Where-Object {$_.Resources -and (($_.Resources -join "`n") -match [regex]::Escape($setup))})
+            if($hits.Count -gt 0){throw "Defender reported $($hits.Count) detection(s) for the installer"}
+          }
+
+      - name: SHA-256
+        shell: pwsh
+        run: |
+          $version='${{ steps.version.outputs.version }}'
+          $setup=".\installer-output\FlipAi-Setup-v$version.exe"
+          $hash=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  FlipAi-Setup-v$version.exe" | Set-Content .\installer-output\SHA256SUMS.txt -Encoding ascii
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version='${{ steps.version.outputs.version }}'
+          $tag='v'+$version
+          $setup=".\installer-output\FlipAi-Setup-v$version.exe"
+          $notes=@(
+            "FlipAi $tag improves Google Voice phone calling:",
+            "",
+            "- Authorized incoming Google Voice calls now have a Windows accessibility fallback that invokes Answer when Google ignores a synthetic browser click.",
+            "- Google Voice stays alive in Microsoft Edge in the background; Connections no longer exposes the jumping pop-out workflow and hides the native panel while scrolling.",
+            "- A watchdog restarts/repaints the Google Voice receiver if it disappears or renders black.",
+            "- Desktop ChatGPT/Claude Voice gets a broader accessibility retry when the app opens but Voice does not start.",
+            "- Settings includes a free one-click virtual audio bridge installer. It verifies pinned downloads and the driver signature and never changes test-signing, Secure Boot, or certificate trust stores.",
+            "",
+            "A real phone call is still the final end-to-end validation because GitHub CI cannot place or receive a Google Voice call."
+          ) -join "`n"
+          if(gh release view $tag *> $null){
+            gh release upload $tag $setup .\installer-output\SHA256SUMS.txt --clobber
+          } else {
+            gh release create $tag $setup .\installer-output\SHA256SUMS.txt --title "FlipAi $tag" --notes $notes
+          }
