@@ -662,9 +662,10 @@ Before a Windows artifact is accepted, GitHub Actions verifies:
 - real uninstaller cleanup of app files, Start Menu shortcut, uninstall registration, and startup entry;
 - Quit stopping every FlipAi process, the Google Voice window included;
 - Google Voice coming up inside FlipAi's own WebView2 view, with **no Microsoft
-  Edge application started**, exactly one Google Voice window however many
-  times it is asked for, that window carrying no taskbar button and no Alt-Tab
-  entry, and its loopback control channel answering
+  Edge application started**, exactly one Google Voice window however many times
+  it is asked for, that window carrying no taskbar button and no Alt-Tab entry,
+  FlipAi's own endpoint inside that process answering with its token and
+  refusing without it, and a real DevTools call reaching the page in-process
   (`scripts/Assert-GoogleVoiceReceiver.ps1`).
 
 ### The call lifecycle
@@ -711,7 +712,7 @@ Everything above runs without a phone. Be clear about the boundary:
 | --- | --- |
 | The call state machine end to end, including authorization, the answer ladder, teardown and the next call | Google Voice's own markup: whether the ringing card FlipAi looks for is the card Google renders today |
 | The injected page script driving a stand-in Google Voice page in real Chromium, with the browser genuinely applying the microphone and speaker FlipAi selects | Real telephony: that a call to your number rings in this browser at all, which needs "Receive calls on this device" on in Google Voice itself |
-| Google Voice coming up inside FlipAi's own WebView2 view, alone, with no external browser and no taskbar window | Whether the Codex desktop app on your machine exposes a Voice control FlipAi can press, and whether pressing it starts a conversation |
+| Google Voice coming up inside FlipAi's own WebView2 view, alone, with no external browser and no taskbar window, and FlipAi reaching that page through WebView2's in-process DevTools call | Whether the Codex desktop app on your machine exposes a Voice control FlipAi can press, and whether pressing it starts a conversation |
 | The cable plan, the audio-path invariants, and the per-app routing script's contents | Real audio over real virtual cables: that the caller hears the agent and the agent hears the caller |
 | The Windows build, the installer, install and uninstall | The whole cycle repeating reliably on your line |
 
