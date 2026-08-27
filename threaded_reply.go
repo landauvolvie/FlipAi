@@ -63,7 +63,7 @@ func sendThreadedVoiceReply(ctx context.Context, client MailClient, original Gma
 // caller receives the text reply over the normal Gmail path plus a short notice
 // that the image itself could not be delivered.
 func routeGeneratedImageReply(ctx context.Context, original GmailMessage, body string) (handled bool, fallbackBody string) {
-	image, imageKey := generatedImageForVoiceReply(original, body)
+	image, imageKey := generatedImageForVoiceReplyResolved(original, body)
 	if image == nil {
 		return false, body
 	}
