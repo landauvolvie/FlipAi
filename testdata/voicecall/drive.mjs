@@ -158,7 +158,12 @@ await scenario('authorized-number', baseConfig(), async ({ page, tick }) => {
   await tick(2);
   const midCall = await page.evaluate(() => window.gv.observed());
   await page.evaluate(() => window.gv.hangup());
-  await tick();
+  // Google Voice renders neither an Answer nor a hang-up control for a moment
+  // while it swaps one card for another, so the script under test requires two
+  // consecutive quiet ticks before it reports a call over. A single tick here
+  // would be testing a page that ends calls on one dropped frame -- which is
+  // what used to cut conversations off mid-sentence.
+  await tick(3);
   return { midCall };
 });
 

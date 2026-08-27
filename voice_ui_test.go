@@ -49,11 +49,11 @@ func TestVoiceSettingsCardTargetsTheDesktopApps(t *testing.T) {
 	}
 }
 
-// Connections is a view of the persistent receiver, not a second lifecycle for
-// it. Leaving, scrolling, or changing pages only withdraws the native panel;
-// the Edge receiver itself remains alive in the background.
+// Connections is a view of the persistent Google Voice environment, not a
+// second lifecycle for it. Leaving, scrolling, or changing pages only withdraws
+// the panel; Google Voice itself stays loaded, signed in and listening.
 func TestConnectionsPreviewOnlyWithdrawsThePanel(t *testing.T) {
-	for _, want := range []string{"withdrawPanel", "sendBeacon", "stays signed in and keeps taking calls while hidden"} {
+	for _, want := range []string{"withdrawPanel", "sendBeacon", "keeps taking calls while it is out of sight"} {
 		if !strings.Contains(voiceDesktopInitScript, want) {
 			t.Errorf("the Connections preview is missing %s", want)
 		}

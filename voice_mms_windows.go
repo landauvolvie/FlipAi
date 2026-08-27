@@ -8,10 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -91,11 +88,13 @@ func googleVoiceImageRecipient(m GmailMessage) string {
 	return ""
 }
 
-// The Google Voice Edge process chooses a fresh loopback DevTools port every
-// time it starts. Rather than persisting a second secret/control file, find the
-// loopback listener owned by the exact Edge window process and verify it by
-// asking DevTools for the voice.google.com page before connecting.
-func waitForGoogleVoiceMMSPage(ctx context.Context, dataDir string) (*edgeCDPClient, error) {
+// The Google Voice window writes down the loopback control port it opened, so
+// sending an image is a matter of connecting to it rather than guessing which
+// of a process's listeners is the right one. That guesswork was the old way,
+// and it stopped working the moment Google Voice moved into FlipAi's own
+// browser view, where the listener belongs to the WebView2 runtime process
+// rather than to FlipAi.
+func waitForGoogleVoiceMMSPage(ctx context.Context, dataDir string) (*voiceCDPClient, error) {
 	if err := platformOpenGoogleVoice(dataDir, false); err != nil {
 		return nil, fmt.Errorf("open Google Voice for MMS: %w", err)
 	}
@@ -105,25 +104,14 @@ func waitForGoogleVoiceMMSPage(ctx context.Context, dataDir string) (*edgeCDPCli
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		hwnd := googleVoiceHWND()
-		if hwnd != 0 {
-			pid := windowProcessID(hwnd)
-			ports, err := edgeDevToolsPortsForPID(pid)
+		if port := platformVoiceControlPort(dataDir); port > 0 {
+			page, err := connectVoiceCDP(port)
 			if err == nil {
-				for _, port := range ports {
-					target, e := edgeVoiceTarget(port)
-					if e != nil || target.WebSocketDebuggerURL == "" {
-						continue
-					}
-					page, e := dialEdgeCDP(target.WebSocketDebuggerURL)
-					if e == nil {
-						return page, nil
-					}
-					last = e
-				}
-			} else {
-				last = err
+				return page, nil
 			}
+			last = err
+		} else if last == nil {
+			last = errNoVoiceControlChannel
 		}
 		select {
 		case <-ctx.Done():
@@ -132,54 +120,12 @@ func waitForGoogleVoiceMMSPage(ctx context.Context, dataDir string) (*edgeCDPCli
 		}
 	}
 	if last == nil {
-		last = errors.New("Google Voice Edge control channel was not found")
+		last = errors.New("the Google Voice control channel was not found")
 	}
 	return nil, fmt.Errorf("Google Voice MMS is unavailable: %w", last)
 }
 
-func edgeDevToolsPortsForPID(pid uint32) ([]int, error) {
-	if pid == 0 {
-		return nil, errors.New("Google Voice Edge process id is unavailable")
-	}
-	out, err := exec.Command("netstat", "-ano", "-p", "tcp").Output()
-	if err != nil {
-		return nil, fmt.Errorf("read Edge loopback listeners: %w", err)
-	}
-	seen := map[int]bool{}
-	var ports []int
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 5 {
-			continue
-		}
-		gotPID, err := strconv.ParseUint(fields[len(fields)-1], 10, 32)
-		if err != nil || uint32(gotPID) != pid {
-			continue
-		}
-		local := fields[1]
-		colon := strings.LastIndex(local, ":")
-		if colon <= 0 || colon == len(local)-1 {
-			continue
-		}
-		host := strings.Trim(local[:colon], "[]")
-		if host != "127.0.0.1" && host != "::1" {
-			continue
-		}
-		port, err := strconv.Atoi(local[colon+1:])
-		if err != nil || port < 1 || port > 65535 || seen[port] {
-			continue
-		}
-		seen[port] = true
-		ports = append(ports, port)
-	}
-	sort.Ints(ports)
-	if len(ports) == 0 {
-		return nil, errors.New("Google Voice Edge has no loopback control listener yet")
-	}
-	return ports, nil
-}
-
-type edgeRuntimeObjectEval struct {
+type voiceCDPObjectEval struct {
 	Result struct {
 		Type        string `json:"type"`
 		Subtype     string `json:"subtype,omitempty"`
@@ -189,8 +135,8 @@ type edgeRuntimeObjectEval struct {
 	ExceptionDetails json.RawMessage `json:"exceptionDetails,omitempty"`
 }
 
-func (c *edgeCDPClient) evalObject(expression string) (string, error) {
-	var got edgeRuntimeObjectEval
+func (c *voiceCDPClient) evalObject(expression string) (string, error) {
+	var got voiceCDPObjectEval
 	params := map[string]any{
 		"expression":    expression,
 		"returnByValue": false,
@@ -208,8 +154,8 @@ func (c *edgeCDPClient) evalObject(expression string) (string, error) {
 	return got.Result.ObjectID, nil
 }
 
-func (c *edgeCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) error {
-	var snap edgeVoicePageSnapshot
+func (c *voiceCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) error {
+	var snap voicePageSnapshot
 	if err := c.voiceSnapshotInto(&snap); err != nil {
 		return err
 	}
@@ -219,7 +165,7 @@ func (c *edgeCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) err
 
 	phoneJSON, _ := json.Marshal(phone)
 	captionJSON, _ := json.Marshal(caption)
-	prepare := strings.ReplaceAll(edgeVoicePrepareMMSJS, "__PHONE__", string(phoneJSON))
+	prepare := strings.ReplaceAll(voicePrepareMMSJS, "__PHONE__", string(phoneJSON))
 	prepare = strings.ReplaceAll(prepare, "__CAPTION__", string(captionJSON))
 	var stage string
 	if err := c.eval(prepare, true, &stage); err != nil {
@@ -229,7 +175,7 @@ func (c *edgeCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) err
 		return fmt.Errorf("prepare Google Voice MMS: %s", stage)
 	}
 
-	objectID, err := c.evalObject(edgeVoiceImageInputObjectJS)
+	objectID, err := c.evalObject(voiceImageInputObjectJS)
 	if err != nil {
 		return err
 	}
@@ -240,7 +186,7 @@ func (c *edgeCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) err
 		return fmt.Errorf("attach image in Google Voice: %w", err)
 	}
 
-	if err := c.eval(edgeVoiceAfterFileSelectJS, true, &stage); err != nil {
+	if err := c.eval(voiceAfterFileSelectJS, true, &stage); err != nil {
 		return fmt.Errorf("send Google Voice MMS: %w", err)
 	}
 	if stage != "sent" {
@@ -251,14 +197,14 @@ func (c *edgeCDPClient) sendGoogleVoiceMMS(phone, caption, imagePath string) err
 
 // voiceSnapshotInto is kept separate from voiceSnapshot so the image sender can
 // share the existing signed-in check without changing the call receiver code.
-func (c *edgeCDPClient) voiceSnapshotInto(out *edgeVoicePageSnapshot) error {
+func (c *voiceCDPClient) voiceSnapshotInto(out *voicePageSnapshot) error {
 	if out == nil {
 		return errors.New("nil Google Voice snapshot")
 	}
-	return c.eval(edgeVoiceSnapshotJS, true, out)
+	return c.eval(voicePageSnapshotJS, true, out)
 }
 
-const edgeVoicePrepareMMSJS = `(async () => {
+const voicePrepareMMSJS = `(async () => {
   const phone = __PHONE__;
   const caption = __CAPTION__;
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -366,7 +312,7 @@ const edgeVoicePrepareMMSJS = `(async () => {
   return fileInput ? 'ready' : 'file-input-missing';
 })()`
 
-const edgeVoiceImageInputObjectJS = `(() => {
+const voiceImageInputObjectJS = `(() => {
   const docs = [document];
   for (let i = 0; i < docs.length; i++) {
     let frames = [];
@@ -386,7 +332,7 @@ const edgeVoiceImageInputObjectJS = `(() => {
   return null;
 })()`
 
-const edgeVoiceAfterFileSelectJS = `(async () => {
+const voiceAfterFileSelectJS = `(async () => {
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const docs = () => {
     const out = [document];

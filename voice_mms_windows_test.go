@@ -29,10 +29,10 @@ func TestGoogleVoiceImageRecipientFallsBackToSubject(t *testing.T) {
 }
 
 func TestGoogleVoiceMMSAutomationCoversDocumentedImageControl(t *testing.T) {
-	if !strings.Contains(strings.ToLower(edgeVoicePrepareMMSJS), "select image") {
+	if !strings.Contains(strings.ToLower(voicePrepareMMSJS), "select image") {
 		t.Fatal("MMS automation no longer recognizes Google Voice's documented Select image control")
 	}
-	if !strings.Contains(edgeVoiceImageInputObjectJS, `input[type="file"]`) {
+	if !strings.Contains(voiceImageInputObjectJS, `input[type="file"]`) {
 		t.Fatal("MMS automation no longer locates the Google Voice file input")
 	}
 }

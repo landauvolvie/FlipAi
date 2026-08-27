@@ -8,20 +8,29 @@ import (
 	"unsafe"
 )
 
-// Docking puts the Google Voice window inside the FlipAi window.
+// Docking puts the Google Voice window inside the FlipAi window, and parking
+// puts it out of sight without ever letting it become a window of its own.
 //
 // The two are separate processes on purpose: Google Voice has to stay signed in
 // and listening for a call with the FlipAi window closed, so it cannot be a
 // child of a window the user is free to close. What it can be is a borderless
-// window placed exactly over the empty panel the Connections page reserves for
-// it, and owned by the FlipAi window so it travels with it and never falls
-// behind it. From the user's side that is simply Google Voice, side by side
-// with the rest of the app -- no second window to find, and no popup.
+// window with no title bar, no taskbar button and no Alt-Tab entry, placed
+// exactly over the empty panel the Connections page reserves for it and owned
+// by the FlipAi window so it travels with it. From the user's side that is
+// simply Google Voice, inside the app.
 //
 // When the page stops reporting a rectangle -- it navigated away, the FlipAi
-// window closed, the panel scrolled out of view -- the dock expires and the
-// window goes back to being an ordinary background window, still running and
-// still able to answer the phone.
+// window closed, the panel scrolled out of view -- the window is moved off the
+// desktop entirely rather than being restored as an ordinary window. That is
+// the difference between this and what came before, and it is the whole of
+// "why is a browser window appearing on my desktop": there is now no state in
+// which this window is visible anywhere except inside FlipAi.
+//
+// It is parked rather than minimized because a minimized browser window is one
+// Chromium is entitled to treat as hidden: it backgrounds the renderer and
+// throttles its timers, and a Google Voice page in that state can stop
+// noticing that the phone is ringing. A window that is off-screen is, as far
+// as the page is concerned, a window that is on screen.
 
 var (
 	procDockSetWindowPos    = voiceUser32.NewProc("SetWindowPos")
@@ -40,13 +49,14 @@ const (
 	gwlExStyle     = -20
 	gwlpHWndParent = -8
 
-	wsChild       = 0x40000000
-	wsPopup       = 0x80000000
-	wsVisible     = 0x10000000
-	wsClipChild   = 0x02000000
-	wsOverlapped  = 0x00CF0000 // WS_OVERLAPPEDWINDOW
-	wsExToolWin   = 0x00000080
-	wsExAppWindow = 0x00040000
+	wsChild        = 0x40000000
+	wsPopup        = 0x80000000
+	wsVisible      = 0x10000000
+	wsClipChild    = 0x02000000
+	wsOverlapped   = 0x00CF0000 // WS_OVERLAPPEDWINDOW
+	wsExToolWin    = 0x00000080
+	wsExAppWindow  = 0x00040000
+	wsExNoActivate = 0x08000000
 
 	swpNoActivate   = 0x0010
 	swpNoZOrder     = 0x0004
@@ -147,12 +157,12 @@ type voiceDockController struct {
 	docked  bool
 	placed  [4]int32 // the screen rectangle the window is currently standing on
 	owner   uintptr
-	restore bool   // the undocked window should be shown rather than minimized
 	blocked string // why the window is not in the panel, when it is not
+	parked  bool   // the window has already been put off the desktop
 }
 
-func newVoiceDockController(hwnd uintptr, visible bool) *voiceDockController {
-	return &voiceDockController{hwnd: hwnd, restore: visible}
+func newVoiceDockController(hwnd uintptr) *voiceDockController {
+	return &voiceDockController{hwnd: hwnd}
 }
 
 func windowStyle(hwnd uintptr, index int) uintptr {
@@ -167,20 +177,11 @@ func setWindowStyle(hwnd uintptr, index int, value uintptr) {
 // Apply moves the window to match one dock request. It returns whether the
 // window is currently docked.
 func (c *voiceDockController) Apply(req VoiceDockRequest, now time.Time, owner uintptr) bool {
-	// "Open it in its own window" arrives as a request to stop docking that
-	// also says where the window should end up. Without carrying that through,
-	// undocking would put the window away at the very moment the user asked to
-	// see it, and the two would race.
-	if req.PopOut {
-		c.restore = true
-	}
 	want := false
 	var rect [4]int32
 	// Why not, when not. "FlipAi could not put it in this panel" with no cause
 	// attached is a dead end for whoever reads it.
 	switch {
-	case req.PopOut:
-		c.blocked = "Google Voice was opened in its own window. Reload the Connections page to put it back in the panel."
 	case !req.Visible || req.At.IsZero():
 		c.blocked = "the Connections page is not asking for the panel; open Connections in FlipAi and leave it on screen."
 	case req.Width < voiceDockMinSize || req.Height < voiceDockMinSize:
@@ -224,29 +225,12 @@ func (c *voiceDockController) Apply(req VoiceDockRequest, now time.Time, owner u
 }
 
 func (c *voiceDockController) dock(rect [4]int32, owner uintptr) {
-	// A borderless window: no title bar to look like a second app, no resize
-	// frame to drag it off the panel it is standing in for.
-	style := windowStyle(c.hwnd, gwlStyle)
-	style &^= wsOverlapped
-	style &^= wsChild
-	style |= wsPopup | wsVisible | wsClipChild
-	setWindowStyle(c.hwnd, gwlStyle, style)
-
-	// Out of the taskbar and out of Alt-Tab while it is part of the app window.
-	ex := windowStyle(c.hwnd, gwlExStyle)
-	ex &^= wsExAppWindow
-	ex |= wsExToolWin
-	setWindowStyle(c.hwnd, gwlExStyle, ex)
+	applyVoiceWindowChrome(c.hwnd, true)
 
 	c.setOwner(owner)
 	c.docked = true
+	c.parked = false
 	forceBrowserRelayout(c.hwnd)
-	// Docking settles where the window belongs when it is next put away: back
-	// in the background. Without this, one "Open in its own window" left the
-	// pop-out standing for the rest of the process's life, so every later
-	// undock -- a page navigation, a hidden window, an expired dock -- restored
-	// Google Voice on top of whatever the user had moved on to.
-	c.restore = false
 	c.place(rect)
 }
 
@@ -282,59 +266,94 @@ func (c *voiceDockController) keepAbove() {
 		swpNoActivate|swpNoMove|swpNoSize)
 }
 
-// undock returns the window to an ordinary one and puts it away again. It is
-// deliberately not closed: the whole point of the separate process is that
-// Google Voice keeps running, signed in, ready for a call.
+// undock takes the window out of the panel and parks it off the desktop.
+//
+// It is deliberately not closed and deliberately not restored: the whole point
+// of the separate process is that Google Voice keeps running, signed in and
+// ready for a call, and the whole point of parking is that it does so without
+// ever appearing anywhere the user can see it.
 func (c *voiceDockController) undock() {
 	c.docked = false
 	c.placed = [4]int32{}
 	setWindowStyle(c.hwnd, gwlpHWndParent, 0)
 	c.owner = 0
-
-	style := windowStyle(c.hwnd, gwlStyle)
-	style &^= wsPopup
-	style |= wsOverlapped
-	setWindowStyle(c.hwnd, gwlStyle, style)
-
-	ex := windowStyle(c.hwnd, gwlExStyle)
-	ex &^= wsExToolWin
-	ex |= wsExAppWindow
-	setWindowStyle(c.hwnd, gwlExStyle, ex)
-
-	// A real size, not SWP_NOSIZE. Putting the title bar back shrinks the
-	// client area, and without a size change the browser is never told: it
-	// keeps its old bounds and the page comes back shifted up under the title
-	// bar with a blank strip below it.
-	x, y, w, h := c.windowed()
-	procDockSetWindowPos.Call(c.hwnd, hwndTop,
-		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
-		swpNoActivate|swpNoZOrder|swpFrameChanged)
-	forceBrowserRelayout(c.hwnd)
-	if c.restore {
-		procDockShowWindowAsync.Call(c.hwnd, voiceSWRestore)
-		forceBrowserRelayout(c.hwnd)
-		return
-	}
-	procDockShowWindowAsync.Call(c.hwnd, voiceSWMinimize)
+	c.park()
 }
 
-// windowed is where the window goes when it is not standing in a panel: the
-// size it was created with, centred on the primary display.
-func (c *voiceDockController) windowed() (x, y, w, h int32) {
+// park moves the window beyond every display and makes sure it can never take
+// focus or show up in the taskbar while it is there.
+func (c *voiceDockController) park() {
+	if c.parked {
+		return
+	}
+	c.parked = true
+	applyVoiceWindowChrome(c.hwnd, false)
+	x, y := parkedWindowOrigin()
+	procDockSetWindowPos.Call(c.hwnd, hwndTop,
+		uintptr(x), uintptr(y), uintptr(voiceParkedWidth), uintptr(voiceParkedHeight),
+		swpNoActivate|swpNoZOrder|swpFrameChanged|swpShowWindow)
+	forceBrowserRelayout(c.hwnd)
+}
+
+// voiceParkedWidth/Height keep the page laid out as a real browser window even
+// while nobody can see it. A one-pixel window would make Google Voice render
+// its narrow mobile layout, and the ringing card FlipAi has to find is not the
+// same card there.
+const (
+	voiceParkedWidth  = 1180
+	voiceParkedHeight = 860
+)
+
+// parkedWindowOrigin is a point past the right-hand edge and below the bottom
+// of every display, so the window cannot be seen on any monitor arrangement.
+func parkedWindowOrigin() (int32, int32) {
 	const (
-		smCXScreen = 0
-		smCYScreen = 1
+		smXVirtualScreen  = 76
+		smYVirtualScreen  = 77
+		smCXVirtualScreen = 78
+		smCYVirtualScreen = 79
 	)
-	w, h = 1080, 760
-	sw, _, _ := procDockGetSystemMetric.Call(smCXScreen)
-	sh, _, _ := procDockGetSystemMetric.Call(smCYScreen)
-	if int32(sw) > w {
-		x = (int32(sw) - w) / 2
+	vx, _, _ := procDockGetSystemMetric.Call(smXVirtualScreen)
+	vy, _, _ := procDockGetSystemMetric.Call(smYVirtualScreen)
+	vw, _, _ := procDockGetSystemMetric.Call(smCXVirtualScreen)
+	vh, _, _ := procDockGetSystemMetric.Call(smCYVirtualScreen)
+	x := int32(vx) + int32(vw) + 64
+	y := int32(vy) + int32(vh) + 64
+	// A machine that reports nothing useful still has to end up somewhere off
+	// the primary display rather than at the top-left corner of it.
+	if int32(vw) == 0 || int32(vh) == 0 {
+		x, y = 32000, 32000
 	}
-	if int32(sh) > h {
-		y = (int32(sh) - h) / 2
+	return x, y
+}
+
+// applyVoiceWindowChrome is the one place the Google Voice window's styles are
+// decided. There are exactly two: standing in the FlipAi panel, and parked.
+// Neither has a title bar, a taskbar button or an Alt-Tab entry, so there is no
+// path through this code that produces a second app window on the desktop.
+func applyVoiceWindowChrome(hwnd uintptr, docked bool) {
+	if hwnd == 0 {
+		return
 	}
-	return x, y, w, h
+	style := windowStyle(hwnd, gwlStyle)
+	style &^= wsOverlapped
+	style &^= wsChild
+	style |= wsPopup | wsVisible | wsClipChild
+	setWindowStyle(hwnd, gwlStyle, style)
+
+	ex := windowStyle(hwnd, gwlExStyle)
+	ex &^= wsExAppWindow
+	ex |= wsExToolWin
+	if docked {
+		// Docked, the user types into it: signing in to Google is a real
+		// keyboard task and a window that refuses activation cannot be typed
+		// into.
+		ex &^= wsExNoActivate
+	} else {
+		// Parked, it must never take focus from whatever the user is doing.
+		ex |= wsExNoActivate
+	}
+	setWindowStyle(hwnd, gwlExStyle, ex)
 }
 
 // voiceDockOwner is the FlipAi window the panel belongs to, or 0 when there is

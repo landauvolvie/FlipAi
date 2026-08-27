@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,15 +78,14 @@ func init() {
 		if voiceInteractiveSession() {
 			go superviseGoogleVoice(dataDir)
 		}
-	case "--watchdog":
-		// This runs before the watchdog's duplicate-instance check. That is
-		// intentional: if a boot task already owns the watchdog in session 0,
-		// the HKCU Run entry at interactive sign-in still gets one chance to
-		// create the Google Voice window in the user's desktop session.
-		if voiceInteractiveSession() && loadVoiceCallConfig(dataDir).Enabled {
-			_ = platformOpenGoogleVoice(dataDir, false)
-		}
 	}
+	// The Google Voice window has exactly one supervisor, in the host, and it
+	// is started above. There used to be three -- the host's, a second watchdog
+	// loop, and the Connections page's own "make sure it is running" -- each
+	// with its own timer and its own idea of whether a window existed. Between
+	// a browser being launched and its window carrying the title the others
+	// looked for, all three could decide nothing was running and start another
+	// one. That is where the extra windows came from.
 }
 
 func voiceInteractiveSession() bool {
@@ -256,17 +254,22 @@ func googleVoiceProcessAlive() bool {
 	return true
 }
 
-// revealGoogleVoiceWindow un-minimizes the window and puts it in front. Windows
-// often refuses a foreground change asked for by a background process, and it
-// refuses silently, so a window that only restored behind everything else is
-// reported rather than treated as a success.
+// revealGoogleVoiceWindow reports that Google Voice is up and where to find it.
+//
+// It deliberately does not show anything. There is nowhere for this window to
+// be shown: it lives in the FlipAi panel, and the Connections page is what puts
+// it there by saying where the panel is. Restoring it and pulling it to the
+// front is what used to make a browser window appear over the top of whatever
+// the user was doing.
 func revealGoogleVoiceWindow(dataDir string, hwnd uintptr) error {
-	procVoiceShowWindow.Call(hwnd, voiceSWRestore)
-	if bringToFront(hwnd) {
-		recordVoiceOpen(dataDir, "window opened", nil)
+	if hwnd == 0 {
+		return errors.New("the Google Voice window is not running")
+	}
+	if flipAiWindowHWND() == 0 {
+		recordVoiceOpen(dataDir, "Google Voice is running; open the FlipAi window to see it", nil)
 		return nil
 	}
-	recordVoiceOpen(dataDir, "window opened behind other windows", nil)
+	recordVoiceOpen(dataDir, "Google Voice is running inside FlipAi", nil)
 	return nil
 }
 
@@ -377,6 +380,14 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 	defer release()
 
 	visible := initiallyVisible
+	// A window that closes the instant it opens has to be given up on rather
+	// than recreated forever. Without this a machine whose WebView2 view dies
+	// on creation would rebuild it every second and a half for as long as
+	// FlipAi ran -- and on the old Edge receiver, each of those rebuilds put
+	// another browser window on the desktop.
+	backoff := 1500 * time.Millisecond
+	const maxBackoff = 60 * time.Second
+	var lastStart time.Time
 	for {
 		if quitRequested(dataDir) {
 			return nil
@@ -388,6 +399,7 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 		if !cfg.Enabled && !visible {
 			return nil
 		}
+		lastStart = time.Now()
 		if err := runGoogleVoiceWindow(dataDir, visible); err != nil {
 			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 				s.BrowserRunning = false
@@ -396,11 +408,13 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 			})
 			return err
 		}
+		// The call state is not touched here. Closing the view already took
+		// the call down through the bridge, which is the only thing allowed to
+		// say whether a conversation is in progress; writing "not in a call"
+		// from a second place is how a call that was still up could vanish
+		// from the status page while the desktop app kept talking.
 		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 			s.BrowserRunning = false
-			s.InCall = false
-			s.Caller = ""
-			s.Agent = ""
 			s.LastEvent = "browser-closed"
 		})
 		// A sign-out closes the window precisely so the browser profile can be
@@ -411,9 +425,17 @@ func runGoogleVoiceProcess(dataDir string, initiallyVisible bool) error {
 		if !loadVoiceCallConfig(dataDir).Enabled || quitRequested(dataDir) {
 			return nil
 		}
-		// Closing the call window should not silently turn the always-listening
-		// feature off. Recreate it minimized while the optional feature remains on.
-		time.Sleep(1500 * time.Millisecond)
+		// A window that stood for a while and was then closed is an ordinary
+		// restart; one that died immediately is a machine that cannot draw it,
+		// and trying again straight away only makes that worse.
+		if time.Since(lastStart) > 30*time.Second {
+			backoff = 1500 * time.Millisecond
+		} else if backoff < maxBackoff {
+			backoff *= 2
+		}
+		// Closing the Google Voice view should not silently turn the
+		// always-listening feature off; it comes back parked, out of sight.
+		time.Sleep(backoff)
 	}
 }
 
@@ -476,7 +498,7 @@ const voiceBrowserArguments = "--disable-background-timer-throttling " +
 // attempt would find "a window" that can never load anything. Each failed
 // attempt therefore destroys its own frame first -- from this thread, which is
 // the thread that created it.
-func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
+func createGoogleVoiceWebView(dataDir string, controlPort int) (webview2.WebView, error) {
 	ways := googleVoiceRenderModes()
 	// A previous window that came up black is remembered, so Retry moves on to
 	// the next way of drawing rather than repeating the one that did not work.
@@ -490,7 +512,7 @@ func createGoogleVoiceWebView(dataDir string) (webview2.WebView, error) {
 		if way.wait > 0 {
 			time.Sleep(way.wait)
 		}
-		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args)
+		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", way.args+voiceCDPArguments(controlPort))
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			Debug:     false,
 			AutoFocus: true,
@@ -585,141 +607,6 @@ func destroyLeftoverGoogleVoiceFrame() {
 	}
 }
 
-func runGoogleVoiceWindow(dataDir string, visible bool) error {
-	return runGoogleVoiceEdgeWindow(dataDir, visible)
-}
-
-// runGoogleVoiceWebViewWindow is retained as a fallback implementation
-// for diagnostics, but it is no longer used for live calling because
-// WebView2 does not implement Web Push and therefore cannot reliably
-// receive Google Voice incoming calls.
-func runGoogleVoiceWebViewWindow(dataDir string, visible bool) error {
-	// A Win32 message pump only works on the thread that created the window.
-	// This currently runs inside init(), where the Go runtime happens to hold
-	// the main thread, but that is an implementation detail of the runtime and
-	// not something the call bridge should depend on staying true.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	if err := os.MkdirAll(voiceProfilePath(dataDir), 0700); err != nil {
-		recordVoiceOpen(dataDir, "could not create the Google Voice browser profile folder", err)
-		return err
-	}
-	w, err := createGoogleVoiceWebView(dataDir)
-	if err != nil {
-		recordVoiceOpen(dataDir, "WebView2 could not create the window", err)
-		return err
-	}
-	defer w.Destroy()
-	applyFlipAiWindowIcon(uintptr(w.Window()))
-	w.SetSize(760, 560, webview2.HintMin)
-	// Google Voice needs microphone and notification permission before it will
-	// behave as a browser that can place and receive calls. FlipAi carries a
-	// one-line local fix for the WebView2 binding's permission-kind callback,
-	// so these can now be granted explicitly instead of using a global allow.
-	// The embedded window therefore never hides a permission prompt the user
-	// cannot reach, while unrelated capabilities stay denied.
-	if chromium := voiceChromium(w); chromium != nil {
-		chromium.SetPermission(edge.CoreWebView2PermissionKindMicrophone, edge.CoreWebView2PermissionStateAllow)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindNotifications, edge.CoreWebView2PermissionStateAllow)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindCamera, edge.CoreWebView2PermissionStateDeny)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindGeolocation, edge.CoreWebView2PermissionStateDeny)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindOtherSensors, edge.CoreWebView2PermissionStateDeny)
-		chromium.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateDeny)
-	} else {
-		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-			s.LastError = "FlipAi could not configure Google Voice microphone and notification permissions in WebView2. Restart the Google Voice window before testing calls."
-		})
-	}
-
-	// The agents -- and with them the numbers allowed to call -- live in the
-	// main configuration, which this process reads fresh so a change made in the
-	// FlipAi window applies to the next call without a restart.
-	mainConfig := func() Config {
-		_, cfgPath, _, _, err := appPaths()
-		if err != nil {
-			return Config{}
-		}
-		cfg, err := loadConfig(cfgPath, dataDir)
-		if err != nil {
-			return Config{}
-		}
-		return cfg
-	}
-	// A call is answered by the desktop AI app itself: its per-app audio is
-	// pointed at the cables just before its voice mode is started, so the
-	// caller talks to the same agent that can actually work on this PC.
-	activate := func(cfg VoiceCallConfig, agent string) error {
-		return activateAgentVoiceWithRouting(dataDir, cfg, agent)
-	}
-	bridge := newVoiceBridge(dataDir, mainConfig, activate, deactivateAgentVoice)
-	_ = w.Bind("flipVoiceAudioSettings", bridge.AudioSettings)
-	_ = w.Bind("flipVoiceIncoming", bridge.Incoming)
-	_ = w.Bind("flipVoiceAnswered", bridge.Answered)
-	_ = w.Bind("flipVoiceEnded", bridge.Ended)
-	_ = w.Bind("flipVoiceDevices", bridge.Devices)
-	_ = w.Bind("flipVoicePage", bridge.Page)
-
-	w.Init(googleVoiceInitScript)
-	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-		s.BrowserRunning = true
-		s.LastError = ""
-		s.LastEvent = "browser-starting"
-	})
-	// Quit has to reach this window. Its message loop below blocks until the
-	// window closes, so nothing here would otherwise notice the quit flag: the
-	// Google Voice process outlived "Quit FlipAi", kept a browser profile open
-	// inside the data folder, and so also blocked the uninstaller from removing
-	// it and the installer from replacing FlipAi.exe.
-	watchDone := make(chan struct{})
-	defer close(watchDone)
-	dock := newVoiceDockController(uintptr(w.Window()), visible)
-	go func() {
-		// Fast enough that dragging the FlipAi window does not leave the panel
-		// trailing behind it, cheap enough to run for as long as FlipAi does:
-		// each tick is a file read and, when nothing has moved, no window call
-		// at all.
-		t := time.NewTicker(120 * time.Millisecond)
-		defer t.Stop()
-		quitCheck := 0
-		for {
-			select {
-			case <-watchDone:
-				return
-			case <-t.C:
-				quitCheck++
-				if quitCheck >= 4 {
-					quitCheck = 0
-					if quitRequested(dataDir) {
-						procVoicePostMessage.Call(uintptr(w.Window()), voiceWMClose, 0, 0)
-						return
-					}
-				}
-				req := loadVoiceDock(dataDir)
-				docked := dock.Apply(req, time.Now(), voiceDockOwner())
-				mutateVoiceDockState(dataDir, docked, dock.blocked)
-			}
-		}
-	}()
-
-	w.Navigate(googleVoiceWebURL)
-	if visible {
-		// The window is created by a process the user did not click on, so it
-		// does not come forward by itself.
-		procVoiceShowWindow.Call(uintptr(w.Window()), voiceSWRestore)
-		bringToFront(uintptr(w.Window()))
-		recordVoiceOpen(dataDir, "window opened", nil)
-	} else {
-		// The binding shows the window while it is being created, so a
-		// background start would otherwise flash a Google Voice window on
-		// screen at every Windows sign-in. SW_SHOWMINNOACTIVE puts it away
-		// without an animation and without taking focus from whatever the
-		// user is doing.
-		procVoiceShowWindow.Call(uintptr(w.Window()), voiceSWShowMinNoActive)
-	}
-	w.Run()
-	return nil
-}
-
 func voiceChromium(w webview2.WebView) *edge.Chromium {
 	defer func() { _ = recover() }()
 	v := reflect.ValueOf(w)
@@ -736,7 +623,17 @@ func voiceChromium(w webview2.WebView) *edge.Chromium {
 }
 
 func platformTestAgentVoice(cfg VoiceCallConfig, agent string) error {
-	return activateAgentVoice(cfg, agent)
+	dataDir, _, _, _, err := appPaths()
+	if err != nil {
+		return err
+	}
+	// Test drives the whole path a real call takes, including the check that
+	// voice mode actually started. A test that only opened the app would say
+	// yes to exactly the machine this feature fails on.
+	if err := startAgentVoiceSession(dataDir, cfg, agent); err != nil {
+		return err
+	}
+	return stopAgentVoiceSession(cfg, agent)
 }
 
 func voiceAgentConfig(cfg VoiceCallConfig, agent string) VoiceAgentCallConfig {
@@ -744,80 +641,6 @@ func voiceAgentConfig(cfg VoiceCallConfig, agent string) VoiceAgentCallConfig {
 		return cfg.Claude
 	}
 	return cfg.Codex
-}
-
-func activateAgentVoice(cfg VoiceCallConfig, agent string) error {
-	target := voiceAgentConfig(cfg, agent)
-	hwnd, err := ensureAgentAppWindow(target)
-	if err != nil {
-		return err
-	}
-	return startAgentVoiceMode(target, hwnd)
-}
-
-// ensureAgentAppWindow finds the desktop app's window, launching the app first
-// when a launch command is configured and it is not already running.
-func ensureAgentAppWindow(target VoiceAgentCallConfig) (uintptr, error) {
-	if strings.TrimSpace(target.AppTitle) == "" {
-		return 0, errors.New("set the desktop app window title for this agent")
-	}
-	hwnd := findWindowContaining(target.AppTitle)
-	if hwnd == 0 && target.AppCommand != "" {
-		if err := startConfiguredVoiceApp(target.AppCommand); err != nil {
-			return 0, err
-		}
-		deadline := time.Now().Add(12 * time.Second)
-		for time.Now().Before(deadline) {
-			time.Sleep(300 * time.Millisecond)
-			hwnd = findWindowContaining(target.AppTitle)
-			if hwnd != 0 {
-				break
-			}
-		}
-	}
-	if hwnd == 0 {
-		return 0, fmt.Errorf("could not find the %s desktop window; open the app or set its launch command", target.AppTitle)
-	}
-	return hwnd, nil
-}
-
-// startAgentVoiceMode switches an already-running desktop app into its voice
-// mode, by its accessible Voice control or its configured shortcut.
-func startAgentVoiceMode(target VoiceAgentCallConfig, hwnd uintptr) error {
-	focused := bringToFront(hwnd)
-	if target.VoiceShortcut != "" {
-		if focused {
-			return sendVoiceShortcut(target.VoiceShortcut)
-		}
-		// The accessibility tree does not need focus, so it is the safe way to
-		// start voice when Windows would not let the app come forward.
-		if invokeVoiceButton(hwnd, false) == nil {
-			return nil
-		}
-		return fmt.Errorf("Windows would not bring %s to the front, so FlipAi did not send its Voice shortcut to another app by mistake; leave %s visible or unminimized during calls", target.AppTitle, target.AppTitle)
-	}
-	if err := invokeVoiceButton(hwnd, false); err != nil {
-		return fmt.Errorf("could not start voice automatically; configure the app's Voice shortcut in FlipAi: %w", err)
-	}
-	return nil
-}
-
-func deactivateAgentVoice(cfg VoiceCallConfig, agent string) error {
-	target := voiceAgentConfig(cfg, agent)
-	hwnd := findWindowContaining(target.AppTitle)
-	if hwnd == 0 {
-		return nil
-	}
-	// Ending voice mode is tried through the accessibility tree first: it works
-	// without focus, and the Escape fallback would otherwise land in whatever
-	// window the user has in front of them.
-	if invokeVoiceButton(hwnd, true) == nil {
-		return nil
-	}
-	if !bringToFront(hwnd) {
-		return fmt.Errorf("could not bring %s forward to end its voice session", target.AppTitle)
-	}
-	return sendKeysLiteral("{ESC}")
 }
 
 func startConfiguredVoiceApp(command string) error {
@@ -964,38 +787,6 @@ func sendKeysLiteral(keys string) error {
 	hideWindow(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("send voice shortcut: %v: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func invokeVoiceButton(hwnd uintptr, ending bool) error {
-	pattern := `(?i)(voice|microphone|mic)`
-	if ending {
-		pattern = `(?i)(end|stop|leave|close).*(voice|call|conversation)|(voice|call|conversation).*(end|stop|leave|close)`
-	}
-	// UI Automation uses the app's accessibility tree rather than screen
-	// coordinates, so moving or resizing the window does not break the click.
-	script := fmt.Sprintf(`
-Add-Type -AssemblyName UIAutomationClient
-$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]%d)
-if ($null -eq $root) { exit 2 }
-$cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)
-$buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$cond)
-foreach ($b in $buttons) {
-  $name = $b.Current.Name
-  if ($name -match '%s') {
-    try {
-      $p = $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-      $p.Invoke()
-      exit 0
-    } catch {}
-  }
-}
-exit 3`, hwnd, pattern)
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
-	hideWindow(cmd)
-	if err := cmd.Run(); err != nil {
-		return errors.New("no accessible Voice control was found")
 	}
 	return nil
 }

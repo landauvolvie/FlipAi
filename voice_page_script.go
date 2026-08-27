@@ -27,6 +27,10 @@ const googleVoiceInitScript = `
   window.__flipVoiceInstalled = true;
 
   const TICK_MS = 700;
+  // While the phone is ringing there are only about 25 seconds before Google
+  // Voice gives up and takes the call to voicemail, so the page looks much
+  // more often for as long as a call is on screen.
+  const RING_TICK_MS = 250;
   const SETTINGS_TTL_MS = 3000;
   const DEVICE_REPORT_MS = 5000;
 
@@ -348,6 +352,25 @@ const googleVoiceInitScript = `
   });
   const findHangup = () => buttons().find(b => /(hang\s*up|end\s+call|leave\s+call|end\s+the\s+call)/i.test(buttonName(b)));
 
+  // Google Voice's ringing card listens for a pointer sequence on some builds
+  // and for click on others, and a bare element.click() is ignored by the ones
+  // that expect the first. Sending the whole sequence costs nothing and is the
+  // difference between an allowed caller being answered and being sent to
+  // voicemail. FlipAi's control channel presses the same control a different
+  // way a moment later if this does not take.
+  function pressAnswer(b) {
+    try { b.focus(); } catch (_) {}
+    const base = {bubbles: true, cancelable: true, composed: true, button: 0};
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+      try {
+        const Ctor = type.indexOf('pointer') === 0 && window.PointerEvent ? PointerEvent : MouseEvent;
+        const opts = Object.assign({}, base, {buttons: type.slice(-2) === 'up' ? 0 : 1});
+        b.dispatchEvent(new Ctor(type, opts));
+      } catch (_) {}
+    }
+    try { b.click(); } catch (_) {}
+  }
+
   // controlsSnapshot is what FlipAi can currently see. Whether a ring is even
   // reaching this window is otherwise invisible: Google Voice only rings in a
   // browser when "Receive calls on this device" is switched on in its own
@@ -467,6 +490,8 @@ const googleVoiceInitScript = `
   let inCall = false;
   let answering = false;
   let ticking = false;
+  let quiet = 0;
+  let ringing = false;
 
   async function tick() {
     // setInterval used to overlap these runs, because a tick awaits several
@@ -497,22 +522,39 @@ const googleVoiceInitScript = `
         answering = true;
         try {
           const authorized = await window.flipVoiceIncoming(caller.number, caller.label);
-          if (authorized && answer.isConnected) answer.click();
+          if (authorized && answer.isConnected) pressAnswer(answer);
         } catch (_) {
         } finally {
-          setTimeout(() => { answering = false; }, 1200);
+          // Short enough that an allowed caller gets many attempts inside one
+          // ring, long enough that a card Google is still animating in is not
+          // pressed several times in the same frame.
+          setTimeout(() => { answering = false; }, 700);
         }
       }
 
       const hang = findHangup();
-      if (hang && !inCall) {
-        inCall = true;
-        try { await window.flipVoiceAnswered(caller.number, caller.label); } catch (_) {}
-      } else if (!hang && inCall) {
-        inCall = false;
-        caller = {number: '', label: ''};
-        try { await window.flipVoiceEnded(); } catch (_) {}
+      if (hang) {
+        quiet = 0;
+        if (!inCall) {
+          inCall = true;
+          try { await window.flipVoiceAnswered(caller.number, caller.label); } catch (_) {}
+        }
+      } else if (inCall) {
+        // Google Voice renders neither an Answer nor a hang-up control for a
+        // moment while it swaps one card for another. Ending the call on that
+        // single frame shut the desktop app's voice mode down in the middle of
+        // a conversation, so the page has to see the call gone more than once.
+        quiet++;
+        if (quiet >= 2) {
+          quiet = 0;
+          inCall = false;
+          caller = {number: '', label: ''};
+          try { await window.flipVoiceEnded(); } catch (_) {}
+        }
+      } else {
+        quiet = 0;
       }
+      ringing = !!(answer || hang);
     } catch (_) {
     } finally {
       ticking = false;
@@ -534,7 +576,7 @@ const googleVoiceInitScript = `
     await reportDevices(true);
   }
 
-  const loop = () => { tick().then(() => setTimeout(loop, TICK_MS)); };
+  const loop = () => { tick().then(() => setTimeout(loop, ringing ? RING_TICK_MS : TICK_MS)); };
   setTimeout(() => { primeDevices().then(loop); }, 250);
   // The harness drives ticks directly instead of waiting on the timer.
   window.__flipVoiceTick = tick;

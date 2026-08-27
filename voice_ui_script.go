@@ -91,10 +91,11 @@ const voiceDesktopInitScript = `
   }
 
   /* ---------- the embedded Google Voice panel (Connections) ----------
-     Google Voice stays alive in its own Edge process so Web Push can wake an
-     incoming call. While Connections is open, that window is visually docked
-     into the panel below. While the page is moving/scrolling, FlipAi briefly
-     hides the native window instead of making it chase the page around. */
+     Google Voice is FlipAi's own browser view, kept alive by FlipAi in its own
+     process so it stays signed in and listening with the FlipAi window closed.
+     While Connections is open, that view stands inside the panel below; the
+     rest of the time it is parked off-screen. There is no state in which it is
+     a window of its own on the desktop. */
   let dockTimer=0;
   let lastDockJSON='';
   let desiredDockJSON='';
@@ -105,18 +106,31 @@ const voiceDesktopInitScript = `
     const el=q('#gv-embed-slot');
     if(!el) return null;
     const r=el.getBoundingClientRect();
-    // A native Edge window cannot be clipped by HTML. Only show it when the
-    // whole reserved panel is actually visible; otherwise it would float over
-    // unrelated FlipAi content as the user scrolls.
-    if(r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight) return null;
-    if(r.width<160||r.height<160) return null;
+    // A native window cannot be clipped by HTML, so it is clipped here: Google
+    // Voice is docked to the part of the reserved panel that is really on
+    // screen, and to nothing else.
+    //
+    // This used to refuse to dock at all unless the whole panel fitted in the
+    // viewport, which is why Google Voice would simply not be there on a
+    // smaller FlipAi window, at a higher display scale, or with the page
+    // scrolled by a few pixels -- the one symptom nobody could explain,
+    // because the panel looked exactly the same as when it was starting up.
+    const left=Math.max(r.left,0);
+    const top=Math.max(r.top,0);
+    const right=Math.min(r.right,innerWidth);
+    const bottom=Math.min(r.bottom,innerHeight);
+    const width=right-left;
+    const height=bottom-top;
+    // Below this there is not enough of the panel on screen to be worth
+    // showing a browser in, and the window is withdrawn instead.
+    if(width<160||height<160) return null;
     const dpr=devicePixelRatio||1;
     return {
       visible:true,
-      x:Math.round(r.left*dpr),
-      y:Math.round(r.top*dpr),
-      width:Math.round(r.width*dpr),
-      height:Math.round(r.height*dpr)
+      x:Math.round(left*dpr),
+      y:Math.round(top*dpr),
+      width:Math.round(width*dpr),
+      height:Math.round(height*dpr)
     };
   }
 
@@ -129,17 +143,10 @@ const voiceDesktopInitScript = `
       desiredDockJSON=raw;
       dockStableSince=Date.now();
     }
-    // Scrolling/resizing used to make the separate Edge window jump after the
-    // page every 250 ms. Withdraw it while the rectangle is moving, then dock
-    // once after the panel has been still for a moment.
-    if(body.visible&&Date.now()-dockStableSince<220){
-      const hiddenRaw=JSON.stringify(hiddenDock);
-      if(lastDockJSON!==hiddenRaw){
-        lastDockJSON=hiddenRaw;
-        try{ await post('/dock',hiddenDock); }catch(_){}
-      }
-      return;
-    }
+    // The panel follows the page rather than being withdrawn while the page
+    // moves. Withdrawing it during a scroll is what made Google Voice blink
+    // out every time the user touched the wheel; the window is clipped to the
+    // visible part of the panel above, so tracking it is safe.
     if(!force&&raw===lastDockJSON) return;
     lastDockJSON=raw;
     try{ await post('/dock',body); }catch(_){}
@@ -212,8 +219,22 @@ const voiceDesktopInitScript = `
   function autosave(node){ node.addEventListener('change',scheduleSave); if(node.tagName==='INPUT'&&node.type!=='checkbox') node.addEventListener('input',scheduleSave); return node; }
 
   /* ---------- shared status ---------- */
+  // A call is not one thing. Reporting "connected" for a call whose agent
+  // never entered voice mode is exactly how a caller could be told everything
+  // was fine while hearing silence, so each stage says what it is.
+  function callPill(rt){
+    switch(rt?.callPhase){
+      case 'ringing': return pill('Answering a call','ok');
+      case 'refused': return pill('Ringing — caller not allowed','warn');
+      case 'connecting': return pill('Answered — starting voice','warn');
+      case 'live': return pill(rt.caller?('Talking to '+rt.caller):'Talking','ok');
+      case 'unbridged': return pill('Answered by hand — not bridged','warn');
+    }
+    return null;
+  }
   function runtimePill(rt){
-    if(rt?.inCall) return pill('On a call','ok');
+    const call=callPill(rt);
+    if(call) return call;
     if(!rt?.browserRunning) return pill('Not running','warn');
     return rt.signedIn?pill('Listening for calls','ok'):pill('Sign in to Google Voice','warn');
   }
@@ -235,10 +256,10 @@ const voiceDesktopInitScript = `
     const rt=snapshot.runtime||{},cfg=snapshot.config||{};
     if(rt.docked&&rt.browserRunning) return null;
     if(!cfg.enabled) return {title:'Calling is off',detail:'Turn on Google Voice calling under Settings and the live Google Voice browser appears here.'};
-    if(!snapshot.webView2) return {title:'Windows is missing the component that shows Google Voice',detail:'FlipAi draws Google Voice with Microsoft Edge. Install or repair Microsoft Edge/WebView2, then press Retry.',retry:true};
+    if(!snapshot.webView2) return {title:'Windows is missing the component that shows Google Voice',detail:'FlipAi draws Google Voice with the Microsoft Edge WebView2 Runtime, the same component it draws itself with. Install or repair it, then press Retry.',retry:true};
     if(rt.lastOpenError) return {title:'Google Voice could not start',why:rt.lastOpenError,retry:true,detail:'Nothing else in FlipAi is affected — texts and Gmail routing carry on.'};
     if(!rt.browserRunning) return {title:'Starting Google Voice...',why:rt.lastOpen||'',detail:'FlipAi is starting the persistent Google Voice receiver. If it stays here, press Retry.',retry:true};
-    if(!rt.docked) return {title:'Google Voice is listening in the background',why:rt.dockBlocked||'',detail:'Scroll until this whole panel is visible and Google Voice will appear here. It stays signed in and keeps taking calls while hidden.',retry:true};
+    if(!rt.docked) return {title:'Google Voice is listening in the background',why:rt.dockBlocked||'',detail:'Scroll this panel into view and Google Voice appears here. It stays signed in and keeps taking calls while it is out of sight.',retry:true};
     return {title:'Google Voice is loading...',detail:'The receiver is running; waiting for it to paint in this panel.'};
   }
 
@@ -270,7 +291,7 @@ const voiceDesktopInitScript = `
     set('vcs-audio',snapshot.audioWarning?pill('Needs attention','warn'):pill('Ready — silent and virtual','ok'));
     set('vcs-routing',/Applied automatically|is wired to the cables/.test(rt.routingNote||'')?pill('Applied','ok'):pill(rt.routingNote?'Waiting':'Not applied yet','warn'));
     set('vcs-agents',(snapshot.callAgents||[]).length?pill((snapshot.callAgents||[]).join(' and '),'ok'):pill('Nobody yet','warn'));
-    set('vcs-call',rt.inCall?pill(rt.caller?('Connected — '+rt.caller):'Connected','ok'):pill('Idle'));
+    set('vcs-call',callPill(rt)||pill('Idle'));
     set('vcs-ring',rt.lastRingAt&&!/^0001/.test(rt.lastRingAt)?pill(new Date(rt.lastRingAt).toLocaleString(),'ok'):pill('Never','warn'));
     set('vcs-webview2',snapshot.webView2?pill(snapshot.webView2,'ok'):pill('Not installed','warn'));
     set('vcs-permissions',pill('Mic + notifications allowed','ok'));
@@ -285,7 +306,8 @@ const voiceDesktopInitScript = `
     if(snapshot.audioWarning) out.push(callout('Audio path: ',snapshot.audioWarning));
     if(rt.routingNote&&!/Applied automatically|is wired to the cables/.test(rt.routingNote)) out.push(callout('Desktop app audio: ',rt.routingNote));
     if(cfg.enabled&&rt.browserRunning&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))) out.push(callout('No call has ever rung here. ','In Google Voice itself, open Settings → Calls and make sure receiving calls on this device is on.'));
-    if(rt.blocked) out.push(callout('Last call was not connected: ',rt.blocked));
+    if(rt.callNote) out.push(callout('This call: ',rt.callNote));
+    if(rt.blocked&&!rt.callNote) out.push(callout('Last call was not connected: ',rt.blocked));
     if(rt.lastError&&!rt.lastOpenError) out.push(callout('Google Voice window: ',rt.lastError));
     return out;
   }
@@ -338,7 +360,7 @@ const voiceDesktopInitScript = `
     rows.append(row('Agents on calls','Set by giving an agent a number that may call, on the Agents page.',cell('vcs-agents')));
     rows.append(row('Current call','',cell('vcs-call')));
     rows.append(row('Ring seen','Whether a call has reached Google Voice.',cell('vcs-ring')));
-    rows.append(row('Edge WebView2 runtime','Windows component FlipAi uses for its desktop UI.',cell('vcs-webview2')));
+    rows.append(row('Edge WebView2 runtime','The Windows component FlipAi draws both its own window and Google Voice with.',cell('vcs-webview2')));
     rows.append(row('Browser permissions','Microphone and notifications for Google Voice are granted by FlipAi.',cell('vcs-permissions')));
     body.append(rows);
 

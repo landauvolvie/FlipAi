@@ -9,49 +9,76 @@ import (
 	"time"
 )
 
-// "Open it in its own window" is a one-shot. Docking the window again settles
-// where it belongs when it is next put away -- in the background.
-//
-// The flag used to be permanent: one pop-out and every later undock, on a page
-// navigation or an expired dock, restored Google Voice on top of whatever the
-// user had moved on to.
-func TestPoppingOutOnceDoesNotOutliveTheNextDock(t *testing.T) {
-	// hwnd 0 is not a window, so every Win32 call below is a harmless no-op and
-	// what is under test is the state machine that decides them.
-	c := newVoiceDockController(0, false)
-
-	c.Apply(VoiceDockRequest{PopOut: true, At: time.Now()}, time.Now(), 0)
-	if !c.restore {
-		t.Fatal("a pop-out request did not ask for the window to be shown")
+// The whole complaint this rewrite answers is "a browser window keeps appearing
+// on my desktop". There are now exactly two places the Google Voice window can
+// be -- inside the FlipAi panel, or parked off every display -- and this is the
+// test that says so. A window that is not docked is parked; it is never
+// restored, never shown, and never given a title bar back.
+func TestAnUndockedGoogleVoiceWindowIsParkedRatherThanShown(t *testing.T) {
+	body := dockSource(t)
+	i := strings.Index(body, "func (c *voiceDockController) undock(")
+	if i < 0 {
+		t.Fatal("undock is gone")
 	}
-	if c.docked {
-		t.Fatal("a pop-out request docked the window")
+	end := strings.Index(body[i:], "\n}\n")
+	if end < 0 {
+		t.Fatal("could not read the body of undock")
 	}
-
-	c.dock([4]int32{10, 20, 900, 700}, 0)
-	if !c.docked {
-		t.Fatal("the window did not dock")
+	undock := body[i : i+end]
+	if !strings.Contains(undock, "c.park()") {
+		t.Error("undocking no longer parks the window, so Google Voice can appear as a window of its own")
 	}
-	if c.restore {
-		t.Error("docking left the earlier pop-out standing, so the next undock will float the window")
-	}
-
-	c.undock()
-	if c.docked {
-		t.Error("the window is still docked after undocking")
+	for _, forbidden := range []string{"voiceSWRestore", "voiceSWMinimize", "wsExAppWindow", "wsOverlapped"} {
+		if strings.Contains(undock, forbidden) {
+			t.Errorf("undocking still uses %s, which turns Google Voice back into an ordinary desktop window", forbidden)
+		}
 	}
 }
 
-// A window the user opened deliberately, and never docked, is still theirs to
-// keep on screen.
-func TestAWindowOpenedOnPurposeStaysOnScreenUntilItIsDocked(t *testing.T) {
-	c := newVoiceDockController(0, true)
-	if !c.restore {
-		t.Fatal("a window opened visibly should not be put away on the first undock")
+// Parking must put the window somewhere no monitor can show it, and must take
+// away its ability to steal focus while it is there.
+func TestParkingPutsTheWindowBeyondEveryDisplay(t *testing.T) {
+	x, y := parkedWindowOrigin()
+	if x <= 0 || y <= 0 {
+		t.Fatalf("the parked position (%d,%d) is not past the desktop", x, y)
 	}
-	c.dock([4]int32{0, 0, 900, 700}, 0)
-	if c.restore {
-		t.Error("docking should settle the window into the app")
+	body := dockSource(t)
+	i := strings.Index(body, "func (c *voiceDockController) park(")
+	if i < 0 {
+		t.Fatal("park is gone")
+	}
+	end := strings.Index(body[i:], "\n}\n")
+	park := body[i : i+end]
+	if !strings.Contains(park, "swpNoActivate") {
+		t.Error("parking the window can take focus from whatever the user is doing")
+	}
+	if !strings.Contains(park, "applyVoiceWindowChrome(c.hwnd, false)") {
+		t.Error("parking does not re-apply the no-activate, no-taskbar chrome")
+	}
+}
+
+// Whichever of the two states the window is in, it is never in the taskbar and
+// never in Alt-Tab. Those are the two places a user would see "a second app".
+func TestTheGoogleVoiceWindowIsNeverAnAppWindow(t *testing.T) {
+	body := dockSource(t)
+	i := strings.Index(body, "func applyVoiceWindowChrome(")
+	if i < 0 {
+		t.Fatal("applyVoiceWindowChrome is gone")
+	}
+	end := strings.Index(body[i:], "\n}\n")
+	chrome := body[i : i+end]
+	if !strings.Contains(chrome, "ex &^= wsExAppWindow") {
+		t.Error("the Google Voice window can still claim a taskbar button")
+	}
+	if !strings.Contains(chrome, "ex |= wsExToolWin") {
+		t.Error("the Google Voice window can still appear in Alt-Tab")
+	}
+	if !strings.Contains(chrome, "style &^= wsOverlapped") {
+		t.Error("the Google Voice window can still have a title bar")
+	}
+	// Docked it must be typeable -- signing in to Google is a keyboard task.
+	if !strings.Contains(chrome, "ex &^= wsExNoActivate") {
+		t.Error("a docked Google Voice panel that refuses activation cannot be signed in to")
 	}
 }
 
@@ -62,14 +89,8 @@ func TestAWindowOpenedOnPurposeStaysOnScreenUntilItIsDocked(t *testing.T) {
 // blank strip along the bottom. Every style change has to be followed by a
 // re-layout.
 func TestEveryFrameChangeReLaysOutTheBrowser(t *testing.T) {
-	source, err := os.ReadFile("voice_dock_windows.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Checked out on Windows this file has CRLF line endings, so anything
-	// looking for a bare newline finds nothing at all.
-	body := strings.ReplaceAll(string(source), "\r\n", "\n")
-	for _, fn := range []string{"func (c *voiceDockController) dock(", "func (c *voiceDockController) undock("} {
+	body := dockSource(t)
+	for _, fn := range []string{"func (c *voiceDockController) dock(", "func (c *voiceDockController) park("} {
 		i := strings.Index(body, fn)
 		if i < 0 {
 			t.Fatalf("%s is gone", fn)
@@ -82,19 +103,27 @@ func TestEveryFrameChangeReLaysOutTheBrowser(t *testing.T) {
 			t.Errorf("%s changes the window frame without telling the browser to re-measure", fn)
 		}
 	}
-	// And undocking must resize rather than keep the docked geometry, or the
-	// browser is never told at all.
-	i := strings.Index(body, "func (c *voiceDockController) undock(")
+	i := strings.Index(body, "func (c *voiceDockController) park(")
 	end := strings.Index(body[i:], "\n}\n")
 	if strings.Contains(body[i:i+end], "swpNoSize") {
-		t.Error("undocking still asks Windows not to resize, so no WM_SIZE reaches the browser")
+		t.Error("parking still asks Windows not to resize, so no WM_SIZE reaches the browser")
+	}
+}
+
+// A parked window keeps a real browser size. At one pixel Google Voice renders
+// its narrow layout, whose ringing card is not the one FlipAi looks for.
+func TestAParkedWindowKeepsADesktopSizedViewport(t *testing.T) {
+	if voiceParkedWidth < 900 || voiceParkedHeight < 600 {
+		t.Fatalf("a parked window of %dx%d is small enough to change how Google Voice lays itself out", voiceParkedWidth, voiceParkedHeight)
 	}
 }
 
 // Not being able to place the window has to come with a reason. "FlipAi could
 // not put it in this panel" on its own is a dead end for whoever reads it.
 func TestBeingUnableToDockSaysWhy(t *testing.T) {
-	c := newVoiceDockController(0, false)
+	// hwnd 0 is not a window, so every Win32 call below is a harmless no-op and
+	// what is under test is the state machine that decides them.
+	c := newVoiceDockController(0)
 
 	c.Apply(VoiceDockRequest{}, time.Now(), 0)
 	if !strings.Contains(c.blocked, "not asking for the panel") {
@@ -114,11 +143,6 @@ func TestBeingUnableToDockSaysWhy(t *testing.T) {
 	c.Apply(VoiceDockRequest{Visible: true, Width: 900, Height: 700, At: time.Now()}, time.Now(), 0)
 	if !strings.Contains(c.blocked, "could not find its own window") {
 		t.Errorf("a missing FlipAi window said: %q", c.blocked)
-	}
-
-	c.Apply(VoiceDockRequest{PopOut: true, At: time.Now()}, time.Now(), 0)
-	if !strings.Contains(c.blocked, "own window") {
-		t.Errorf("a popped-out window said: %q", c.blocked)
 	}
 }
 
@@ -157,4 +181,15 @@ func TestRemoteDesktopDrawsInSoftwareFirst(t *testing.T) {
 	if !strings.Contains(software.args, "--disable-gpu") {
 		t.Errorf("software drawing does not turn the graphics card off: %q", software.args)
 	}
+}
+
+func dockSource(t *testing.T) string {
+	t.Helper()
+	source, err := os.ReadFile("voice_dock_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Checked out on Windows this file has CRLF line endings, so anything
+	// looking for a bare newline finds nothing at all.
+	return strings.ReplaceAll(string(source), "\r\n", "\n")
 }

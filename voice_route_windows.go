@@ -24,9 +24,11 @@ import (
 // which is exactly when its voice mode starts.
 //
 // The store is keyed by the process, so the app has to be running to be
-// routed. Routing is applied whenever the device list changes and again just
-// before every call is bridged, and the outcome -- including "the app is not
-// running yet" -- is recorded where the Settings page shows it.
+// routed. Routing is applied whenever the device list changes and again while
+// the phone is still ringing, before anything opens an audio stream -- see
+// startAgentVoiceSession, which is the only caller that matters. The outcome,
+// including "the app is not running yet", is recorded where the Settings page
+// shows it.
 
 var (
 	procVoiceGetWindowThreadProcessID = voiceUser32.NewProc("GetWindowThreadProcessId")
@@ -36,22 +38,6 @@ func windowProcessID(hwnd uintptr) uint32 {
 	var pid uint32
 	procVoiceGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	return pid
-}
-
-// activateAgentVoiceWithRouting is what answering a call runs: make sure the
-// desktop app is up, wire its audio, then start its voice mode -- in that
-// order, so the microphone stream voice mode opens is already the cable. A
-// routing failure is recorded but never stops the voice mode from starting: a
-// call with one working direction beats a call nobody answered.
-func activateAgentVoiceWithRouting(dataDir string, cfg VoiceCallConfig, agent string) error {
-	target := voiceAgentConfig(cfg, agent)
-	hwnd, err := ensureAgentAppWindow(target)
-	if err != nil {
-		routeAgentAppAudio(dataDir, cfg, agent) // records why nothing was wired
-		return err
-	}
-	routeAgentAppAudio(dataDir, cfg, agent)
-	return startAgentVoiceMode(target, hwnd)
 }
 
 // voiceRouteMu keeps concurrent routing attempts (a device report racing a
@@ -73,7 +59,7 @@ func routeAgentAppAudio(dataDir string, cfg VoiceCallConfig, agent string) {
 		note("Not applied: " + plan.Warning)
 		return
 	}
-	hwnd := findWindowContaining(target.AppTitle)
+	hwnd := findAgentAppWindow(agent, target)
 	if hwnd == 0 {
 		note(fmt.Sprintf("Waiting for the %s desktop app: its audio is routed to the cables the moment its window exists.", target.AppTitle))
 		return

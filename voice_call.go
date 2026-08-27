@@ -67,7 +67,14 @@ type VoiceRuntimeState struct {
 	SignedIn       bool   `json:"signedIn"`
 	Page           string `json:"page,omitempty"`
 	InCall         bool   `json:"inCall"`
-	Caller         string `json:"caller,omitempty"`
+	// CallPhase is where in a call's life the machine in voice_session.go
+	// currently is, and CallNote is the same thing in a sentence. They exist so
+	// the desktop UI can tell "ringing", "answered but the agent has not
+	// started talking yet" and "a real conversation is up" apart -- which all
+	// used to read as the same "connected".
+	CallPhase string `json:"callPhase,omitempty"`
+	CallNote  string `json:"callNote,omitempty"`
+	Caller    string `json:"caller,omitempty"`
 	// CallerLabel is the raw caller ID text Google Voice displayed. It is kept
 	// so a blocked call can say what FlipAi actually saw instead of leaving the
 	// user guessing why nothing happened.
@@ -110,6 +117,11 @@ type VoiceRuntimeState struct {
 	// reaching this window", which is otherwise invisible.
 	Controls   string    `json:"controls,omitempty"`
 	LastRingAt time.Time `json:"lastRingAt,omitempty"`
+
+	// ControlPort is the loopback DevTools port the Google Voice window opened
+	// for FlipAi. It is written down rather than discovered so the host process
+	// can reach the same window to send an MMS without guessing at listeners.
+	ControlPort int `json:"controlPort,omitempty"`
 
 	LastOpen string `json:"lastOpen,omitempty"`
 	// LastOpenError is only ever set by a step that failed, so a progress note
@@ -208,10 +220,6 @@ type VoiceDockRequest struct {
 	Y       int  `json:"y"`
 	Width   int  `json:"width"`
 	Height  int  `json:"height"`
-	// PopOut is the page asking for the window back as an ordinary window of
-	// its own rather than as a panel. It travels with the request that ends
-	// the docking so the window is never put away and reopened in one breath.
-	PopOut bool `json:"popOut,omitempty"`
 	// At is when the page last said so. A page that has navigated away, been
 	// hidden, or closed stops saying it, and the dock expires by itself rather
 	// than leaving a stranded window behind.
@@ -272,7 +280,7 @@ func (d *dockWriter) shouldWrite(next VoiceDockRequest) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	same := d.last.Visible == next.Visible && d.last.X == next.X && d.last.Y == next.Y &&
-		d.last.Width == next.Width && d.last.Height == next.Height && d.last.PopOut == next.PopOut
+		d.last.Width == next.Width && d.last.Height == next.Height
 	if same && next.At.Sub(d.last.At) < voiceDockTTL/3 {
 		return false
 	}
@@ -832,10 +840,9 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
 			return
 		}
-		// Popping out is also the end of docking: the window has to stop
-		// standing inside the FlipAi window before it can be a window of its
-		// own. The page stops reporting a panel at the same moment.
-		_ = saveVoiceDock(dataDir, VoiceDockRequest{PopOut: true, At: time.Now()})
+		// Google Voice has no window of its own to open any more: it lives in
+		// the FlipAi panel or nowhere. This makes sure it is running and
+		// standing where the page asked for it.
 		if err := openGoogleVoiceWindow(dataDir, true); err != nil {
 			activity.Add("error", "voice", "Open Google Voice failed: "+truncate(err.Error(), 300), "", "", "")
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -905,11 +912,17 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 	return mux
 }
 
-// voiceBridge holds every decision the injected Google Voice page asks FlipAi
-// to make during a call. It deliberately contains no Windows types: the same
-// code that runs behind the WebView2 bindings is what the tests and the browser
-// harness exercise, so the ring/answer/bridge/hang-up path is verifiable
-// without a phone line.
+// voiceBridge is the one thing that acts on a call.
+//
+// It owns the call state machine, turns the effects the machine emits into
+// real work, and is the only writer of the call fields in the runtime state
+// file. Everything that can see the Google Voice page -- the script injected
+// into it, and FlipAi's own control channel watching from outside -- reports
+// what it sees here, and neither of them decides anything.
+//
+// It deliberately contains no Windows types: the same code that runs behind the
+// WebView2 bindings is what the tests and the headless browser harness
+// exercise, so ring/answer/bridge/hang-up is verifiable without a phone line.
 type voiceBridge struct {
 	dataDir string
 	// mainConfig supplies the agents, because who may call an agent is the same
@@ -918,15 +931,95 @@ type voiceBridge struct {
 	activate   func(cfg VoiceCallConfig, agent string) error
 	deactivate func(cfg VoiceCallConfig, agent string) error
 
-	mu    sync.Mutex
-	agent string
+	// press is how Answer is pressed, one rung of the ladder per attempt. It is
+	// nil where there is no browser to press anything in, which is every test
+	// that is not the browser harness; the page's own click still happens.
+	press func(effect voiceCallEffect) error
+	// route points the desktop app's audio at the cables. Nil off Windows.
+	route func(cfg VoiceCallConfig, agent string)
+
+	machine *voiceCallMachine
+
+	mu         sync.Mutex
+	agentWork  chan func()
+	answerWork chan func()
 }
 
 func newVoiceBridge(dataDir string, mainConfig func() Config, activate, deactivate func(VoiceCallConfig, string) error) *voiceBridge {
 	if mainConfig == nil {
 		mainConfig = func() Config { return Config{} }
 	}
-	return &voiceBridge{dataDir: dataDir, mainConfig: mainConfig, activate: activate, deactivate: deactivate}
+	b := &voiceBridge{dataDir: dataDir, mainConfig: mainConfig, activate: activate, deactivate: deactivate}
+	// Authorization is answered fresh for every ring, from the configuration on
+	// disk, so a number added on the Agents page a moment ago is already in
+	// force and a number removed is already gone.
+	b.machine = newVoiceCallMachine(func(caller, label string) voiceCallDecision {
+		return decideVoiceCall(loadVoiceCallConfig(b.dataDir), b.mainConfig(), caller, label)
+	})
+	return b
+}
+
+// RunEffectsInBackground moves the slow effects off the caller's thread.
+//
+// The receiver calls this because its bindings run on the window's own message
+// thread: starting a desktop voice session takes seconds, and doing that inline
+// would freeze the Google Voice window for the whole of it -- during a call,
+// with the caller listening. Answering has its own queue so it can never end up
+// waiting behind a desktop app that is slow to come up.
+func (b *voiceBridge) RunEffectsInBackground() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.agentWork != nil {
+		return
+	}
+	b.agentWork = make(chan func(), 32)
+	b.answerWork = make(chan func(), 8)
+	for _, queue := range []chan func(){b.agentWork, b.answerWork} {
+		go func(q chan func()) {
+			for fn := range q {
+				fn()
+			}
+		}(queue)
+	}
+}
+
+// Drain waits for the queued effects to finish.
+//
+// It exists for one moment: the Google Voice view closing, after which this
+// process exits. A teardown that was only queued at that point would never run,
+// and the desktop app would be left in voice mode with nobody on the line.
+func (b *voiceBridge) Drain(timeout time.Duration) {
+	b.mu.Lock()
+	queue := b.agentWork
+	b.mu.Unlock()
+	if queue == nil {
+		return
+	}
+	done := make(chan struct{})
+	select {
+	case queue <- func() { close(done) }:
+	case <-time.After(timeout):
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+}
+
+func (b *voiceBridge) schedule(queue chan func(), fn func()) {
+	if queue == nil {
+		fn()
+		return
+	}
+	select {
+	case queue <- fn:
+	default:
+		// The queue only backs up behind a desktop app that has stopped
+		// responding. Losing a teardown would leave it listening to the cable
+		// for the next caller, so the work is still done, just not in order.
+		go fn()
+	}
 }
 
 // AudioSettings tells the page which endpoints Google Voice must use. They are
@@ -967,100 +1060,46 @@ func (b *voiceBridge) Devices(raw string) {
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 		s.Devices = named
 		s.DeviceLabelsHidden = hidden && len(named) == 0
-		s.LastEvent = "audio-devices"
 	})
 	platformVoiceDevicesChanged(b.dataDir)
 }
 
-// Incoming answers one question: should the page click Answer? The answer is
-// the authorization decision and nothing else -- an authorized caller is
-// always answered, an unauthorized one never is; there is no separate
-// auto-answer mode to find. What Google Voice displayed is recorded either
-// way so a refused call is explainable.
+// Observe is the single entrance for everything that can see the call.
+func (b *voiceBridge) Observe(obs voiceObservation) voiceCallStatus {
+	effects := b.machine.Observe(obs, time.Now())
+	b.run(effects)
+	status := b.machine.Status()
+	b.writeCallState(status)
+	return status
+}
+
+// Incoming answers one question for the page: should it click Answer? The
+// answer is the authorization decision and nothing else -- an authorized caller
+// is always answered, an unauthorized one never is; there is no separate
+// auto-answer mode to find.
+//
+// FlipAi presses Answer through its own control channel as well. Pressing a
+// ringing call's Answer control twice does nothing the second time, and having
+// two independent ways to press it is what stops one wedged page from sending
+// an allowed caller to voicemail.
 func (b *voiceBridge) Incoming(caller, label string) bool {
-	cfg := loadVoiceCallConfig(b.dataDir)
-	d := decideVoiceCall(cfg, b.mainConfig(), caller, label)
-	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-		s.LastRingAt = time.Now()
-		s.Caller = normalizeUSPhone(caller)
-		s.CallerLabel = normalizeCallerLabel(label)
-		s.Agent = d.Agent
-		s.Blocked = d.Reason
-		if d.Allowed {
-			s.LastEvent = "authorized-call-ringing"
-		} else {
-			s.LastEvent = "blocked-call-ringing"
-		}
-	})
-	return d.Allowed
+	status := b.Observe(voiceObservation{Answer: true, Caller: caller, Label: label})
+	return status.Phase == voicePhaseRinging
 }
 
 // Answered runs when a call is actually up, however it was answered. A call the
 // user picked up by hand still gets bridged if the caller is authorized.
 func (b *voiceBridge) Answered(caller, label string) bool {
-	cfg := loadVoiceCallConfig(b.dataDir)
-	d := decideVoiceCall(cfg, b.mainConfig(), caller, label)
-	number := normalizeUSPhone(caller)
-	name := normalizeCallerLabel(label)
-	if !d.Allowed {
-		b.setAgent("")
-		mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-			s.InCall = true
-			s.Caller = number
-			s.CallerLabel = name
-			s.Agent = ""
-			s.Blocked = d.Reason
-			s.LastEvent = "unbridged-call"
-		})
-		return false
-	}
-	if err := b.activate(cfg, d.Agent); err != nil {
-		// The agent is still recorded so hang-up can try to undo a half-started
-		// voice session rather than leaving the desktop app listening.
-		b.setAgent(d.Agent)
-		mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-			s.InCall = true
-			s.Caller = number
-			s.CallerLabel = name
-			s.Agent = d.Agent
-			s.Blocked = ""
-			s.LastError = err.Error()
-			s.LastEvent = "agent-voice-error"
-		})
-		return false
-	}
-	b.setAgent(d.Agent)
-	audioProblem := currentVoiceCablePlan(b.dataDir).Warning
-	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-		s.InCall = true
-		s.Caller = number
-		s.CallerLabel = name
-		s.Agent = d.Agent
-		s.Blocked = ""
-		s.LastEvent = "call-bridged"
-		if audioProblem != "" {
-			// The call is up and the agent is listening, but nothing carries the
-			// sound between them yet.
-			s.LastError = "The call was answered but the audio path is not usable. " + audioProblem
-		} else {
-			s.LastError = ""
-		}
-	})
-	return true
+	status := b.Observe(voiceObservation{InCall: true, Caller: caller, Label: label})
+	return status.InCall() && status.Agent != ""
 }
 
+// Ended is the page saying the call is gone. It is a definite statement -- the
+// page watched the hang-up control disappear -- so it ends the call outright
+// rather than waiting out the debounce the polled observations use.
 func (b *voiceBridge) Ended() {
-	agent := b.takeAgent()
-	if agent == "A" || agent == "C" {
-		_ = b.deactivate(loadVoiceCallConfig(b.dataDir), agent)
-	}
-	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-		s.InCall = false
-		s.Caller = ""
-		s.CallerLabel = ""
-		s.Agent = ""
-		s.LastEvent = "call-ended"
-	})
+	b.run(b.machine.End(time.Now()))
+	b.writeCallState(b.machine.Status())
 }
 
 func (b *voiceBridge) Page(href string, signedIn bool, controls string) {
@@ -1078,21 +1117,102 @@ func (b *voiceBridge) Page(href string, signedIn bool, controls string) {
 	})
 }
 
-func (b *voiceBridge) setAgent(agent string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.agent = agent
+// Status is the call as the machine sees it.
+func (b *voiceBridge) Status() voiceCallStatus { return b.machine.Status() }
+
+// run carries out the effects one observation produced.
+func (b *voiceBridge) run(effects []voiceCallEffect) {
+	cfg := loadVoiceCallConfig(b.dataDir)
+	for _, effect := range effects {
+		effect := effect
+		switch effect.Kind {
+		case voiceEffectAnswer:
+			if b.press == nil {
+				continue
+			}
+			b.schedule(b.answerWork, func() {
+				if err := b.press(effect); err != nil {
+					mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+						s.LastError = "FlipAi is trying to answer an allowed caller and has not managed it yet: " + truncate(err.Error(), 300)
+					})
+				}
+			})
+		case voiceEffectRouteAudio:
+			if b.route == nil {
+				continue
+			}
+			agent := effect.Agent
+			b.schedule(b.agentWork, func() { b.route(cfg, agent) })
+		case voiceEffectStartAgentVoice:
+			b.schedule(b.agentWork, func() { b.startAgentVoice(cfg, effect) })
+		case voiceEffectStopAgentVoice:
+			b.schedule(b.agentWork, func() { b.stopAgentVoice(cfg, effect) })
+		}
+	}
 }
 
-func (b *voiceBridge) takeAgent() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	agent := b.agent
-	b.agent = ""
-	if agent == "" {
-		// A call that FlipAi bridged in an earlier run of this process still has
-		// its agent on disk; the desktop app should not be left in voice mode.
-		agent = loadVoiceRuntime(b.dataDir).Agent
+func (b *voiceBridge) startAgentVoice(cfg VoiceCallConfig, effect voiceCallEffect) {
+	var err error
+	if b.activate != nil {
+		err = b.activate(cfg, effect.Agent)
 	}
-	return agent
+	b.machine.AgentVoiceResult(effect.Session, err)
+	status := b.machine.Status()
+	if err != nil {
+		mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+			s.LastError = "The call is connected but the desktop voice session did not start: " + truncate(err.Error(), 400)
+		})
+	}
+	b.writeCallState(status)
+}
+
+func (b *voiceBridge) stopAgentVoice(cfg VoiceCallConfig, effect voiceCallEffect) {
+	var err error
+	if b.deactivate != nil && (effect.Agent == "A" || effect.Agent == "C") {
+		err = b.deactivate(cfg, effect.Agent)
+	}
+	b.machine.AgentVoiceStopped(effect.Session)
+	if err != nil {
+		mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+			s.LastError = "The call ended but the desktop voice session may still be running: " + truncate(err.Error(), 300)
+		})
+	}
+	b.writeCallState(b.machine.Status())
+}
+
+// writeCallState is the only place the call fields in the runtime file are
+// written, so nothing can leave a stale "in a call" behind.
+func (b *voiceBridge) writeCallState(status voiceCallStatus) {
+	audioProblem := ""
+	if status.InCall() || status.Phase == voicePhaseRinging {
+		audioProblem = currentVoiceCablePlan(b.dataDir).Warning
+	}
+	now := time.Now()
+	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+		s.InCall = status.InCall()
+		s.Caller = status.Caller
+		s.CallerLabel = status.Label
+		s.Agent = status.Agent
+		s.Blocked = status.Refused
+		s.CallPhase = string(status.Phase)
+		s.CallNote = voiceCallStatusNote(status)
+		if status.Event != "" {
+			s.LastEvent = status.Event
+		}
+		if status.Phase == voicePhaseRinging || status.Phase == voicePhaseRefused {
+			s.LastRingAt = now
+		}
+		switch {
+		case audioProblem != "":
+			// The call is up and the agent is listening, but nothing carries
+			// the sound between them yet.
+			if status.InCall() {
+				s.LastError = "The call was answered but the audio path is not usable. " + audioProblem
+			}
+		case status.Phase == voicePhaseIdle, status.Phase == voicePhaseLive:
+			// A finished call and a working call both have nothing wrong with
+			// them; anything left over belongs to something that is over.
+			s.LastError = ""
+		}
+	})
 }
