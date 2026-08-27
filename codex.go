@@ -178,6 +178,12 @@ func (c *CodexClient) route(m rpcEnvelope) {
 		return
 	}
 	if m.Method != "" {
+		// Capture image-generation bytes before the bridge consumes the same
+		// notification for progress/final text. App Server v2 exposes the exact
+		// generated image on item/completed, so this avoids guessing from disk.
+		if m.Method == "item/completed" {
+			captureCodexImageFromItemCompleted(m.Params)
+		}
 		select {
 		case c.notifications <- m:
 		default:
@@ -428,6 +434,10 @@ func (c *CodexClient) releaseThreadWithRetry(threadID string) {
 func (c *CodexClient) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	params = applyCodexRequestDefaults(method, params)
 	if method == "turn/start" {
+		// A previous turn must never lend its image to a later SMS. The bridge is
+		// serial, so one empty slot per turn is sufficient and avoids any prompt
+		// or filesystem coordination.
+		clearCapturedCodexImage()
 		tid := stringParam(params, "threadId")
 		// An ephemeral thread has no rollout on disk and is never released, so it
 		// is still subscribed and must not be resumed. Durable threads are resumed
