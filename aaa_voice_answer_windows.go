@@ -11,15 +11,12 @@ import (
 	"time"
 )
 
-// This guard exists for the real Microsoft Edge Google Voice receiver. Google
-// Voice's Answer button can reject a synthetic DOM .click() even though FlipAi
-// can see the ring. The guard watches the already-authorized ring state and
-// invokes the visible Answer control through Windows UI Automation, which is
-// the same accessibility path a real user action uses.
-//
-// It also watches the manually-answered state. If the older DevTools detector
-// misses the transition into a live call, the desktop agent is started once so
-// a caller is never left connected to silence.
+// The Microsoft Edge receiver can see a Google Voice ring through DevTools,
+// but Google Voice sometimes ignores a synthetic DOM element.click(). This
+// narrow fallback invokes the already-authorized Answer control through
+// Windows UI Automation — the same accessibility action a keyboard/screen
+// reader uses. It only wakes while a fresh authorized ring exists, so there is
+// no polling PowerShell process during normal idle operation.
 func init() {
 	if len(os.Args) < 2 || os.Args[1] != "--google-voice" {
 		return
@@ -37,17 +34,28 @@ type voiceUIAState struct {
 }
 
 func runGoogleVoiceAnswerGuard(dataDir string) {
-	ticker := time.NewTicker(450 * time.Millisecond)
+	ticker := time.NewTicker(650 * time.Millisecond)
 	defer ticker.Stop()
 
 	var handledRing time.Time
 	var fallbackAgent string
 	var fallbackStarted bool
 	var inactiveTicks int
+	var lastStateCheck time.Time
 
 	for range ticker.C {
 		if quitRequested(dataDir) {
 			return
+		}
+		rt := loadVoiceRuntime(dataDir)
+		freshRing := !rt.LastRingAt.IsZero() && time.Since(rt.LastRingAt) >= 0 && time.Since(rt.LastRingAt) < 35*time.Second
+		needsAnswer := freshRing && rt.LastRingAt.After(handledRing) && rt.LastEvent == "authorized-call-ringing"
+		needsState := freshRing && !rt.InCall
+		if fallbackStarted && time.Since(lastStateCheck) >= 2*time.Second {
+			needsState = true
+		}
+		if !needsAnswer && !needsState {
+			continue
 		}
 
 		hwnd := googleVoiceHWND()
@@ -55,32 +63,34 @@ func runGoogleVoiceAnswerGuard(dataDir string) {
 			continue
 		}
 
-		rt := loadVoiceRuntime(dataDir)
-		state, _ := googleVoiceUIAState(hwnd)
-
-		// The normal receiver has already parsed caller ID and made the allowlist
-		// decision before it writes authorized-call-ringing. Do not duplicate
-		// authorization here; this watcher only makes the accepted call actually
-		// get picked up.
-		if rt.LastEvent == "authorized-call-ringing" && !rt.LastRingAt.IsZero() && rt.LastRingAt.After(handledRing) {
-			if time.Since(rt.LastRingAt) < 20*time.Second {
-				if err := invokeGoogleVoiceAnswerUIA(hwnd); err == nil {
-					handledRing = rt.LastRingAt
-					mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-						s.LastEvent = "answer-clicked-accessibly"
-						s.LastError = ""
-					})
-				}
+		if needsAnswer {
+			if err := invokeGoogleVoiceAnswerUIA(hwnd); err == nil {
+				handledRing = rt.LastRingAt
+				mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+					s.LastEvent = "answer-clicked-accessibly"
+					// Preserve a useful audio-path error if one already exists; the
+					// answer action itself succeeded and should not replace it.
+				})
+			} else {
+				// Keep trying this ring. Google Voice can create its visible card a
+				// fraction of a second before the accessible button arrives.
+				mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+					if s.LastEvent == "authorized-call-ringing" {
+						s.LastError = "Incoming call is authorized, but FlipAi has not been able to press Answer yet: " + err.Error()
+					}
+				})
 			}
 		}
 
-		// Give the normal bridge first chance to notice that Google Voice moved
-		// from ringing to a live call. If it does, it owns activation/teardown.
-		// The fallback only starts after the browser is clearly active while the
-		// runtime still says no call was bridged.
-		rt = loadVoiceRuntime(dataDir)
-		if !fallbackStarted && !rt.InCall && state.Active && !state.Ringing && rt.Agent != "" {
-			if !rt.LastRingAt.IsZero() && time.Since(rt.LastRingAt) < 30*time.Second {
+		// The ordinary Edge detector should see the live-call controls and call
+		// bridge.Answered. This is only the fallback for the real-world case seen
+		// in the recording where the user answered by hand but the desktop app
+		// never started.
+		if needsState {
+			lastStateCheck = time.Now()
+			state, _ := googleVoiceUIAState(hwnd)
+			rt = loadVoiceRuntime(dataDir)
+			if !fallbackStarted && freshRing && !rt.InCall && state.Active && !state.Ringing && rt.Agent != "" {
 				cfg := loadVoiceCallConfig(dataDir)
 				if err := activateAgentVoiceWithRouting(dataDir, cfg, rt.Agent); err == nil {
 					fallbackStarted = true
@@ -90,38 +100,40 @@ func runGoogleVoiceAnswerGuard(dataDir string) {
 						s.InCall = true
 						s.Blocked = ""
 						s.LastEvent = "call-bridged-accessibility-fallback"
-						s.LastError = ""
+						if currentVoiceCablePlan(dataDir).Warning == "" {
+							s.LastError = ""
+						}
 					})
-				} else {
+				} else if err != nil {
 					mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
 						s.LastError = "Google Voice answered, but FlipAi could not start desktop Voice: " + err.Error()
 						s.LastEvent = "agent-voice-error"
 					})
 				}
 			}
-		}
 
-		if fallbackStarted {
-			if state.Active {
+			if fallbackStarted {
+				if state.Active {
+					inactiveTicks = 0
+					continue
+				}
+				inactiveTicks++
+				if inactiveTicks < 2 {
+					continue
+				}
+				cfg := loadVoiceCallConfig(dataDir)
+				_ = deactivateAgentVoice(cfg, fallbackAgent)
+				fallbackStarted = false
+				fallbackAgent = ""
 				inactiveTicks = 0
-				continue
+				mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+					s.InCall = false
+					s.Caller = ""
+					s.CallerLabel = ""
+					s.Agent = ""
+					s.LastEvent = "call-ended"
+				})
 			}
-			inactiveTicks++
-			if inactiveTicks < 4 {
-				continue
-			}
-			cfg := loadVoiceCallConfig(dataDir)
-			_ = deactivateAgentVoice(cfg, fallbackAgent)
-			fallbackStarted = false
-			fallbackAgent = ""
-			inactiveTicks = 0
-			mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
-				s.InCall = false
-				s.Caller = ""
-				s.CallerLabel = ""
-				s.Agent = ""
-				s.LastEvent = "call-ended"
-			})
 		}
 	}
 }
@@ -135,7 +147,7 @@ func invokeGoogleVoiceAnswerUIA(hwnd uintptr) error {
 		return err
 	}
 	if strings.TrimSpace(out) != "clicked" {
-		return errors.New("the incoming call was visible, but Windows accessibility could not find an enabled Answer control")
+		return errors.New("the incoming call is visible, but Windows accessibility cannot find an enabled Answer control")
 	}
 	return nil
 }
@@ -161,29 +173,33 @@ func googleVoiceUIAState(hwnd uintptr) (voiceUIAState, error) {
 }
 
 func runVoiceUIAScript(hwnd uintptr, action string) (string, error) {
-	// UI Automation is intentionally used instead of screen coordinates. The
-	// Google Voice panel can be docked, resized, moved, or on another DPI scale;
-	// the accessible button remains the same control.
+	// UI Automation is deliberately coordinate-free. The panel can be docked,
+	// resized, moved, or displayed at a different DPI and the same accessible
+	// Answer control is still invoked.
 	script := fmt.Sprintf(`
 Add-Type -AssemblyName UIAutomationClient
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]%d)
 if ($null -eq $root) { Write-Output 'no-root'; exit 2 }
-$buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-  (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
+$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
 $ringing = $false
 $active = $false
 $answer = $null
-foreach ($b in $buttons) {
-  $name = '' + $b.Current.Name
-  $id = '' + $b.Current.AutomationId
-  $help = '' + $b.Current.HelpText
+$hasHold = $false
+$hasMute = $false
+$hasKeypad = $false
+foreach ($e in $all) {
+  $name = '' + $e.Current.Name
+  $id = '' + $e.Current.AutomationId
+  $help = '' + $e.Current.HelpText
   $text = ($name + ' ' + $id + ' ' + $help).Trim()
-  if ($text -match '(?i)(answer|accept|pick\s*up|take\s+call)') {
-    $ringing = $true
-    if ($null -eq $answer -and $b.Current.IsEnabled) { $answer = $b }
-  }
+  if ($text -match '(?i)(incoming\s+call|answer|accept|pick\s*up|take\s+call)') { $ringing = $true }
   if ($text -match '(?i)(hang\s*up|end\s+(the\s+)?call|disconnect|leave\s+call)') { $active = $true }
+  if ($text -match '(?i)\bhold\b') { $hasHold = $true }
+  if ($text -match '(?i)\bmute\b') { $hasMute = $true }
+  if ($text -match '(?i)\bkeypad\b') { $hasKeypad = $true }
+  if ($null -eq $answer -and $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $e.Current.IsEnabled -and $text -match '(?i)(answer|accept|pick\s*up|take\s+call)') { $answer = $e }
 }
+if (-not $ringing -and $hasHold -and $hasMute -and $hasKeypad) { $active = $true }
 if ('%s' -eq 'state') {
   $parts = @()
   if ($ringing) { $parts += 'ringing' }
