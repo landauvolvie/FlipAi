@@ -55,6 +55,31 @@ func sendThreadedVoiceReply(ctx context.Context, client MailClient, original Gma
 	return client.SendText(ctx, target, body)
 }
 
+// routeGeneratedImageReply sends an already-generated Codex image through the
+// real Google Voice web UI. Google Voice's email reply gateway accepts text but
+// silently drops image attachments, so image replies must bypass Gmail. The
+// image is marked consumed after one UI attempt so a split SMS reply never
+// retries the same picture on every text part. If the UI attempt fails, the
+// caller receives the text reply over the normal Gmail path plus a short notice
+// that the image itself could not be delivered.
+func routeGeneratedImageReply(ctx context.Context, original GmailMessage, body string) (handled bool, fallbackBody string) {
+	image, imageKey := generatedImageForVoiceReply(original, body)
+	if image == nil {
+		return false, body
+	}
+	err := sendGoogleVoiceImageMMS(ctx, original, body, image)
+	markGeneratedImageDelivered(imageKey)
+	if err == nil {
+		return true, body
+	}
+	fallbackBody = strings.TrimSpace(body)
+	if fallbackBody == "" {
+		fallbackBody = "I generated the image."
+	}
+	fallbackBody += "\n\nFlipAi could not deliver the image through Google Voice MMS."
+	return false, fallbackBody
+}
+
 func cleanReplyHeader(v string) string {
 	v = strings.ReplaceAll(v, "\r", " ")
 	v = strings.ReplaceAll(v, "\n", " ")
@@ -165,12 +190,16 @@ func (g *GmailClient) SendReply(ctx context.Context, original GmailMessage, body
 	if target == "" {
 		return errors.New("could not find a safe Google Voice reply address")
 	}
+	if handled, fallback := routeGeneratedImageReply(ctx, original, body); handled {
+		return nil
+	} else {
+		body = fallback
+	}
 	meta, err := g.replyThreadMeta(ctx, original)
 	if err != nil {
 		return err
 	}
-	image, imageKey := generatedImageForVoiceReply(original, body)
-	rawMessage, err := buildThreadedReplyMessageWithImage("", target, meta, body, image)
+	rawMessage, err := buildThreadedReplyMessage("", target, meta, body)
 	if err != nil {
 		return err
 	}
@@ -193,9 +222,6 @@ func (g *GmailClient) SendReply(ctx context.Context, original GmailMessage, body
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return fmt.Errorf("Gmail threaded reply HTTP %d: %s", resp.StatusCode, string(b))
-	}
-	if image != nil {
-		markGeneratedImageDelivered(imageKey)
 	}
 	return nil
 }
@@ -292,12 +318,16 @@ func (c *IMAPMailClient) SendReply(ctx context.Context, original GmailMessage, b
 	if target == "" {
 		return errors.New("could not find a safe Google Voice reply address")
 	}
+	if handled, fallback := routeGeneratedImageReply(ctx, original, body); handled {
+		return nil
+	} else {
+		body = fallback
+	}
 	meta, err := c.replyThreadMeta(ctx, original)
 	if err != nil {
 		return err
 	}
-	image, imageKey := generatedImageForVoiceReply(original, body)
-	rawMessage, err := buildThreadedReplyMessageWithImage(c.email, target, meta, body, image)
+	rawMessage, err := buildThreadedReplyMessage(c.email, target, meta, body)
 	if err != nil {
 		return err
 	}
@@ -314,9 +344,6 @@ func (c *IMAPMailClient) SendReply(ctx context.Context, original GmailMessage, b
 		}
 		if err := sc.Noop(); err == nil {
 			if err := c.sendThreadedOnce(sc, addr, rawMessage); err == nil {
-				if image != nil {
-					markGeneratedImageDelivered(imageKey)
-				}
 				return nil
 			}
 			_ = sc.Reset()
@@ -334,8 +361,5 @@ func (c *IMAPMailClient) SendReply(ctx context.Context, original GmailMessage, b
 		return err
 	}
 	c.sendCli, c.sendConn = sc, conn
-	if image != nil {
-		markGeneratedImageDelivered(imageKey)
-	}
 	return nil
 }
