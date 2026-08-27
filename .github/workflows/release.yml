@@ -148,13 +148,14 @@ jobs:
           $tag='v'+$version
           $setup=".\installer-output\FlipAi-Setup-v$version.exe"
           $notes=@(
-            "FlipAi $tag fixes generated-image delivery to Google Voice:",
+            "FlipAi $tag fixes Codex generated-image detection before Google Voice MMS delivery:",
             "",
-            "- Text-only replies continue to use the fast threaded Gmail-to-Google-Voice path.",
-            "- Generated images no longer travel as Gmail attachments, because Google Voice's email reply gateway drops those attachments.",
-            "- Image replies now reuse FlipAi's signed-in Microsoft Edge Google Voice window, compose to the authenticated SMS sender, select the generated image, and send it through Google Voice as MMS.",
-            "- FlipAi still reuses the image Codex already generated, so there is no extra model prompt or token round-trip just to save or resend the file.",
-            "- If the Google Voice MMS UI cannot send the image, FlipAi falls back to a normal text reply explaining that image delivery failed instead of silently losing the final response.",
+            "- FlipAi now captures Codex App Server's item/completed imageGeneration result directly from the active SMS turn instead of depending on generated_images or session files.",
+            "- The exact image bytes Codex already generated are reused in memory; no extra Codex prompt, save instruction, tool step, or model-token round-trip is added.",
+            "- FlipAi accepts a valid image result from the completed item lifecycle even on Codex builds where the status string can still say generating.",
+            "- Disk/session scanning remains only a compatibility fallback for older Codex builds.",
+            "- Image delivery still uses FlipAi's signed-in Microsoft Edge Google Voice window and Google Voice's normal image/MMS composer.",
+            "- If the Google Voice MMS UI cannot send the captured image, FlipAi falls back to a text notice instead of silently losing the image response.",
             "- Oversized still images are compressed before delivery to remain within Google Voice's image size boundary.",
             "",
             "A real Google Voice MMS is still the final end-to-end validation because GitHub CI cannot send a carrier MMS."
