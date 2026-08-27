@@ -167,6 +167,26 @@ await scenario('authorized-number', baseConfig(), async ({ page, tick }) => {
   return { midCall };
 });
 
+// 1a-ii. Google renames the control that ends a call. FlipAi recognizes a call
+//        from the controls the page draws, so a name it has never seen must not
+//        read as "no call at all" -- that would shut the desktop app's voice
+//        session down in the middle of a conversation. A call in progress always
+//        offers mute and a keypad, and that is the second opinion.
+await scenario('hangup-control-renamed', baseConfig(), async ({ page, tick }) => {
+  await tick();
+  await page.evaluate(() => window.gv.renameHangup('Finish conversation'));
+  await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
+  await tick();
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  // Several ticks with no control FlipAi knows how to name. The call must
+  // still be a call.
+  await tick(4);
+  const midCall = await page.evaluate(() => window.gv.observed());
+  await page.evaluate(() => window.gv.hangup());
+  await tick(3);
+  return { midCall };
+});
+
 // 1b. There is no auto-answer option any more: a leftover autoAnswer=false in
 //     an old voice-call.json changes nothing. Enabled plus authorized means
 //     answered.

@@ -355,6 +355,32 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 		}
 	})
 
+	// Google renames the control that ends a call. FlipAi recognizes a call from
+	// the controls the page draws, so a name it has never seen must not read as
+	// "there is no call" -- that would shut the desktop app's voice session down
+	// in the middle of a conversation, leaving the caller talking to nothing.
+	t.Run("a renamed hang-up control does not end a live call", func(t *testing.T) {
+		i := report.find(t, "hangup-control-renamed")
+		if report.countCalls(i, "flipVoiceAnswered") != 1 {
+			t.Fatalf("the call was bridged %d times", report.countCalls(i, "flipVoiceAnswered"))
+		}
+		s := h.scenario("hangup-control-renamed")
+		acts, deacts := s.recorded()
+		if len(acts) != 1 || acts[0] != "C" {
+			t.Fatalf("agent activations = %v, want exactly one", acts)
+		}
+		// Four ticks passed with nothing FlipAi knows how to name as a hang-up
+		// control. If the call had been declared over during them, the agent
+		// would have been torn down and started again.
+		if len(deacts) != 1 {
+			t.Errorf("agent deactivations = %v; a renamed control ended the call early or never ended it", deacts)
+		}
+		st := loadVoiceRuntime(s.dataDir)
+		if st.InCall {
+			t.Errorf("the call did not clean up once it really ended: %+v", st)
+		}
+	})
+
 	t.Run("contact name alone does not authorize a call", func(t *testing.T) {
 		i := report.find(t, "contact-name-not-allowed")
 		if report.Scenarios[i].Answered {

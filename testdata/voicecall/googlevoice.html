@@ -87,6 +87,14 @@ window.gv = {
     try { new Notification('Incoming call', {body: body}); } catch (e) { window.gv.noteError = String(e); }
   },
 
+  // renameHangup stands in for Google renaming the control that ends a call.
+  // FlipAi recognizes a call from the controls the page draws, so a rename it
+  // has never seen must not read as "there is no call" -- that would shut the
+  // desktop app's voice session down in the middle of a conversation.
+  renameHangup(label) {
+    window.gv.hangupLabel = label;
+  },
+
   async connect() {
     document.getElementById('framearea').textContent = '';
     const area = document.getElementById('callarea');
@@ -94,8 +102,15 @@ window.gv = {
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
     const hangup = document.createElement('button');
-    hangup.textContent = 'Hang up';
+    hangup.textContent = window.gv.hangupLabel || 'Hang up';
     hangup.addEventListener('click', () => window.gv.hangup());
+    // A call in progress always offers these, whatever the control that ends
+    // it is called.
+    for (const name of ['Mute', 'Keypad']) {
+      const b = document.createElement('button');
+      b.textContent = name;
+      dialog.append(b);
+    }
     const audio = document.createElement('audio');
     audio.id = 'remote';
     audio.autoplay = true;
