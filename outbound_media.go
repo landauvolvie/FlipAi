@@ -10,8 +10,8 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"image/jpeg"
 	_ "image/gif"
+	"image/jpeg"
 	_ "image/png"
 	"io"
 	"mime/multipart"
@@ -186,6 +186,7 @@ func latestImageResultFromReader(r *bufio.Reader) ([]byte, error) {
 						latest = decoded
 					}
 				}
+			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
