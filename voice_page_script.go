@@ -352,6 +352,16 @@ const googleVoiceInitScript = `
   });
   const findHangup = () => buttons().find(b => /(hang\s*up|end\s+call|leave\s+call|end\s+the\s+call)/i.test(buttonName(b)));
 
+  // A call in progress always offers mute and a keypad, whatever Google calls
+  // the control that ends it. Without this second opinion, a renamed hang-up
+  // control reads as "no call at all" and the desktop app's voice session is
+  // shut down in the middle of a conversation.
+  const onACall = () => {
+    const names = buttons().map(buttonName).join(' | ');
+    if (/(^|\b)(answer|accept|pick\s*up)(\b|$)/i.test(names) && !/(hang\s*up|end\s+call)/i.test(names)) return false;
+    return /\bmute\b/i.test(names) && /\b(keypad|dialpad)\b/i.test(names);
+  };
+
   // Google Voice's ringing card listens for a pointer sequence on some builds
   // and for click on others, and a bare element.click() is ignored by the ones
   // that expect the first. Sending the whole sequence costs nothing and is the
@@ -532,7 +542,7 @@ const googleVoiceInitScript = `
         }
       }
 
-      const hang = findHangup();
+      const hang = findHangup() || (onACall() ? true : null);
       if (hang) {
         quiet = 0;
         if (!inCall) {

@@ -940,9 +940,10 @@ type voiceBridge struct {
 
 	machine *voiceCallMachine
 
-	mu         sync.Mutex
-	agentWork  chan func()
-	answerWork chan func()
+	mu           sync.Mutex
+	agentWork    chan func()
+	answerWork   chan func()
+	pendingPress *voiceCallEffect
 }
 
 func newVoiceBridge(dataDir string, mainConfig func() Config, activate, deactivate func(VoiceCallConfig, string) error) *voiceBridge {
@@ -1004,6 +1005,41 @@ func (b *voiceBridge) Drain(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
+	}
+}
+
+// pressLatest keeps at most one queued answer attempt, replacing whatever was
+// waiting.
+func (b *voiceBridge) pressLatest(effect voiceCallEffect) {
+	b.mu.Lock()
+	b.pendingPress = &effect
+	queue := b.answerWork
+	b.mu.Unlock()
+
+	take := func() {
+		b.mu.Lock()
+		next := b.pendingPress
+		b.pendingPress = nil
+		b.mu.Unlock()
+		if next == nil {
+			return
+		}
+		if err := b.press(*next); err != nil {
+			mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+				s.LastError = "FlipAi is trying to answer an allowed caller and has not managed it yet: " + truncate(err.Error(), 300)
+			})
+		}
+	}
+	if queue == nil {
+		take()
+		return
+	}
+	select {
+	case queue <- take:
+	default:
+		// A press is already running and another is already queued behind it.
+		// The one just recorded will be picked up by whichever of them runs
+		// next, so there is nothing to add.
 	}
 }
 
@@ -1130,13 +1166,13 @@ func (b *voiceBridge) run(effects []voiceCallEffect) {
 			if b.press == nil {
 				continue
 			}
-			b.schedule(b.answerWork, func() {
-				if err := b.press(effect); err != nil {
-					mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
-						s.LastError = "FlipAi is trying to answer an allowed caller and has not managed it yet: " + truncate(err.Error(), 300)
-					})
-				}
-			})
+			// At most one press is ever waiting. The forceful rungs of the
+			// ladder take a second or two, and the machine keeps asking while
+			// the phone rings; a queue of them would still be draining after
+			// the caller had given up. The newest attempt replaces the one
+			// waiting because it is the one that reflects the card on screen
+			// now.
+			b.pressLatest(effect)
 		case voiceEffectRouteAudio:
 			if b.route == nil {
 				continue

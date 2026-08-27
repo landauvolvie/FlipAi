@@ -195,8 +195,8 @@ func TestFullCallCycleAndFreshSessionOnTheNextCall(t *testing.T) {
 		t.Fatalf("a started voice session did not make the call live: %+v", st)
 	}
 
-	// The caller hangs up.
-	now = now.Add(time.Second)
+	// The caller talks for a while and hangs up.
+	now = now.Add(voiceMinCallDuration + time.Second)
 	var stop []voiceCallEffect
 	for i := 0; i < voiceEndDebounce; i++ {
 		stop = m.Observe(voiceObservation{}, now)
@@ -323,7 +323,7 @@ func TestFailedVoiceStartIsNotLiveButIsStillTornDown(t *testing.T) {
 	}
 
 	var stop []voiceCallEffect
-	at := now.Add(2 * time.Second)
+	at := now.Add(voiceMinCallDuration + 2*time.Second)
 	for i := 0; i < voiceEndDebounce; i++ {
 		stop = m.Observe(voiceObservation{}, at)
 		at = at.Add(700 * time.Millisecond)
@@ -355,8 +355,10 @@ func TestVoiceSessionIsStartedOnceAndStoppedOnce(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		count(m.Observe(connected("5551234567"), now.Add(time.Duration(i)*time.Second)))
 	}
+	// Past the window a fresh call is protected in, and then long enough for
+	// the machine to be sure the call is gone.
 	for i := 0; i < 20; i++ {
-		count(m.Observe(voiceObservation{}, now.Add(time.Duration(20+i)*time.Second)))
+		count(m.Observe(voiceObservation{}, now.Add(voiceMinCallDuration+time.Duration(20+i)*time.Second)))
 	}
 	if starts != 1 {
 		t.Fatalf("one call started %d voice sessions", starts)
@@ -427,5 +429,58 @@ func TestStatusNoteNeverClaimsAWorkingCallWithoutAVoiceSession(t *testing.T) {
 	}
 	if !strings.Contains(note, "not entered voice mode") {
 		t.Fatalf("a failed voice session was described as %q", note)
+	}
+}
+
+// The worst failure this feature can have is tearing the agent's voice session
+// down in the middle of a real conversation, because the caller is then talking
+// to nothing. A call is recognized by the controls Google Voice draws, and
+// Google can rename them; the first few seconds of a connected call are
+// therefore not allowed to end it.
+func TestAFreshCallCannotBeEndedByBlindness(t *testing.T) {
+	m := newVoiceCallMachine(allowCaller("C", "5551234567"))
+	now := time.Now()
+	m.Observe(ring("5551234567"), now)
+	for _, e := range m.Observe(connected("5551234567"), now.Add(time.Second)) {
+		if e.Kind == voiceEffectStartAgentVoice {
+			m.AgentVoiceResult(e.Session, nil)
+		}
+	}
+	connectedAt := now.Add(time.Second)
+
+	// Nothing at all is seen for the whole grace period.
+	at := connectedAt
+	for at.Sub(connectedAt) < voiceMinCallDuration {
+		if got := m.Observe(voiceObservation{}, at); len(got) != 0 {
+			t.Fatalf("a conversation %v old was torn down: %v", at.Sub(connectedAt), kinds(got))
+		}
+		at = at.Add(600 * time.Millisecond)
+	}
+	if st := m.Status(); !st.InCall() {
+		t.Fatalf("the call was dropped inside the protected window: %+v", st)
+	}
+
+	// Past it, a call that really is gone still ends.
+	var stop []voiceCallEffect
+	for i := 0; i < voiceEndDebounce+1; i++ {
+		stop = append(stop, m.Observe(voiceObservation{}, at)...)
+		at = at.Add(600 * time.Millisecond)
+	}
+	if !hasKind(stop, voiceEffectStopAgentVoice) {
+		t.Fatalf("a call that really ended was never torn down: %v", kinds(stop))
+	}
+}
+
+// The protection is for a connected call only. A ring nobody answered must not
+// leave the machine stuck thinking a call is in progress.
+func TestAnUnansweredRingStillClearsPromptly(t *testing.T) {
+	m := newVoiceCallMachine(allowCaller("C", "5551234567"))
+	now := time.Now()
+	m.Observe(ring("5551234567"), now)
+	for i := 0; i < voiceEndDebounce; i++ {
+		m.Observe(voiceObservation{}, now.Add(time.Duration(i)*600*time.Millisecond))
+	}
+	if st := m.Status(); st.Phase != voicePhaseIdle {
+		t.Fatalf("a ring that stopped left the machine at %+v", st)
 	}
 }

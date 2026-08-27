@@ -58,6 +58,15 @@ const voiceCallDOMHelpers = `
     return ANSWER_RE.test(n) && !DECLINE_RE.test(n) && !b.disabled;
   }) || null;
   const hangupButton = () => allButtons().find(b => HANG_RE.test(buttonName(b))) || null;
+  // A call in progress always offers mute and a keypad, whatever Google calls
+  // the control that ends it. Recognizing a live call by only one control name
+  // means that if Google renames it, every observation reads as "no call" and
+  // the desktop voice session is torn down in the middle of a conversation.
+  const inCallByControls = () => {
+    const names = allButtons().map(buttonName).join(' | ');
+    if (ANSWER_RE.test(names) && !HANG_RE.test(names)) return false;
+    return /\bmute\b/i.test(names) && /\b(keypad|dialpad)\b/i.test(names);
+  };
 `
 
 // voicePageSnapshotJS reads the call state, the caller, the visible controls
@@ -65,6 +74,7 @@ const voiceCallDOMHelpers = `
 const voicePageSnapshotJS = `(async () => {` + voiceCallDOMHelpers + `
   const answerEl = answerButton();
   const hangEl = hangupButton();
+  const onACall = !!hangEl || inCallByControls();
 
   let scopeText = '';
   let node = answerEl || hangEl;
@@ -133,7 +143,7 @@ const voicePageSnapshotJS = `(async () => {` + voiceCallDOMHelpers + `
     href: location.href,
     signedIn,
     answer: !!answerEl,
-    hangup: !!hangEl,
+    hangup: onACall,
     caller,
     label,
     controls: names,

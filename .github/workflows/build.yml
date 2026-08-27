@@ -80,6 +80,13 @@ jobs:
             Start-Sleep -Milliseconds 250
           } while((Get-Date)-lt $deadline)
           if($left.Count -gt 0){
+            # Which mode survived is the whole question, and the process name is
+            # the same for all of them. Print the command line so a failure
+            # names the internal mode instead of leaving it to be guessed at.
+            $detail=@(Get-CimInstance Win32_Process -Filter "Name='FlipAi.exe'" -ErrorAction SilentlyContinue |
+              Select-Object ProcessId,CommandLine | Format-Table -AutoSize -Wrap | Out-String)
+            Write-Host 'FlipAi processes still running:'
+            Write-Host $detail
             @($left | Select-Object Id,MainWindowTitle,Path | Format-Table | Out-String) | Write-Host
             $left | Stop-Process -Force -ErrorAction SilentlyContinue
             throw 'FlipAi processes survived Quit for more than 20 seconds'

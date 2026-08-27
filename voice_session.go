@@ -66,6 +66,19 @@ const (
 	// tearing the agent down on that single frame ended calls that were still
 	// connected.
 	voiceEndDebounce = 3
+
+	// voiceMinCallDuration is how long a connected call is protected from the
+	// polled observations ending it.
+	//
+	// A call is recognized by the controls Google Voice draws, and Google is
+	// free to change them. If the hang-up control stops being recognized, every
+	// observation reads as "no call" and the desktop voice session is torn down
+	// seconds into a real conversation -- the worst failure this feature has,
+	// because the caller is left talking to nothing. No real call is over this
+	// fast, so the first few seconds are simply not allowed to end one. A
+	// caller who really did hang up immediately is torn down at the end of it
+	// instead, which nobody notices.
+	voiceMinCallDuration = 6 * time.Second
 )
 
 // voiceObservation is one look at the Google Voice page.
@@ -167,6 +180,7 @@ type voiceCallMachine struct {
 	event   string
 
 	ringStart    time.Time
+	connectedAt  time.Time
 	lastAnswerAt time.Time
 	attempts     int
 	quiet        int
@@ -318,12 +332,14 @@ func (m *voiceCallMachine) onCallUp(obs voiceObservation, now time.Time) []voice
 	d := m.decide(m.caller, m.label)
 	if !d.Allowed {
 		m.phase = voicePhaseUnbridged
+		m.connectedAt = now
 		m.agent = ""
 		m.refused = d.Reason
 		m.event = "unbridged-call"
 		return nil
 	}
 	m.phase = voicePhaseConnecting
+	m.connectedAt = now
 	m.agent = d.Agent
 	m.refused = ""
 	m.event = "call-answered"
@@ -343,6 +359,11 @@ func (m *voiceCallMachine) onQuiet(now time.Time) []voiceCallEffect {
 	m.quiet++
 	if m.quiet < voiceEndDebounce {
 		return nil
+	}
+	if m.connectedAt.IsZero() || now.Sub(m.connectedAt) < voiceMinCallDuration {
+		if m.phase == voicePhaseConnecting || m.phase == voicePhaseLive || m.phase == voicePhaseUnbridged {
+			return nil
+		}
 	}
 	return m.end(now)
 }
@@ -382,6 +403,7 @@ func (m *voiceCallMachine) end(now time.Time) []voiceCallEffect {
 	m.agentRunning = false
 	m.startIssued = false
 	m.ringStart = time.Time{}
+	m.connectedAt = time.Time{}
 	m.lastAnswerAt = time.Time{}
 	return effects
 }
@@ -415,19 +437,6 @@ func (m *voiceCallMachine) AgentVoiceStopped(session int) {
 	if session == m.session {
 		m.agentRunning = false
 	}
-}
-
-// Answered is the machine promoting a ringing call to a connected one on its
-// own, used by the answer executor when the page confirms the click landed but
-// the next observation has not arrived yet. It is a no-op unless the call is
-// still ringing.
-func (m *voiceCallMachine) Answered(session int, now time.Time) []voiceCallEffect {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if session != m.session || m.phase != voicePhaseRinging {
-		return nil
-	}
-	return m.onCallUp(voiceObservation{InCall: true, Caller: m.caller, Label: m.label}, now)
 }
 
 func (m *voiceCallMachine) answerEffect(now time.Time) voiceCallEffect {
