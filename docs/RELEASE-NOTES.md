@@ -44,7 +44,7 @@ moves it instead of making it vanish.
 
 **One state machine owns the call.** Ring, authorize, answer, wire the audio,
 start the desktop voice session, hang up, tear down, next call. Everything that
-can see the page — the injected script and FlipAi's loopback control channel —
+can see the page — the injected script, and FlipAi reading the page itself —
 reports to it, and neither decides anything.
 
 **An allowed caller is not lost to voicemail.** Answer is pressed for the whole
@@ -74,23 +74,43 @@ itself, so the FlipAi host can ask it to send an image.
 Also in this release: the view is created already parked, as a tool window,
 without focus, so not even an empty frame flashes on the desktop while WebView2
 starts; the Notifications API is supplied to the view when the runtime lacks it,
-because Google Voice may otherwise decline to ring in a browser at all; a single
-supervisor with backoff so a failing view cannot spawn windows in a loop; the
-Google Voice MMS sender driven from the recorded control port instead of
-guessing at listeners; and the retired "open in its own window" path removed.
+and the two permissions FlipAi really grants are reported as granted, because
+Google Voice may otherwise decline to ring in a browser at all; a live call
+cannot be ended by a moment of blindness, since a call in progress always offers
+mute and a keypad whatever the control that ends it is called; a single
+supervisor with backoff so a failing view cannot spawn windows in a loop; and
+the retired "open in its own window" path removed.
 
 ## Verified
 
-In CI, on Windows: Google Voice comes up inside FlipAi's own WebView2 view with
-no Microsoft Edge application started, exactly one window however many times it
-is asked for, no taskbar button, and its loopback control channel answering.
-Plus the call state machine end to end, the injected page script driving a
-stand-in Google Voice page in real Chromium with real device selection, the
-audio-path invariants, the voice-mode report parsing, the Windows build, and the
-installer's install and uninstall.
+In CI, on a real Windows runner: Google Voice comes up inside FlipAi's own
+WebView2 view with no Microsoft Edge application started; exactly one window
+however many times it is asked for; no taskbar button and no Alt-Tab entry;
+FlipAi's own endpoint answering with its token and refusing without it; and a
+real DevTools call reaching the page in-process, which is what the second way of
+pressing Answer and sending an image both depend on.
 
-Not verified by CI, and only verifiable on your own PC: that a call to your
-number rings in this browser (Google Voice's own **Settings → Calls → Receive
-calls on this device** has to be on), that the Codex desktop app on your machine
-exposes a Voice control FlipAi can press, and that real audio flows over real
-virtual cables in both directions. A green CI run is not a working phone call.
+Also in CI: the call state machine end to end -- an allowed caller answered at
+once and kept being answered for the whole ring, an unauthorized caller never
+touched, a call answered by hand, one dropped frame not ending a live call, a
+renamed hang-up control not ending one either, exactly one voice session per
+call and one teardown, a failed voice session never described as a working
+conversation, and the next call starting fresh. Plus the injected page script
+driving a stand-in Google Voice page in real Chromium with real device
+selection, the audio-path invariants, the voice-mode report parsing and its
+failure messages, the Windows build, and the installer's install and uninstall.
+
+Not verified by CI, and only verifiable on your own PC:
+
+- that a call to your number rings in this browser at all — Google Voice's own
+  **Settings → Calls → Receive calls on this device** has to be on, and Google
+  decides which browsers it will offer that to;
+- that the ringing card Google renders today is the card FlipAi recognizes;
+- that the Codex desktop app on your machine exposes a Voice control FlipAi can
+  press, and that pressing it starts a conversation;
+- that real audio flows over real virtual cables in both directions;
+- that the whole cycle repeats on your line.
+
+**A green CI run is not a working phone call.** What CI can hold is the
+mechanism; the Connections status rows are written to say which step failed when
+one does.
