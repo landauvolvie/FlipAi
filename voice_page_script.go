@@ -423,13 +423,17 @@ const googleVoiceInitScript = `
   });
   const findHangup = () => buttons().find(b => /(hang\s*up|end\s+call|leave\s+call|end\s+the\s+call)/i.test(buttonName(b)));
 
-  // A call in progress always offers mute and a keypad, whatever Google calls
-  // the control that ends it. Without this second opinion, a renamed hang-up
-  // control reads as "no call at all" and the desktop app's voice session is
-  // shut down in the middle of a conversation.
-  const onACall = () => {
+  // callControlsPresent is a weaker second opinion, used only to keep a call
+  // FlipAi already knows about from being declared over when Google renames the
+  // control that ends it.
+  //
+  // It may never start a call. Google Voice's ordinary page offers a keypad to
+  // dial with and a mute control of its own, so this matches a page with no
+  // call on it -- and when it was allowed to mean "a call is up", FlipAi
+  // believed it was permanently in one, reported it as answered by hand, and
+  // ignored every real ring after that as call waiting.
+  const callControlsPresent = () => {
     const names = buttons().map(buttonName).join(' | ');
-    if (/(^|\b)(answer|accept|pick\s*up)(\b|$)/i.test(names) && !/(hang\s*up|end\s+call)/i.test(names)) return false;
     return /\bmute\b/i.test(names) && /\b(keypad|dialpad)\b/i.test(names);
   };
 
@@ -616,7 +620,8 @@ const googleVoiceInitScript = `
         }
       }
 
-      const hang = findHangup() || (onACall() ? true : null);
+      // Only the control that ends a call may say a call has started.
+      const hang = findHangup();
       if (hang) {
         quiet = 0;
         if (!inCall) {
@@ -624,16 +629,30 @@ const googleVoiceInitScript = `
           try { await window.flipVoiceAnswered(caller.number, caller.label); } catch (_) {}
         }
       } else if (inCall) {
-        // Google Voice renders neither an Answer nor a hang-up control for a
-        // moment while it swaps one card for another. Ending the call on that
-        // single frame shut the desktop app's voice mode down in the middle of
-        // a conversation, so the page has to see the call gone more than once.
-        quiet++;
-        if (quiet >= 2) {
+        // An Answer control with no hang-up control beside it means the call
+        // FlipAi thought was up is over and a new one is ringing. That is not
+        // a frame to wait out; Google Voice is offering to answer right now.
+        if (answer) {
           quiet = 0;
           inCall = false;
           caller = {number: '', label: ''};
           try { await window.flipVoiceEnded(); } catch (_) {}
+        } else if (callControlsPresent()) {
+          // Still showing the controls a call offers: the hang-up control has
+          // been renamed, not removed.
+          quiet = 0;
+        } else {
+          // Google Voice renders neither an Answer nor a hang-up control for a
+          // moment while it swaps one card for another. Ending the call on that
+          // single frame shut the desktop app's voice mode down in the middle
+          // of a conversation, so the page has to see it gone more than once.
+          quiet++;
+          if (quiet >= 2) {
+            quiet = 0;
+            inCall = false;
+            caller = {number: '', label: ''};
+            try { await window.flipVoiceEnded(); } catch (_) {}
+          }
         }
       } else {
         quiet = 0;

@@ -92,8 +92,14 @@ type VoiceRuntimeState struct {
 	DeviceLabelsHidden bool `json:"deviceLabelsHidden,omitempty"`
 	// RoutingNote is the outcome of the last attempt to point the desktop
 	// app's own microphone and speaker at the cables, per-app, through the
-	// Windows audio policy store.
-	RoutingNote string `json:"routingNote,omitempty"`
+	// Windows audio policy store, and RoutingState is which outcome it was.
+	//
+	// The state is recorded rather than guessed at from the words, because the
+	// desktop UI used to read the note with a regular expression and showed
+	// "Waiting" for a machine that had no cables to route to -- which sent the
+	// user looking at the wrong thing entirely.
+	RoutingNote  string `json:"routingNote,omitempty"`
+	RoutingState string `json:"routingState,omitempty"`
 	// RenderMode is how Google Voice is currently being drawn, and
 	// RenderAttempt is where in the list of ways to draw it FlipAi has got to.
 	// A window that comes up black is a graphics problem rather than a startup

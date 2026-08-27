@@ -155,3 +155,44 @@ func TestCableOverridesApplyOnlyWhenPresent(t *testing.T) {
 		t.Errorf("wiring both sides to one render endpoint must warn, got %q", got.Warning)
 	}
 }
+
+// FlipAi installs this driver itself, so failing to recognize what it installed
+// is the worst possible outcome: the driver is on the PC, the call is still
+// silent, and the status says no cable is installed. The endpoint names have
+// carried the vendor suffix and not carried it across releases, so the match
+// must not depend on it.
+func TestCablePlanRecognizesItsOwnDriverWhateverTheEndpointsAreCalled(t *testing.T) {
+	naming := [][2]string{
+		{"Virtual Audio Driver by MTT", "Virtual Mic Driver by MTT"},
+		{"Virtual Audio Driver (WDM)", "Virtual Mic Driver (WDM)"},
+		{"Speakers (Virtual Audio Driver)", "Microphone (Virtual Mic Driver)"},
+	}
+	for _, names := range naming {
+		speaker, mic := names[0], names[1]
+		t.Run(speaker, func(t *testing.T) {
+			plan := planVoiceCables([]VoiceAudioDevice{
+				dev("audiooutput", speaker),
+				dev("audioinput", mic),
+				dev("audiooutput", "2- "+speaker),
+				dev("audioinput", "2- "+mic),
+				dev("audiooutput", "Speakers (Realtek)"),
+				dev("audioinput", "Microphone (Realtek)"),
+			})
+			if !plan.complete() || plan.Warning != "" {
+				t.Fatalf("FlipAi did not recognize the cables it installed itself: %+v", plan)
+			}
+			if plan.GoogleVoiceOutput != speaker || plan.AgentInput != mic {
+				t.Errorf("first pair is wrong: %+v", plan)
+			}
+			if plan.AgentOutput != "2- "+speaker || plan.GoogleVoiceInput != "2- "+mic {
+				t.Errorf("second pair is wrong: %+v", plan)
+			}
+			// The PC's real hardware is never part of a call.
+			for _, wired := range []string{plan.GoogleVoiceOutput, plan.GoogleVoiceInput, plan.AgentInput, plan.AgentOutput} {
+				if strings.Contains(strings.ToLower(wired), "realtek") {
+					t.Errorf("the PC's own hardware was wired into the call: %q", wired)
+				}
+			}
+		})
+	}
+}

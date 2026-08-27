@@ -484,3 +484,92 @@ func TestAnUnansweredRingStillClearsPromptly(t *testing.T) {
 		t.Fatalf("a ring that stopped left the machine at %+v", st)
 	}
 }
+
+// This is the failure from the field, and it was mine.
+//
+// Google Voice's ordinary page offers a keypad to dial with and a mute control
+// of its own. A weaker "a call is in progress" signal built on those matched a
+// page with no call on it at all, so FlipAi decided it was in a call with an
+// unidentified caller, reported "Answered by hand -- not bridged", and from
+// then on treated every real ring as call waiting and ignored it. The caller
+// heard it ring out to voicemail.
+//
+// The signal may keep a known call alive. It may never start one.
+func TestControlsOnTheIdlePageNeverStartACall(t *testing.T) {
+	m := newVoiceCallMachine(allowCaller("C", "5551234567"))
+	now := time.Now()
+
+	// Google Voice, sitting there with nobody calling: no answer control, no
+	// hang-up control, but the page's own keypad and mute.
+	for i := 0; i < 10; i++ {
+		if got := m.Observe(voiceObservation{Sustain: true}, now); len(got) != 0 {
+			t.Fatalf("an idle page produced %v", kinds(got))
+		}
+		now = now.Add(600 * time.Millisecond)
+	}
+	if st := m.Status(); st.Phase != voicePhaseIdle || st.InCall() {
+		t.Fatalf("an idle Google Voice page was read as a call: %+v", st)
+	}
+
+	// And the call that arrives next is answered, which is the whole point.
+	effects := m.Observe(voiceObservation{Answer: true, Sustain: true, Caller: "5551234567"}, now)
+	if !hasKind(effects, voiceEffectAnswer) {
+		t.Fatalf("the call after an idle page was not answered: %v", kinds(effects))
+	}
+}
+
+// Belt and braces for the same failure: however FlipAi comes to believe a call
+// is up when one is not, a ringing page has to correct it immediately. Waiting
+// out a debounce here is waiting out the ring.
+func TestARingClearsAStaleCallAtOnce(t *testing.T) {
+	m := newVoiceCallMachine(allowCaller("C", "5551234567"))
+	now := time.Now()
+
+	// Get the machine into a call-up state with a caller nobody allowed --
+	// exactly the state the screenshot showed.
+	m.Observe(voiceObservation{InCall: true, Caller: "5559998888"}, now)
+	if st := m.Status(); st.Phase != voicePhaseUnbridged {
+		t.Fatalf("setup did not reach the stuck state: %+v", st)
+	}
+
+	// Now an allowed caller rings. There is no hang-up control, because there
+	// is no call.
+	now = now.Add(time.Second)
+	effects := m.Observe(voiceObservation{Answer: true, Caller: "5551234567"}, now)
+	st := m.Status()
+	if st.Phase == voicePhaseUnbridged {
+		t.Fatal("a ring did not clear the stale call, so it would never be answered")
+	}
+	// The correction and the answer may land on this observation or the next,
+	// but the next must answer.
+	if !hasKind(effects, voiceEffectAnswer) {
+		now = now.Add(300 * time.Millisecond)
+		effects = m.Observe(voiceObservation{Answer: true, Caller: "5551234567"}, now)
+		if !hasKind(effects, voiceEffectAnswer) {
+			t.Fatalf("the ring after a stale call was still not answered: %v", kinds(effects))
+		}
+	}
+	if got := m.Status(); got.Agent != "C" {
+		t.Errorf("the ring was not routed to an agent: %+v", got)
+	}
+}
+
+// Call waiting still has to work: a second call ringing during a live one shows
+// the control that ends the live one, so it must not look like a correction.
+func TestCallWaitingDoesNotClearTheLiveCall(t *testing.T) {
+	m := newVoiceCallMachine(allowCaller("C", "5551234567", "5557654321"))
+	now := time.Now()
+	m.Observe(ring("5551234567"), now)
+	for _, e := range m.Observe(connected("5551234567"), now.Add(time.Second)) {
+		if e.Kind == voiceEffectStartAgentVoice {
+			m.AgentVoiceResult(e.Session, nil)
+		}
+	}
+	got := m.Observe(voiceObservation{Answer: true, InCall: true, Caller: "5557654321"}, now.Add(2*time.Second))
+	if len(got) != 0 {
+		t.Fatalf("a waiting call acted on the live conversation: %v", kinds(got))
+	}
+	if st := m.Status(); st.Phase != voicePhaseLive || st.Caller != "5551234567" {
+		t.Fatalf("a waiting call disturbed the live one: %+v", st)
+	}
+}

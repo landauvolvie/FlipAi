@@ -174,10 +174,13 @@ await scenario('authorized-number', baseConfig(), async ({ page, tick }) => {
 //        offers mute and a keypad, and that is the second opinion.
 await scenario('hangup-control-renamed', baseConfig(), async ({ page, tick }) => {
   await tick();
-  await page.evaluate(() => window.gv.renameHangup('Finish conversation'));
   await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
   await tick();
   await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  // The call is up and FlipAi knows it. Now Google renames the control that
+  // ends it, under a conversation already in progress.
+  await tick();
+  await page.evaluate(() => window.gv.renameHangup('Finish conversation'));
   // Several ticks with no control FlipAi knows how to name. The call must
   // still be a call.
   await tick(4);

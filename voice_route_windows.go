@@ -50,30 +50,35 @@ var voiceRouteMu sync.Mutex
 func routeAgentAppAudio(dataDir string, cfg VoiceCallConfig, agent string) {
 	voiceRouteMu.Lock()
 	defer voiceRouteMu.Unlock()
-	note := func(text string) {
-		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) { s.RoutingNote = text })
+	note := func(state, text string) {
+		mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+			s.RoutingState = state
+			s.RoutingNote = text
+		})
 	}
 	target := voiceAgentConfig(cfg, agent)
 	plan := currentVoiceCablePlan(dataDir)
 	if plan.AgentInput == "" && plan.AgentOutput == "" {
-		note("Not applied: " + plan.Warning)
+		// There is nothing to route to. Saying the desktop app is being waited
+		// for would send the user to look at the app, which is not the problem.
+		note(voiceRoutingNoCables, "There is no virtual audio cable to route the desktop app to yet. "+plan.Warning)
 		return
 	}
 	hwnd := findAgentAppWindow(agent, target)
 	if hwnd == 0 {
-		note(fmt.Sprintf("Waiting for the %s desktop app: its audio is routed to the cables the moment its window exists.", target.AppTitle))
+		note(voiceRoutingWaitingForApp, fmt.Sprintf("Waiting for %s: its audio is routed to the cables the moment its window exists, and FlipAi starts it itself when a call arrives.", agentAppDescription(agent, target)))
 		return
 	}
 	pid := windowProcessID(hwnd)
 	if pid == 0 {
-		note(fmt.Sprintf("Could not identify the %s desktop app's process, so its audio was not re-routed.", target.AppTitle))
+		note(voiceRoutingRefused, fmt.Sprintf("Could not identify the %s desktop app's process, so its audio was not re-routed.", target.AppTitle))
 		return
 	}
 	if err := setAppDefaultEndpoints(dataDir, pid, plan.AgentOutput, plan.AgentInput); err != nil {
-		note(fmt.Sprintf("Windows refused the automatic audio routing for %s: %v. One-time fallback: in the app's own audio settings choose %q as its microphone and %q as its speaker.", target.AppTitle, err, plan.AgentInput, plan.AgentOutput))
+		note(voiceRoutingRefused, fmt.Sprintf("Windows refused the automatic audio routing for %s: %v. One-time fallback: in the app's own audio settings choose %q as its microphone and %q as its speaker.", target.AppTitle, err, plan.AgentInput, plan.AgentOutput))
 		return
 	}
-	note(fmt.Sprintf("%s is wired to the cables: it hears the caller on %q and speaks into %q. Applied automatically; nothing to choose in the app.", target.AppTitle, plan.AgentInput, plan.AgentOutput))
+	note(voiceRoutingApplied, fmt.Sprintf("%s is wired to the cables: it hears the caller on %q and speaks into %q. Applied automatically; nothing to choose in the app.", target.AppTitle, plan.AgentInput, plan.AgentOutput))
 }
 
 // platformVoiceDevicesChanged runs when the Google Voice page reports a fresh

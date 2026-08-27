@@ -58,13 +58,19 @@ const voiceCallDOMHelpers = `
     return ANSWER_RE.test(n) && !DECLINE_RE.test(n) && !b.disabled;
   }) || null;
   const hangupButton = () => allButtons().find(b => HANG_RE.test(buttonName(b))) || null;
-  // A call in progress always offers mute and a keypad, whatever Google calls
-  // the control that ends it. Recognizing a live call by only one control name
-  // means that if Google renames it, every observation reads as "no call" and
-  // the desktop voice session is torn down in the middle of a conversation.
-  const inCallByControls = () => {
+
+  // callControlsPresent is a weaker second opinion: a call in progress offers
+  // mute and a keypad whatever Google calls the control that ends it.
+  //
+  // It is reported separately from hangup, and deliberately so. Google Voice's
+  // ordinary page offers a keypad for dialling and a mute control of its own,
+  // so this matches a page with no call on it at all -- and when it was allowed
+  // to mean "a call is up", FlipAi believed it was permanently in a call,
+  // reported it as answered by hand, and then ignored every real ring as call
+  // waiting. It may only keep a call FlipAi already knows about from being
+  // declared over; it may never start one.
+  const callControlsPresent = () => {
     const names = allButtons().map(buttonName).join(' | ');
-    if (ANSWER_RE.test(names) && !HANG_RE.test(names)) return false;
     return /\bmute\b/i.test(names) && /\b(keypad|dialpad)\b/i.test(names);
   };
 `
@@ -74,7 +80,6 @@ const voiceCallDOMHelpers = `
 const voicePageSnapshotJS = `(async () => {` + voiceCallDOMHelpers + `
   const answerEl = answerButton();
   const hangEl = hangupButton();
-  const onACall = !!hangEl || inCallByControls();
 
   let scopeText = '';
   let node = answerEl || hangEl;
@@ -143,7 +148,8 @@ const voicePageSnapshotJS = `(async () => {` + voiceCallDOMHelpers + `
     href: location.href,
     signedIn,
     answer: !!answerEl,
-    hangup: onACall,
+    hangup: !!hangEl,
+    callControls: callControlsPresent(),
     caller,
     label,
     controls: names,

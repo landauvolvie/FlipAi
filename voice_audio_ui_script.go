@@ -15,6 +15,20 @@ const voiceAudioDesktopScript = `
     document.querySelector('.content')?.prepend(b);
     if(!bad) setTimeout(()=>b.remove(),7000);
   };
+  // The install itself, exposed so the status row that reports the missing
+  // cable can offer it right there. Hunting for a button further down the page
+  // is the difference between a user who has working audio and one who does
+  // not, and the row that says "Not found" is where they are looking.
+  globalThis.__flipaiInstallAudioBridge=async()=>{
+    show('Downloading, verifying, and installing the free audio bridge. Approve the Windows administrator prompt.');
+    const r=await fetch(AUDIO+'/install',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    let body={}; try{body=await r.json()}catch(_){}
+    if(!r.ok||!body.ok) throw new Error(body.message||('Audio installer returned '+r.status));
+    show(body.message+(body.reboot?' Restart Windows once to finish the driver install.':''));
+    setTimeout(()=>location.reload(),3500);
+    return body;
+  };
+
   const installUI=()=>{
     if(document.querySelector('#voice-audio-install')) return true;
     const problems=document.querySelector('#vc-problems');
@@ -25,14 +39,8 @@ const voiceAudioDesktopScript = `
     const button=document.createElement('button'); button.type='button'; button.className='btn accent'; button.style.marginLeft='10px'; button.textContent='Install free audio bridge';
     button.addEventListener('click',async()=>{
       const original=button.textContent; button.disabled=true; button.textContent='Installing...';
-      show('Downloading, verifying, and installing the free audio bridge. Approve the Windows administrator prompt.');
-      try{
-        const r=await fetch(AUDIO+'/install',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-        let body={}; try{body=await r.json()}catch(_){}
-        if(!r.ok||!body.ok) throw new Error(body.message||('Audio installer returned '+r.status));
-        show(body.message+(body.reboot?' Restart Windows once to finish the driver install.':''));
-        setTimeout(()=>location.reload(),3500);
-      }catch(e){ show(e.message||String(e),true); }
+      try{ await globalThis.__flipaiInstallAudioBridge(); }
+      catch(e){ show(e.message||String(e),true); }
       finally{button.disabled=false;button.textContent=original;}
     });
     wrap.append(strong,text,button); problems.append(wrap); return true;

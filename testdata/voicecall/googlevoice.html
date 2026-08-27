@@ -93,6 +93,13 @@ window.gv = {
   // desktop app's voice session down in the middle of a conversation.
   renameHangup(label) {
     window.gv.hangupLabel = label;
+    // Rename the control on screen too, so a call that is already up has the
+    // name changed under FlipAi rather than starting out with a strange one.
+    const area = document.getElementById('callarea');
+    if (!area) return;
+    for (const b of area.querySelectorAll('button')) {
+      if (/hang\s*up/i.test(b.textContent || '')) b.textContent = label;
+    }
   },
 
   async connect() {

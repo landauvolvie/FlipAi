@@ -56,7 +56,14 @@ func numericDevicePrefix(l string) string {
 func cableFamily(label string) string {
 	l := strings.ToLower(strings.TrimSpace(label))
 	switch {
-	case strings.Contains(l, "virtual audio driver by mtt") || strings.Contains(l, "virtual mic driver by mtt"):
+	case strings.Contains(l, "virtual audio driver") || strings.Contains(l, "virtual mic driver"):
+		// The driver FlipAi's own installer places. It is matched on the name
+		// without requiring the vendor suffix, because the endpoint names have
+		// carried it and not carried it across releases -- and a cable FlipAi
+		// installed itself and then failed to recognize is the worst of both
+		// worlds: the driver is on the PC, the call is still silent, and the
+		// status says no cable is installed.
+		//
 		// Multiple root instances have the same base endpoint names. Windows
 		// disambiguates the later ones with prefixes such as "2- ". Pair the
 		// matching speaker/microphone by that prefix so instance 1 and instance 2

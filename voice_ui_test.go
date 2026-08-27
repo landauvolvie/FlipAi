@@ -64,3 +64,50 @@ func TestConnectionsPreviewOnlyWithdrawsThePanel(t *testing.T) {
 		}
 	}
 }
+
+// "Virtual audio cables: Not found" is where the user is looking when the audio
+// path is broken, so it is where the way to fix it has to be. A button further
+// down the page is a button that does not get found -- which is how a PC ends
+// up with a call connected and no sound.
+func TestTheMissingCableRowOffersTheInstall(t *testing.T) {
+	if !strings.Contains(voiceDesktopInitScript, "function cablesCell()") {
+		t.Fatal("the cables row no longer builds its own cell, so it cannot offer the install")
+	}
+	if !strings.Contains(voiceDesktopInitScript, "set('vcs-cables',cablesCell())") {
+		t.Fatal("the cables row is not using the cell that offers the install")
+	}
+	if !strings.Contains(voiceDesktopInitScript, "__flipaiInstallAudioBridge") {
+		t.Fatal("the cables row does not reach the audio-bridge installer")
+	}
+	// And the installer exposes it for the row to call.
+	if !strings.Contains(voiceAudioDesktopScript, "globalThis.__flipaiInstallAudioBridge=async()=>{") {
+		t.Fatal("the audio-bridge installer no longer exposes a way for the status row to start it")
+	}
+	// One cable is still a broken call, so that case must offer the second.
+	if !strings.Contains(voiceDesktopInitScript, "'Add the second'") {
+		t.Error("a machine with one cable is not offered the missing pair")
+	}
+}
+
+// "Desktop app audio: Waiting" on a PC with no virtual cable installed sent the
+// user to look at the desktop app, which was not the problem. Each outcome now
+// says which one it is, and the missing cable is reported once -- by the row
+// that can fix it -- rather than twice.
+func TestTheRoutingRowSaysWhichThingWentWrong(t *testing.T) {
+	if strings.Contains(voiceDesktopInitScript, "/Applied automatically|is wired to the cables/") {
+		t.Fatal("the routing row is still guessing its state from the note's wording")
+	}
+	for _, state := range []string{"'applied'", "'no-cables'", "'waiting-for-app'", "'refused'"} {
+		if !strings.Contains(voiceDesktopInitScript, "case "+state+":") {
+			t.Errorf("the routing row does not report the %s outcome", state)
+		}
+	}
+	if !strings.Contains(voiceDesktopInitScript, "No cable to route to") {
+		t.Error("a PC with no cable is not told that is what is missing")
+	}
+	// A missing cable belongs to the cables row, which offers the install. The
+	// routing row repeating it reads as a second, unrelated failure.
+	if !strings.Contains(voiceDesktopInitScript, "rt.routingState!=='no-cables'") {
+		t.Error("the missing cable is reported twice")
+	}
+}

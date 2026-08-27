@@ -83,11 +83,46 @@ const voiceDesktopInitScript = `
   const post=(path,body)=>voiceFetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
   async function refresh(){ snapshot=await voiceFetch('/status'); return snapshot; }
 
+  // Which of the several things went wrong, in the words for that one. This
+  // used to be guessed from the note's wording, and a machine with no cables at
+  // all was told the desktop app was being waited for -- sending the user to
+  // look at the app when the app was not the problem.
+  function routingPill(rt){
+    switch(rt?.routingState){
+      case 'applied': return pill('Applied','ok');
+      case 'no-cables': return pill('No cable to route to','warn');
+      case 'waiting-for-app': return pill('Waiting for the desktop app','warn');
+      case 'refused': return pill('Windows refused it','warn');
+    }
+    return pill('Not applied yet','warn');
+  }
+
   function cablesPill(){
     const audio=snapshot?.audio||{};
     if(audio.warning&&!(audio.cables||[]).length) return pill('Not found','warn');
     if(audio.warning) return pill('One of two','warn');
     return pill((audio.cables||[]).join(' + ')||'Wired','ok');
+  }
+
+  // The row that reports a missing cable is where the user is looking, so it is
+  // where the way to fix it belongs. A button further down the page is a button
+  // that does not get found.
+  function cablesCell(){
+    const wrap=E('span'); wrap.append(cablesPill());
+    const audio=snapshot?.audio||{};
+    const missing=(audio.cables||[]).length<2;
+    if(!missing||typeof globalThis.__flipaiInstallAudioBridge!=='function') return wrap;
+    const b=E('button','btn small accent'); b.type='button'; b.style.marginLeft='8px';
+    b.textContent=(audio.cables||[]).length?'Add the second':'Install';
+    b.title='FlipAi installs two free signed virtual speaker/microphone pairs. Windows asks for administrator approval once.';
+    b.addEventListener('click',async()=>{
+      const label=b.textContent; b.disabled=true; b.textContent='Installing...';
+      try{ await globalThis.__flipaiInstallAudioBridge(); }
+      catch(e){ toast(e.message||String(e),true); }
+      finally{ b.disabled=false; b.textContent=label; }
+    });
+    wrap.append(b);
+    return wrap;
   }
 
   /* ---------- the embedded Google Voice panel (Connections) ----------
@@ -287,9 +322,9 @@ const voiceDesktopInitScript = `
     set('vcs-state',cfg.enabled?pill('On — answering calls','ok'):pill('Off','warn'));
     set('vcs-window',runtimePill(rt));
     set('vcs-google',rt.browserRunning?(rt.signedIn?pill('Signed in','ok'):pill('Not signed in','warn')):pill('Window not running','warn'));
-    set('vcs-cables',cablesPill());
+    set('vcs-cables',cablesCell());
     set('vcs-audio',snapshot.audioWarning?pill('Needs attention','warn'):pill('Ready — silent and virtual','ok'));
-    set('vcs-routing',/Applied automatically|is wired to the cables/.test(rt.routingNote||'')?pill('Applied','ok'):pill(rt.routingNote?'Waiting':'Not applied yet','warn'));
+    set('vcs-routing',routingPill(rt));
     set('vcs-agents',(snapshot.callAgents||[]).length?pill((snapshot.callAgents||[]).join(' and '),'ok'):pill('Nobody yet','warn'));
     set('vcs-call',callPill(rt)||pill('Idle'));
     set('vcs-ring',rt.lastRingAt&&!/^0001/.test(rt.lastRingAt)?pill(new Date(rt.lastRingAt).toLocaleString(),'ok'):pill('Never','warn'));
@@ -304,8 +339,18 @@ const voiceDesktopInitScript = `
     const out=[],rt=snapshot.runtime||{},cfg=snapshot.config||{};
     if(!(snapshot.callAgents||[]).length) out.push(callout('No agent can take a call yet. ','Open the Agents page, add your phone number under the agent you want to talk to, and set that number to "Texts and calls" or "Calls only".'));
     if(snapshot.audioWarning) out.push(callout('Audio path: ',snapshot.audioWarning));
-    if(rt.routingNote&&!/Applied automatically|is wired to the cables/.test(rt.routingNote)) out.push(callout('Desktop app audio: ',rt.routingNote));
+    // The missing cable already has its own row and its own Install button; do
+    // not repeat it here as if it were a second, different problem.
+    if(rt.routingNote&&rt.routingState&&rt.routingState!=='applied'&&rt.routingState!=='no-cables') out.push(callout('Desktop app audio: ',rt.routingNote));
     if(cfg.enabled&&rt.browserRunning&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))) out.push(callout('No call has ever rung here. ','In Google Voice itself, open Settings → Calls and make sure receiving calls on this device is on.'));
+    // Google Voice announced a call but FlipAi never found a control to press.
+    // That is a different failure from "not allowed" and from "never rang", and
+    // without saying so it looks like FlipAi simply did nothing.
+    const ringSeen=rt.lastRingAt&&!/^0001/.test(rt.lastRingAt)&&(Date.now()-new Date(rt.lastRingAt).getTime())<120000;
+    const announced=/\[notification:/.test(rt.controls||'');
+    if(announced&&ringSeen&&(!rt.callPhase||rt.callPhase==='idle')){
+      out.push(callout('A call reached this window but FlipAi found nothing to press. ','Google Voice announced an incoming call and never drew an Answer control in the page. Open Connections while a call comes in to see what it is showing, and check Google Voice\u2019s own Settings \u2192 Calls for receiving calls on this device.'));
+    }
     if(rt.callNote) out.push(callout('This call: ',rt.callNote));
     if(rt.blocked&&!rt.callNote) out.push(callout('Last call was not connected: ',rt.blocked));
     if(rt.lastError&&!rt.lastOpenError){

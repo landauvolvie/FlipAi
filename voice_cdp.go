@@ -100,14 +100,18 @@ func voiceEvalObject(d voiceDevTools, expression string) (string, error) {
 // voicePageSnapshot is what the control channel can see of the call, read
 // without the page script's cooperation.
 type voicePageSnapshot struct {
-	Href     string             `json:"href"`
-	SignedIn bool               `json:"signedIn"`
-	Answer   bool               `json:"answer"`
-	Hangup   bool               `json:"hangup"`
-	Caller   string             `json:"caller"`
-	Label    string             `json:"label"`
-	Controls []string           `json:"controls"`
-	Devices  []VoiceAudioDevice `json:"devices"`
+	Href     string `json:"href"`
+	SignedIn bool   `json:"signedIn"`
+	Answer   bool   `json:"answer"`
+	Hangup   bool   `json:"hangup"`
+	// CallControls is the weaker second opinion: a call in progress offers mute
+	// and a keypad. Google Voice's ordinary page offers both too, so this may
+	// only keep a known call alive, never start one. See voice_page_probe.go.
+	CallControls bool               `json:"callControls"`
+	Caller       string             `json:"caller"`
+	Label        string             `json:"label"`
+	Controls     []string           `json:"controls"`
+	Devices      []VoiceAudioDevice `json:"devices"`
 }
 
 func voiceReadSnapshot(d voiceDevTools) (voicePageSnapshot, error) {
@@ -119,10 +123,11 @@ func voiceReadSnapshot(d voiceDevTools) (voicePageSnapshot, error) {
 // observation turns one snapshot into what the call machine understands.
 func (s voicePageSnapshot) observation() voiceObservation {
 	return voiceObservation{
-		Answer: s.Answer,
-		InCall: s.Hangup,
-		Caller: s.Caller,
-		Label:  s.Label,
+		Answer:  s.Answer,
+		InCall:  s.Hangup,
+		Sustain: s.CallControls,
+		Caller:  s.Caller,
+		Label:   s.Label,
 	}
 }
 

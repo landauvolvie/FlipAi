@@ -1,5 +1,16 @@
 package main
 
+// The outcomes of pointing the desktop app's audio at the cables. They are
+// recorded as a state rather than inferred from the note's wording, because a
+// user who is told "Waiting" when the real problem is that no cable exists goes
+// looking at entirely the wrong thing.
+const (
+	voiceRoutingApplied       = "applied"
+	voiceRoutingNoCables      = "no-cables"
+	voiceRoutingWaitingForApp = "waiting-for-app"
+	voiceRoutingRefused       = "refused"
+)
+
 // The per-application audio routing helper lives in a platform-independent file
 // so the interop it depends on -- the endpoint lookup and the persisted per-app
 // default write -- can be checked by a test on any machine. Only the code that

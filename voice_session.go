@@ -86,8 +86,16 @@ type voiceObservation struct {
 	// Answer is true while a control that answers the call is on screen.
 	Answer bool
 	// InCall is true while a control that ends the call is on screen, which is
-	// the only trustworthy sign that a call is actually up.
+	// the only trustworthy sign that a call is actually up. It is the only
+	// thing that may start one.
 	InCall bool
+	// Sustain is a weaker sign that a call is still up -- the controls a call
+	// in progress offers, whatever the one that ends it is called. Google
+	// Voice's ordinary page offers those too, so this may only keep a call
+	// FlipAi already knows about from being declared over. Letting it start a
+	// call made FlipAi believe it was permanently in one, and every real ring
+	// after that was ignored as call waiting.
+	Sustain bool
 	// Caller and Label are who Google Voice says is calling. Either may be
 	// empty, and both may arrive a moment after the ring itself.
 	Caller string
@@ -237,23 +245,35 @@ func (m *voiceCallMachine) Observe(obs voiceObservation, now time.Time) []voiceC
 	obs.Caller = normalizeUSPhone(obs.Caller)
 	obs.Label = normalizeCallerLabel(obs.Label)
 
-	switch {
-	case obs.InCall:
+	if obs.InCall {
 		return m.onCallUp(obs, now)
-	case obs.Answer:
-		return m.onRinging(obs, now)
-	default:
-		return m.onQuiet(now)
 	}
+	// No control that ends a call is on screen. Whatever else is true, that has
+	// to be accounted for before a ring is considered -- otherwise a call FlipAi
+	// wrongly believes is up can never be cleared, because a ringing page never
+	// reaches the quiet path at all. That is exactly how one bad reading stopped
+	// every later call from being answered.
+	effects := m.onQuiet(obs, now)
+	if obs.Answer {
+		effects = append(effects, m.onRinging(obs, now)...)
+	}
+	return effects
+}
+
+// callUp reports whether a phase means a call is connected.
+func callUp(p voiceCallPhase) bool {
+	return p == voicePhaseConnecting || p == voicePhaseLive || p == voicePhaseUnbridged
 }
 
 // onRinging handles a ringing call: a call that can still be answered.
 func (m *voiceCallMachine) onRinging(obs voiceObservation, now time.Time) []voiceCallEffect {
 	m.quiet = 0
 
-	// A ring that arrives while a call is already up is Google Voice's call
-	// waiting. FlipAi does not juggle two calls; the live one keeps the agent.
-	if m.phase == voicePhaseConnecting || m.phase == voicePhaseLive || m.phase == voicePhaseUnbridged {
+	// A ring that arrives while a call is genuinely up is Google Voice's call
+	// waiting, and it reaches onCallUp rather than here. Anything left is a
+	// ring on a machine that believes a call is up and has just been corrected
+	// by onQuiet; if the correction has not happened yet, wait for it.
+	if callUp(m.phase) {
 		return nil
 	}
 
@@ -316,8 +336,7 @@ func (m *voiceCallMachine) onCallUp(obs voiceObservation, now time.Time) []voice
 		m.caller, m.label = obs.Caller, obs.Label
 	}
 
-	switch m.phase {
-	case voicePhaseConnecting, voicePhaseLive, voicePhaseUnbridged:
+	if callUp(m.phase) {
 		return nil
 	}
 
@@ -350,20 +369,43 @@ func (m *voiceCallMachine) onCallUp(obs voiceObservation, now time.Time) []voice
 	}
 }
 
-// onQuiet handles an observation with no call controls on screen at all.
-func (m *voiceCallMachine) onQuiet(now time.Time) []voiceCallEffect {
+// onQuiet handles an observation with no control that ends a call on it.
+func (m *voiceCallMachine) onQuiet(obs voiceObservation, now time.Time) []voiceCallEffect {
 	if m.phase == voicePhaseIdle {
 		m.quiet = 0
 		return nil
 	}
+
+	// A call that can still be answered is a call that is not up. If FlipAi
+	// thinks one is, it is wrong, and it has to stop thinking so now rather
+	// than in several seconds' time: Google Voice is offering to answer, and
+	// every second spent clearing a stale belief is a second closer to
+	// voicemail. Call waiting does not come through here -- a second call
+	// ringing during a live one still shows the control that ends the live
+	// one, so that observation goes to onCallUp instead.
+	if obs.Answer && callUp(m.phase) {
+		return m.end(now)
+	}
+
+	// A ring that is still ringing has not ended.
+	if obs.Answer {
+		m.quiet = 0
+		return nil
+	}
+
+	// A connected call still showing the controls a call offers has not ended
+	// either, whatever Google has renamed the hang-up control to.
+	if obs.Sustain && callUp(m.phase) {
+		m.quiet = 0
+		return nil
+	}
+
 	m.quiet++
 	if m.quiet < voiceEndDebounce {
 		return nil
 	}
-	if m.connectedAt.IsZero() || now.Sub(m.connectedAt) < voiceMinCallDuration {
-		if m.phase == voicePhaseConnecting || m.phase == voicePhaseLive || m.phase == voicePhaseUnbridged {
-			return nil
-		}
+	if callUp(m.phase) && (m.connectedAt.IsZero() || now.Sub(m.connectedAt) < voiceMinCallDuration) {
+		return nil
 	}
 	return m.end(now)
 }
