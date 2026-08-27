@@ -27,7 +27,7 @@ import (
 
 // Google Voice can send JPG/PNG/GIF images. Its own clients shrink still images
 // above 2 MB, but keeping the attachment under that limit before it reaches the
-// email-to-Voice gateway is substantially more reliable.
+// Google Voice web UI is substantially more reliable.
 const voiceImageMaxBytes = 2 * 1024 * 1024
 const codexRolloutTailBytes int64 = 64 * 1024 * 1024
 
@@ -39,6 +39,11 @@ type outboundVoiceImage struct {
 
 var deliveredVoiceImages sync.Map // original Gmail message id -> true
 
+var (
+	capturedCodexImageMu sync.Mutex
+	capturedCodexImage   *outboundVoiceImage
+)
+
 func isTransientVoiceReply(body string) bool {
 	s := strings.ToLower(strings.TrimSpace(body))
 	if s == "" {
@@ -49,10 +54,93 @@ func isTransientVoiceReply(body string) bool {
 		strings.HasPrefix(s, "queued for ")
 }
 
-// generatedImageForVoiceReply is intentionally outside the model path. Codex
-// already receives the generated image bytes and records them in its normal
-// generated_images/session data. FlipAi reads those bytes only after the turn,
-// so returning an image costs no extra model prompt or token round-trip.
+// clearCapturedCodexImage starts each Codex turn with an empty media slot. The
+// bridge runs one agent turn at a time, so the next imageGeneration item belongs
+// to the final reply for that same SMS and cannot leak into a later request.
+func clearCapturedCodexImage() {
+	capturedCodexImageMu.Lock()
+	capturedCodexImage = nil
+	capturedCodexImageMu.Unlock()
+}
+
+// captureCodexImageFromItemCompleted reads the image directly from Codex App
+// Server's official item/completed notification. Current v2 ThreadItem payloads
+// use type=imageGeneration and include the generated image as base64 in result,
+// plus an optional savedPath. Reading the event is preferable to searching the
+// filesystem after the fact: it is the exact image for the active turn and does
+// not require another prompt, tool call, save instruction, or model token.
+//
+// Do not require status==completed here. Codex has had versions where a valid
+// non-empty result arrived while the status string still said generating. The
+// item/completed lifecycle plus valid image bytes is sufficient.
+func captureCodexImageFromItemCompleted(params json.RawMessage) bool {
+	var p struct {
+		TurnID string `json:"turnId"`
+		Item   struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			Status    string `json:"status"`
+			Result    string `json:"result"`
+			SavedPath string `json:"savedPath"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(params, &p) != nil || p.Item.Type != "imageGeneration" {
+		return false
+	}
+
+	var img *outboundVoiceImage
+	if encoded := strings.TrimSpace(p.Item.Result); encoded != "" {
+		if data, err := base64.StdEncoding.DecodeString(encoded); err == nil && len(data) > 0 {
+			name := "flipai-generated.png"
+			if p.Item.SavedPath != "" {
+				name = filepath.Base(p.Item.SavedPath)
+			}
+			if normalized, err := normalizeVoiceImage(name, data); err == nil {
+				img = normalized
+			}
+		}
+	}
+	if img == nil && strings.TrimSpace(p.Item.SavedPath) != "" {
+		if data, err := os.ReadFile(p.Item.SavedPath); err == nil && len(data) > 0 {
+			if normalized, err := normalizeVoiceImage(filepath.Base(p.Item.SavedPath), data); err == nil {
+				img = normalized
+			}
+		}
+	}
+	if img == nil {
+		return false
+	}
+
+	copyImage := &outboundVoiceImage{
+		Filename:  img.Filename,
+		MediaType: img.MediaType,
+		Data:      append([]byte(nil), img.Data...),
+	}
+	capturedCodexImageMu.Lock()
+	capturedCodexImage = copyImage
+	capturedCodexImageMu.Unlock()
+	return true
+}
+
+func takeCapturedCodexImage() *outboundVoiceImage {
+	capturedCodexImageMu.Lock()
+	defer capturedCodexImageMu.Unlock()
+	img := capturedCodexImage
+	capturedCodexImage = nil
+	if img == nil {
+		return nil
+	}
+	return &outboundVoiceImage{
+		Filename:  img.Filename,
+		MediaType: img.MediaType,
+		Data:      append([]byte(nil), img.Data...),
+	}
+}
+
+// generatedImageForVoiceReply is intentionally outside the model path. The
+// primary path consumes the exact image bytes Codex already emitted in its
+// item/completed event. The filesystem scan remains only as compatibility
+// fallback for older Codex builds that did not expose the imageGeneration item.
 func generatedImageForVoiceReply(original GmailMessage, body string) (*outboundVoiceImage, string) {
 	if isTransientVoiceReply(body) || strings.TrimSpace(original.ID) == "" {
 		return nil, ""
@@ -60,6 +148,9 @@ func generatedImageForVoiceReply(original GmailMessage, body string) (*outboundV
 	key := original.ID
 	if _, sent := deliveredVoiceImages.Load(key); sent {
 		return nil, ""
+	}
+	if img := takeCapturedCodexImage(); img != nil {
+		return img, key
 	}
 
 	since := original.InternalDate
@@ -129,7 +220,7 @@ func newestCodexGeneratedImageSince(since time.Time) (*outboundVoiceImage, error
 		return nil, errors.New("Codex home is unavailable")
 	}
 
-	// Fast path: current Codex builds normally persist the completed image here.
+	// Compatibility path: many Codex builds persist the completed image here.
 	imageExt := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true}
 	for _, f := range recentFiles(filepath.Join(home, "generated_images"), since, imageExt) {
 		data, err := os.ReadFile(f.path)
@@ -141,9 +232,8 @@ func newestCodexGeneratedImageSince(since time.Time) (*outboundVoiceImage, error
 		}
 	}
 
-	// Fallback for Codex versions where the desktop preview exists but the
-	// generated_images save path regresses. The image-generation result still
-	// lives in the normal rollout as base64; read only recent rollout tails.
+	// Last-resort compatibility path. Older versions may have no generated_images
+	// file even though the image-generation result lives in the rollout as base64.
 	jsonExt := map[string]bool{".jsonl": true}
 	for _, f := range recentFiles(filepath.Join(home, "sessions"), since, jsonExt) {
 		data, err := latestImageResultFromRollout(f.path)
