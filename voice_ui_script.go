@@ -308,7 +308,12 @@ const voiceDesktopInitScript = `
     if(cfg.enabled&&rt.browserRunning&&(!rt.lastRingAt||/^0001/.test(rt.lastRingAt))) out.push(callout('No call has ever rung here. ','In Google Voice itself, open Settings → Calls and make sure receiving calls on this device is on.'));
     if(rt.callNote) out.push(callout('This call: ',rt.callNote));
     if(rt.blocked&&!rt.callNote) out.push(callout('Last call was not connected: ',rt.blocked));
-    if(rt.lastError&&!rt.lastOpenError) out.push(callout('Google Voice window: ',rt.lastError));
+    if(rt.lastError&&!rt.lastOpenError){
+      // A desktop app that would not enter voice mode is not a Google Voice
+      // problem, and labelling it as one sends the user to the wrong place.
+      const agentProblem=/desktop voice session|voice mode|Voice control|desktop app/i.test(rt.lastError);
+      out.push(callout(agentProblem?'Desktop app: ':'Google Voice window: ',rt.lastError));
+    }
     return out;
   }
 
