@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -306,38 +305,41 @@ const edgeVoicePrepareMMSJS = `(async () => {
 
   // Open the Messages surface first when Voice is sitting on Calls/Voicemail.
   clickNamed(/^(messages|text messages)$/i);
-  await sleep(250);
+  await sleep(350);
 
   // Start a fresh compose. Voice folds an exact phone number back into its
   // existing conversation, so we do not need a private conversation id.
-  if (!clickNamed(/^(send a message|new message|compose|start a message)$/i)) {
+  if (!clickNamed(/^(send a message|send new message|new message|compose|start a message)$/i)) {
     // If a conversation is already open, the compose button can be icon-only;
     // a looser aria/title match catches that without confusing the final Send.
-    clickNamed(/(new message|compose|start message)/i);
+    clickNamed(/(send new message|new message|compose|start message)/i);
   }
-  await sleep(350);
+  await sleep(450);
 
   let recipient = all('input').find(el => visible(el) && /(name|phone|recipient|^to\b)/i.test(normName(el)));
   if (!recipient) return 'recipient-input-missing';
   recipient.focus();
   setValue(recipient, phone);
-  await sleep(550);
+  await sleep(700);
 
   let picked = false;
-  const choices = all('[role="option"],[role="listbox"] [role="option"],[role="menuitem"],mat-option,gv-contact-list-item');
-  for (const choice of choices) {
-    if (!visible(choice)) continue;
-    if (digits(normName(choice)).includes(phone)) {
-      choice.click();
-      picked = true;
-      break;
-    }
+  const choices = all('[role="option"],[role="listbox"] [role="option"],[role="menuitem"],mat-option,gv-contact-list-item').filter(visible);
+  const exact = choices.find(choice => digits(normName(choice)).includes(phone));
+  if (exact) {
+    exact.click();
+    picked = true;
+  } else if (choices.length === 1) {
+    // The only suggestion after typing an exact 10-digit number is safe to
+    // select even when Voice renders the number in an element whose text is
+    // hidden from our accessibility-name helper.
+    choices[0].click();
+    picked = true;
   }
   if (!picked) {
     recipient.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true}));
     recipient.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true}));
   }
-  await sleep(450);
+  await sleep(550);
 
   const composer = all('textarea,input,[contenteditable="true"]')
     .find(el => visible(el) && el !== recipient && /(message|text|sms|type)/i.test(normName(el)));
@@ -351,9 +353,11 @@ const edgeVoicePrepareMMSJS = `(async () => {
     }
   }
 
-  let attachmentClicked = clickNamed(/^(send image|attach image|add image|image|photo)$/i);
-  if (!attachmentClicked) attachmentClicked = clickNamed(/(attach.*(image|photo)|(image|photo).*attach|send.*image)/i);
-  if (attachmentClicked) await sleep(300);
+  // Google's help text calls this control "Select image". Older/current Voice
+  // builds have also exposed Send image, Attach image, or icon-only variants.
+  let attachmentClicked = clickNamed(/^(select image|send image|attach image|add image|image|photo)$/i);
+  if (!attachmentClicked) attachmentClicked = clickNamed(/(select.*(image|photo)|attach.*(image|photo)|(image|photo).*attach|send.*image)/i);
+  if (attachmentClicked) await sleep(400);
 
   const fileInput = all('input[type="file"]').find(el => {
     const accept = String(el.getAttribute('accept') || '').toLowerCase();
@@ -397,19 +401,21 @@ const edgeVoiceAfterFileSelectJS = `(async () => {
   };
   const visible = (el) => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const name = (el) => (((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '') + ' ' + (el.innerText || el.textContent || '')).replace(/\s+/g, ' ').trim();
-  await sleep(900);
-  const candidates = [];
-  for (const d of docs()) {
-    try { candidates.push(...d.querySelectorAll('button,[role="button"]')); } catch (_) {}
-  }
-  const send = candidates.find(el => visible(el) && !el.disabled && /^(send|send message|send text|send sms)$/i.test(name(el)));
-  if (!send) return 'send-button-missing';
-  send.click();
-  await sleep(650);
-  return 'sent';
-})()`
 
-// Keep net/http referenced in this Windows-only file because edgeVoiceTarget's
-// verification uses the shared HTTP helper and this file is intentionally
-// compiled alongside it in the release build.
-var _ = http.MethodGet
+  // Image decoding/upload preview is asynchronous. Poll for the enabled Send
+  // control instead of assuming a fixed sub-second delay.
+  for (let attempt = 0; attempt < 24; attempt++) {
+    await sleep(attempt === 0 ? 700 : 350);
+    const candidates = [];
+    for (const d of docs()) {
+      try { candidates.push(...d.querySelectorAll('button,[role="button"]')); } catch (_) {}
+    }
+    const send = candidates.find(el => visible(el) && !el.disabled && /^(send|send message|send text|send sms)$/i.test(name(el)));
+    if (send) {
+      send.click();
+      await sleep(800);
+      return 'sent';
+    }
+  }
+  return 'send-button-missing';
+})()`
