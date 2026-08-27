@@ -43,7 +43,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $env:LOCALAPPDATA=Join-Path $env:RUNNER_TEMP 'FlipAi-Lifecycle'
-          $env:AISMSBRIDGE_NO_BROWSER='1'
+          Remove-Item Env:AISMSBRIDGE_NO_BROWSER -ErrorAction SilentlyContinue
           Remove-Item $env:LOCALAPPDATA -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
           Start-Process '.\dist\FlipAi.exe'
@@ -61,7 +61,10 @@ jobs:
             if($window){break}
             Start-Sleep -Milliseconds 300
           } while((Get-Date)-lt $deadline)
-          if(-not $window){throw 'FlipAi desktop window did not open'}
+          if(-not $window){
+            @(Get-Process -Name FlipAi -ErrorAction SilentlyContinue | Select-Object Id,MainWindowTitle,Path | Format-Table | Out-String) | Write-Host
+            throw 'FlipAi desktop window did not open'
+          }
           Start-Process '.\dist\FlipAi.exe' -ArgumentList '--quit' -Wait
           Start-Sleep -Seconds 2
           $left=@(Get-Process -Name FlipAi -ErrorAction SilentlyContinue)
