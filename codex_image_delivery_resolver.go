@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,7 @@ func generatedImageForVoiceReplyResolved(original GmailMessage, body string) (*o
 	// Exact-turn live App Server capture is still first and consumes the media
 	// slot without starting any second process or reading disk.
 	if img := takeCapturedCodexImage(); img != nil {
+		log.Printf("Codex generated image resolved from live item/completed event")
 		return img, key
 	}
 
@@ -41,7 +43,10 @@ func generatedImageForVoiceReplyResolved(original GmailMessage, body string) (*o
 		// base64 result and optional savedPath. Read that canonical object back
 		// through App Server instead of guessing the image's save directory.
 		if img, err := newestPersistedCodexThreadImage(); err == nil && img != nil {
+			log.Printf("Codex generated image resolved from persisted thread history")
 			return img, key
+		} else if err != nil {
+			log.Printf("Codex generated image thread-history lookup failed: %v", err)
 		}
 	}
 
@@ -55,11 +60,18 @@ func generatedImageForVoiceReplyResolved(original GmailMessage, body string) (*o
 	// separate image save root, so neither location is authoritative.
 	if imageRequest {
 		if img, err := newestConfiguredCodexWorkingDirImageSince(since); err == nil && img != nil {
+			log.Printf("Codex generated image resolved from working-directory fallback")
 			return img, key
+		} else if err != nil {
+			log.Printf("Codex generated image working-directory fallback failed: %v", err)
 		}
 		if img, err := newestCodexGeneratedImageSince(since); err == nil && img != nil {
+			log.Printf("Codex generated image resolved from legacy CODEX_HOME fallback")
 			return img, key
+		} else if err != nil {
+			log.Printf("Codex generated image CODEX_HOME fallback failed: %v", err)
 		}
+		log.Printf("Codex image request completed but FlipAi could not resolve an image asset")
 	}
 	return nil, ""
 }
@@ -116,7 +128,7 @@ func newestPersistedCodexThreadImage() (*outboundVoiceImage, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		raw, err := reader.Request(ctx, "thread/read", map[string]any{
-			"threadId":    threadID,
+			"threadId":     threadID,
 			"includeTurns": true,
 		})
 		if err == nil {
