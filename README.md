@@ -401,12 +401,25 @@ the same agent that can actually work on and control the computer. No AI API
 key is involved: the conversation happens inside the desktop app exactly as it
 does when you talk to it yourself.
 
-Google Voice runs in a window FlipAi owns and keeps alive. FlipAi watches for
-a ringing call -- in the page, in its frames, or announced only by a
-notification -- checks the caller against the agents' own lists of numbers,
-clicks **Answer** exactly as a person would, points the desktop app's audio at
-the virtual cables, and starts its voice mode. When the call ends, voice mode
-is switched back off.
+Google Voice is a part of FlipAi, not a browser FlipAi drives. It runs in
+FlipAi's own Edge WebView2 view -- the same component the FlipAi window itself
+is drawn with -- created and kept alive by FlipAi, signed in once and loaded at
+all times. There is no external browser to start, no separate application whose
+windows appear on the desktop, and no state in which Google Voice is a window of
+its own: it is either standing inside the FlipAi panel or parked off every
+display, still running and still taking calls.
+
+FlipAi watches for a ringing call -- in the page, in its frames, or announced
+only by a notification -- checks the caller against the agents' own lists of
+numbers, presses **Answer**, points the desktop app's audio at the virtual
+cables, and starts a fresh voice session in it. When the caller hangs up, that
+session is ended and confirmed ended, so the next call starts clean.
+
+**An allowed caller is not left to voicemail because one click was ignored.**
+Google Voice rings for about 25 seconds, and FlipAi keeps pressing Answer for
+the whole of it, escalating through three different ways of pressing: the
+page's own click, a real pointer press delivered through the browser's input
+pipeline, and the Windows accessibility Invoke a screen reader would use.
 
 There is deliberately **no separate auto-answer switch**: with calling enabled,
 an authorized caller is always answered and an unauthorized caller never is.
@@ -422,11 +435,11 @@ Detecting and answering are one behavior, not two options.
   permissions (which FlipAi grants itself; no Windows prompt ever needs
   answering).
 - **Connections → Google Voice** is the live view: the real Google Voice
-  browser standing inside the page. Closing or leaving the preview never stops
-  Google Voice -- the window only leaves the panel and keeps running in the
-  background, detecting and answering incoming calls. **Open in its own
-  window** hands it back as an ordinary window if you would rather put it on
-  another monitor.
+  standing inside the page, where you sign in and can watch a call arrive.
+  Closing or leaving the preview never stops it -- Google Voice leaves the panel
+  and keeps running out of sight, detecting and answering incoming calls. It is
+  clipped to whatever part of the panel is on screen, so scrolling or a smaller
+  FlipAi window moves it rather than making it disappear.
 
 Nothing on either page waits for a Save button; every control writes as it is
 changed, and the calling switch writes through an endpoint of its own so
@@ -440,7 +453,7 @@ construction, no speaker plays them and no microphone hears them, and they
 keep working while the PC is locked:
 
 ```text
-caller -> Google Voice (FlipAi's window)
+caller -> Google Voice (inside FlipAi)
        -> Google Voice's "speaker"  == cable 1 ==  the desktop app's "microphone"
        -> the agent hears the caller and answers
        -> the desktop app's "speaker" == cable 2 ==  Google Voice's "microphone"
@@ -449,12 +462,15 @@ caller -> Google Voice (FlipAi's window)
 
 **The routing is chosen and applied entirely by FlipAi -- there are no device
 pickers anywhere.** FlipAi reads the machine's endpoint list, recognizes the
-installed cable families (VB-CABLE, VB-CABLE A/B, VoiceMeeter), pins Google
-Voice's microphone and speaker inside its own window, and writes the desktop
-app's per-application default microphone and speaker through the same Windows
-per-app audio store the Settings app uses. You never open the AI app's audio
-settings, and your PC's real microphone and speakers are never part of the
-call.
+installed cable families (VB-CABLE, VB-CABLE A/B, VoiceMeeter, and the free
+driver its own audio-bridge installer places), pins Google Voice's microphone
+and speaker inside the page itself, and writes the desktop app's
+per-application default microphone and speaker through the same Windows per-app
+audio store the Settings app uses. The desktop app is wired while the phone is
+still ringing, before its voice session opens a stream, because Windows hands a
+process the endpoint it had when the stream opened. You never open the AI app's
+audio settings, and your PC's real microphone and speakers are never part of
+the call.
 
 The one thing FlipAi cannot conjure is the cables themselves: Windows has no
 built-in way to pipe one application's speaker into another's microphone, and
@@ -472,8 +488,8 @@ an override only applies while a matching device is actually present.
 ### Setting it up
 
 1. Settings → **Google Voice calling** → turn **Answer phone calls with an
-   agent** on. FlipAi opens Google Voice at Windows sign-in, keeps it running
-   while the PC is locked, and reopens it if it is ever closed.
+   agent** on. FlipAi loads Google Voice at Windows sign-in, keeps it running
+   while the PC is locked, and brings it back if it ever stops.
 2. **Sign in to Google Voice** (or sign in inside the live view on
    Connections).
 3. In Google Voice itself, open **Settings → Calls** and turn on receiving
@@ -511,42 +527,52 @@ the call is refused.
 
 ### It runs in the background
 
-The Google Voice window is put away rather than closed, because a closed window
-cannot ring. Windows keeps it running while the PC is locked, and FlipAi starts
-it again if it disappears. A background start does not flash a window on
-screen.
+Google Voice is parked out of sight rather than closed, because a closed page
+cannot ring. Windows keeps it running while the PC is locked, and FlipAi brings
+it back if it ever stops. Nothing flashes on screen at sign-in and nothing
+appears in the taskbar or in Alt-Tab at any point.
 
-A window nobody is looking at is one Chromium considers hidden, and Chromium
-slows a hidden window's timers to once a minute -- far longer than a call rings
-for. FlipAi therefore starts this window with background throttling, renderer
-backgrounding and occlusion detection switched off, and does not rely on a
-timer to notice a call in the first place: the page change a ringing call
-makes -- in the main document or in any same-origin frame, all of which FlipAi
-watches -- drives the check, and an incoming-call notification triggers an
-immediate burst of checks on top.
+It is parked off the edge of the desktop rather than minimized, deliberately. A
+minimized browser window is one Chromium is entitled to treat as hidden: it
+backgrounds the renderer and slows its timers to once a minute, far longer than
+a call rings for. Off-screen it stays live. On top of that FlipAi starts the
+view with background throttling, renderer backgrounding and occlusion detection
+switched off, and does not rely on a timer to notice a call in the first place:
+the page change a ringing call makes -- in the main document or in any
+same-origin frame -- drives the check, an incoming-call notification triggers an
+immediate burst of checks, and FlipAi's own loopback control channel reads the
+page several times a second as an independent second pair of eyes.
 
 ### If Google Voice does not appear
 
-The window is created by a second FlipAi process, so a failure happens out of
-sight of the page. FlipAi waits for the window to exist and reports what stopped
-it, on the Connections panel and in Activity.
+Google Voice runs in a second FlipAi process -- that is what lets it stay signed
+in and listening with the FlipAi window closed -- so a failure happens out of
+sight of the page. FlipAi waits for it and reports what stopped it, on the
+Connections panel and in Activity.
 
-The usual cause is a missing **Microsoft Edge WebView2 Runtime** -- FlipAi cannot
-draw the Google Voice window without it. Settings shows the installed
-version, and says so plainly when it is absent. Microsoft distributes it free as
-the Evergreen Standalone Installer.
+The usual cause is a missing **Microsoft Edge WebView2 Runtime** -- FlipAi
+cannot draw Google Voice, or its own window, without it. Settings shows the
+installed version, and says so plainly when it is absent. Microsoft distributes
+it free as the Evergreen Standalone Installer.
 
-If the message says another FlipAi Google Voice process is running without a
-window, quit FlipAi from the tray and start it again; that clears a wedged
-window process.
+If the panel says Google Voice is listening in the background rather than
+showing it, scroll the panel into view: it is clipped to the part of the panel
+that is actually on screen, and below a certain size it is withdrawn rather
+than hung over the rest of the app.
 
 ### Limits worth knowing
 
 - Windows only, and the desktop session has to be signed in. The window keeps
   running while the PC is locked, but it cannot start at the sign-in screen.
-- The desktop app has to be running (or have a launch command configured) for
-  a call to reach it; FlipAi starts its voice mode through the app's
-  accessible Voice control or its configured shortcut.
+- FlipAi starts the desktop app itself if it is not running: it looks where
+  the Codex and ChatGPT desktop apps install themselves, then for their Start
+  Menu shortcut, which is what reaches a Store-packaged app. A launch command
+  configured in FlipAi always wins over both.
+- Voice mode is started through the app's accessible Voice control, or its
+  configured keyboard shortcut, and FlipAi then **checks that voice mode
+  actually started** before reporting the call as a working conversation. If it
+  did not, the status says which controls the app offered instead of claiming
+  the call is fine.
 - The per-app audio routing uses the same per-application store Windows'
   own Settings app writes. If Windows refuses it, the status row says so and
   names the one-time manual fallback: choose the cable ends once inside the
@@ -622,9 +648,29 @@ Before a Windows artifact is accepted, GitHub Actions verifies:
 - installed tray loading the branded icon;
 - real uninstaller cleanup of app files, Start Menu shortcut, uninstall registration, and startup entry;
 - Quit stopping every FlipAi process, the Google Voice window included;
-- the Google Voice window actually appearing on the runner's desktop, both from
-  `FlipAi.exe --google-voice` directly and through the loopback endpoint the
-  Open button calls, with the recorded diagnostics dumped when it does not.
+- Google Voice coming up inside FlipAi's own WebView2 view, with **no Microsoft
+  Edge application started**, exactly one Google Voice window however many
+  times it is asked for, that window carrying no taskbar button and no Alt-Tab
+  entry, and its loopback control channel answering
+  (`scripts/Assert-GoogleVoiceReceiver.ps1`).
+
+### The call lifecycle
+
+`voice_session.go` holds the whole life of a call -- ring, authorize, answer,
+start the desktop voice session, hang up, tear down, next call -- as a state
+machine with no Windows types in it, so it is tested directly. Those tests
+cover an allowed caller being answered at once and kept being answered for the
+whole ring, an unauthorized caller never being touched by any rung of the
+ladder, a caller Google Voice names a moment after the card appears, a call
+answered by hand, a single dropped frame not ending a live call, an unreadable
+page never ending one, exactly one voice session started and one torn down per
+call, a failed voice session never being described as a working conversation,
+and the next call getting a fresh session.
+
+The way voice mode is driven in the desktop app is checked the same way: the
+accessibility report is parsed and asserted, including that starting voice mode
+never presses a control that would end it, and that the Google Voice answer
+path never presses Decline or Send to voicemail.
 
 ### Call-bridge browser tests
 
@@ -642,9 +688,23 @@ window must not keep. The automatic cable detection has its own unit tests
 over the real VB-CABLE and VoiceMeeter endpoint names.
 
 It needs Node and Playwright and skips itself when they are absent, so the
-Windows release job does not run it. What it cannot cover, and what only a real
-call on a real PC can confirm: Google's own markup, WebView2, the telephony
-itself, and whether the desktop AI app actually enters voice mode.
+Windows release job does not run it.
+
+### What is verified where, honestly
+
+Everything above runs without a phone. Be clear about the boundary:
+
+| Verified in CI | Only verifiable on your Windows PC |
+| --- | --- |
+| The call state machine end to end, including authorization, the answer ladder, teardown and the next call | Google Voice's own markup: whether the ringing card FlipAi looks for is the card Google renders today |
+| The injected page script driving a stand-in Google Voice page in real Chromium, with the browser genuinely applying the microphone and speaker FlipAi selects | Real telephony: that a call to your number rings in this browser at all, which needs "Receive calls on this device" on in Google Voice itself |
+| Google Voice coming up inside FlipAi's own WebView2 view, alone, with no external browser and no taskbar window | Whether the Codex desktop app on your machine exposes a Voice control FlipAi can press, and whether pressing it starts a conversation |
+| The cable plan, the audio-path invariants, and the per-app routing script's contents | Real audio over real virtual cables: that the caller hears the agent and the agent hears the caller |
+| The Windows build, the installer, install and uninstall | The whole cycle repeating reliably on your line |
+
+A Linux CI run proving the state machine is not a Windows call working. The
+last column is the part that has to be tried on the real machine, and the
+Connections status rows are written to say which step failed when it does.
 
 ## SmartScreen / antivirus
 

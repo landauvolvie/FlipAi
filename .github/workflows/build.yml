@@ -85,46 +85,12 @@ jobs:
             throw 'FlipAi processes survived Quit for more than 20 seconds'
           }
 
-      - name: Real Microsoft Edge Google Voice receiver smoke test
+      - name: Google Voice runs inside FlipAi, with no external browser
         shell: pwsh
         run: |
-          $ErrorActionPreference='Stop'
-          $dataDir=Join-Path $env:RUNNER_TEMP 'FlipAi-Edge-Voice'
-          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $dataDir | Out-Null
-          $env:LOCALAPPDATA=$dataDir
-          $env:AISMSBRIDGE_NO_BROWSER='1'
-          $stateFile=Join-Path $dataDir 'AISMSBridge\voice-call-state.json'
-          $before=@(Get-Process -Name msedge -ErrorAction SilentlyContinue).Id
-
-          Start-Process '.\dist\FlipAi.exe' -ArgumentList '--google-voice','--visible'
-          $deadline=(Get-Date).AddSeconds(120)
-          $state=$null
-          do {
-            if(Test-Path $stateFile){try{$state=Get-Content $stateFile -Raw|ConvertFrom-Json}catch{}}
-            if($state -and $state.browserRunning){break}
-            if($state -and $state.lastOpenError){throw "Google Voice receiver failed: $($state.lastOpenError)"}
-            Start-Sleep -Milliseconds 500
-          } while((Get-Date)-lt $deadline)
-          if(-not ($state -and $state.browserRunning)){throw 'Google Voice receiver never reported browserRunning'}
-          if("$($state.renderMode)" -notmatch 'Microsoft Edge'){throw "Google Voice is not using the supported Edge receiver: $($state.renderMode)"}
-
-          $edge=$null
-          $deadline=(Get-Date).AddSeconds(30)
-          do {
-            $edge=Get-Process -Name msedge -ErrorAction SilentlyContinue | Where-Object {
-              $_.Id -notin $before -and ($_.MainWindowTitle -like '*Google Voice*' -or $_.MainWindowTitle -like 'FlipAi*')
-            } | Select-Object -First 1
-            if($edge){break}
-            Start-Sleep -Milliseconds 500
-          } while((Get-Date)-lt $deadline)
-          if(-not $edge){
-            @(Get-Process -Name msedge -ErrorAction SilentlyContinue|Select-Object Id,MainWindowTitle|Format-Table|Out-String)|Write-Host
-            throw 'The Google Voice Edge receiver reported running but its app-mode window was not found'
-          }
-          Write-Host "Google Voice Edge receiver is running: '$($edge.MainWindowTitle)' pid=$($edge.Id)"
-          Get-Process -Name FlipAi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Get-Process -Name msedge -ErrorAction SilentlyContinue | Where-Object {$_.Id -notin $before} | Stop-Process -Force -ErrorAction SilentlyContinue
+          .\scripts\Assert-GoogleVoiceReceiver.ps1 `
+            -Exe (Resolve-Path .\dist\FlipAi.exe).Path `
+            -DataRoot (Join-Path $env:RUNNER_TEMP 'FlipAi-Voice-Receiver')
 
       - name: Microsoft Defender scan app when available
         shell: pwsh

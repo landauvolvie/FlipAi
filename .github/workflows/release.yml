@@ -51,38 +51,12 @@ jobs:
           go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist\FlipAi.exe .
           if(-not (Test-Path .\dist\FlipAi.exe)){throw 'FlipAi.exe was not built'}
 
-      - name: Microsoft Edge Google Voice receiver smoke test
+      - name: Google Voice runs inside FlipAi, with no external browser
         shell: pwsh
         run: |
-          $ErrorActionPreference='Stop'
-          $dataDir=Join-Path $env:RUNNER_TEMP 'FlipAi-Release-Edge-Voice'
-          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $dataDir | Out-Null
-          $env:LOCALAPPDATA=$dataDir
-          $env:AISMSBRIDGE_NO_BROWSER='1'
-          $stateFile=Join-Path $dataDir 'AISMSBridge\voice-call-state.json'
-          $before=@(Get-Process -Name msedge -ErrorAction SilentlyContinue).Id
-          Start-Process '.\dist\FlipAi.exe' -ArgumentList '--google-voice','--visible'
-          $deadline=(Get-Date).AddSeconds(120)
-          $state=$null
-          do {
-            if(Test-Path $stateFile){try{$state=Get-Content $stateFile -Raw|ConvertFrom-Json}catch{}}
-            if($state -and $state.browserRunning){break}
-            if($state -and $state.lastOpenError){throw "Google Voice receiver failed: $($state.lastOpenError)"}
-            Start-Sleep -Milliseconds 500
-          } while((Get-Date)-lt $deadline)
-          if(-not ($state -and $state.browserRunning)){throw 'Google Voice receiver never reported browserRunning'}
-          if("$($state.renderMode)" -notmatch 'Microsoft Edge'){throw "Google Voice is not using Edge: $($state.renderMode)"}
-          $edge=$null
-          $deadline=(Get-Date).AddSeconds(30)
-          do {
-            $edge=Get-Process -Name msedge -ErrorAction SilentlyContinue|Where-Object {$_.Id -notin $before -and ($_.MainWindowTitle -like '*Google Voice*' -or $_.MainWindowTitle -like 'FlipAi*')}|Select-Object -First 1
-            if($edge){break}
-            Start-Sleep -Milliseconds 500
-          } while((Get-Date)-lt $deadline)
-          if(-not $edge){throw 'Edge receiver reported running but its app-mode window was not found'}
-          Get-Process -Name FlipAi -ErrorAction SilentlyContinue|Stop-Process -Force -ErrorAction SilentlyContinue
-          Get-Process -Name msedge -ErrorAction SilentlyContinue|Where-Object {$_.Id -notin $before}|Stop-Process -Force -ErrorAction SilentlyContinue
+          .\scripts\Assert-GoogleVoiceReceiver.ps1 `
+            -Exe (Resolve-Path .\dist\FlipAi.exe).Path `
+            -DataRoot (Join-Path $env:RUNNER_TEMP 'FlipAi-Voice-Receiver')
 
       - name: Install Inno Setup compiler if needed
         shell: pwsh
@@ -144,24 +118,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference='Stop'
           $version='${{ steps.version.outputs.version }}'
           $tag='v'+$version
           $setup=".\installer-output\FlipAi-Setup-v$version.exe"
-          $notes=@(
-            "FlipAi $tag fixes the remaining Codex generated-image detection failure before Google Voice MMS delivery:",
-            "",
-            "- Current Codex saves generated images under the active turn working directory in generated_images. FlipAi v0.30/v0.31 incorrectly used CODEX_HOME as the primary disk fallback.",
-            "- FlipAi now resolves the configured Codex working directory and reads the exact recent image from its generated_images folder when the App Server image event is unavailable.",
-            "- Direct item/completed imageGeneration capture remains first choice and reuses the exact bytes Codex already generated.",
-            "- The disk fallback is limited to image-generation SMS requests so a later text-only command cannot accidentally inherit a recent picture from another turn.",
-            "- No extra Codex prompt, save instruction, image generation, or model-token round-trip is added.",
-            "- Image delivery still uses FlipAi's signed-in Microsoft Edge Google Voice window and Google Voice's normal image/MMS composer.",
-            "- If Google Voice MMS automation receives an image but cannot send it, FlipAi falls back to a text notice rather than silently dropping the final response.",
-            "",
-            "A real Google Voice MMS remains the final end-to-end validation because GitHub CI cannot send a carrier MMS."
-          ) -join "`n"
+          # The notes ship with the change they describe, so they are reviewed
+          # with it rather than written into this workflow after the fact.
+          $notesFile='.\docs\RELEASE-NOTES.md'
+          if(-not (Test-Path $notesFile)){throw "docs/RELEASE-NOTES.md is missing; release notes ship with the release"}
+          $notes=Get-Content $notesFile -Raw
+          if($notes -notmatch [regex]::Escape($version)){throw "docs/RELEASE-NOTES.md does not describe $version"}
           if(gh release view $tag *> $null){
             gh release upload $tag $setup .\installer-output\SHA256SUMS.txt --clobber
+            gh release edit $tag --title "FlipAi $tag" --notes $notes
           } else {
             gh release create $tag $setup .\installer-output\SHA256SUMS.txt --title "FlipAi $tag" --notes $notes
           }
