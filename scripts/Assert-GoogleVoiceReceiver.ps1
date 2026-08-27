@@ -16,7 +16,9 @@ proves is the part CI can prove.
   4. That window is a tool window: no taskbar button, no Alt-Tab entry. It has
      nowhere to be except inside the FlipAi panel.
   5. FlipAi's own endpoint inside that process answers, and refuses a request
-     that does not carry its token. That endpoint is how the FlipAi host asks
+     that does not carry its token.
+  6. The in-process DevTools channel really works on this machine -- the second
+     rung of the answer ladder and sending an image both depend on it. That endpoint is how the FlipAi host asks
      this process to send an image through the signed-in Google Voice session
      it owns. (The DevTools channel FlipAi uses to press Answer is
      in-process and opens no port, so there is nothing there to check from
@@ -178,6 +180,24 @@ try {
     throw "FlipAi's Google Voice endpoint on port $($state.controlPort) did not answer"
   }
   Write-Host "FlipAi's Google Voice endpoint answered on 127.0.0.1:$($state.controlPort)"
+
+  # 6. The in-process DevTools channel really works here. Constructing it
+  #    proves nothing; making a call through it proves the second rung of the
+  #    answer ladder and sending an image are both available on this machine.
+  $probed = $false
+  $deadline = (Get-Date).AddSeconds(60)
+  $probeError = ''
+  do {
+    try {
+      if (Invoke-RestMethod "http://127.0.0.1:$($state.controlPort)/probe" -Headers @{ 'X-FlipAi-Token' = $token } -TimeoutSec 15) { $probed = $true; break }
+    } catch { $probeError = $_.Exception.Message }
+    Start-Sleep -Seconds 2
+  } while ((Get-Date) -lt $deadline)
+  if (-not $probed) {
+    Show-Diagnostics "the in-process DevTools channel did not answer: $probeError"
+    throw "FlipAi could not reach the Google Voice page through WebView2's DevTools call: $probeError"
+  }
+  Write-Host 'The in-process DevTools channel answered.'
 
   # An endpoint that would answer without the token would let anything on this
   # machine drive a signed-in Google Voice session.

@@ -370,6 +370,27 @@ func startVoiceWindowEndpoint(dataDir string, control *voiceControlChannel) (int
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
+	// /probe proves the in-process DevTools channel actually works on this
+	// machine, which is what the second rung of the answer ladder and sending an
+	// image both depend on. Constructing the channel proves nothing; making a
+	// call through it does.
+	mux.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r) {
+			http.Error(w, "FlipAi local token required", http.StatusForbidden)
+			return
+		}
+		var answer int
+		if err := voiceEval(control.devTools, "1+1", false, &answer); err != nil {
+			http.Error(w, "the Google Voice page did not answer: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if answer != 2 {
+			http.Error(w, "the Google Voice page answered nonsense", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
 	mux.HandleFunc("/mms", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
