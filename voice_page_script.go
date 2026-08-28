@@ -327,6 +327,10 @@ const googleVoiceInitScript = `
     if (!/incoming|call/i.test(text)) return;
     noteHint = text.slice(0, 200);
     noteHintAt = Date.now();
+    // Published so FlipAi's own read of the page can use it too. The ringing
+    // card and the notification are two views of the same ring, and only one
+    // of them reliably carries the number.
+    try { window.__flipVoiceRing = {text: noteHint, at: noteHintAt}; } catch (_) {}
     for (const wait of [0, 300, 800, 1500]) setTimeout(() => { tick(); }, wait);
   }
   try {
@@ -532,6 +536,28 @@ const googleVoiceInitScript = `
   }
 
   function callerIdentity() {
+    // What the incoming-call notification for this same ring said, if anything.
+    const fromNotification = () => {
+      if (!noteHint || Date.now() - noteHintAt >= 60000) return {number: '', label: ''};
+      const said = noteHint.match(FROM_RE);
+      return {
+        number: phoneFrom(noteHint),
+        label: said ? said[1].trim().slice(0, 120) : ''
+      };
+    };
+    const announced = fromNotification();
+
+    // A ringing card that shows a contact name and no number is the ordinary
+    // case when the caller is in Google Contacts -- Google Voice shows the
+    // name it has for them. But the number is what the user allowed on the
+    // agent, and the notification for this same ring carries it. Refusing a
+    // caller FlipAi could have identified, because the card happened to show a
+    // name instead of a number, sends an allowed caller to voicemail.
+    const withNumber = (id) => {
+      if (!id.number && announced.number) id.number = announced.number;
+      return id;
+    };
+
     // The Answer button's own accessible name is the most direct statement of
     // who is calling when Google provides one.
     const answer = findAnswer();
@@ -541,7 +567,7 @@ const googleVoiceInitScript = `
         const spoken = said[1].trim();
         const n = phoneFrom(spoken);
         if (n) return {number: n, label: ''};
-        if (spoken) return {number: '', label: spoken.slice(0, 120)};
+        if (spoken) return withNumber({number: '', label: spoken.slice(0, 120)});
       }
     }
     for (const scope of callerScopes()) {
@@ -551,7 +577,7 @@ const googleVoiceInitScript = `
         const said = fromAria[1].trim();
         const n = phoneFrom(said);
         if (n) return {number: n, label: ''};
-        if (said) return {number: '', label: said.slice(0, 120)};
+        if (said) return withNumber({number: '', label: said.slice(0, 120)});
       }
       const text = scopeText(scope);
       const number = phoneFrom(text);
@@ -559,16 +585,11 @@ const googleVoiceInitScript = `
       // The first scope that identifies anybody wins outright. Carrying a label
       // outward and letting a wider scope supply the number let a number from
       // the thread list attach itself to an unrelated ringing call.
-      if (number || label) return {number: number, label: label};
+      if (number || label) return withNumber({number: number, label: label});
     }
     // A notification that named the caller is the last resort, for a ring
     // that only ever announced itself that way.
-    if (noteHint && Date.now() - noteHintAt < 30000) {
-      const n = phoneFrom(noteHint);
-      if (n) return {number: n, label: ''};
-      const said = noteHint.match(FROM_RE);
-      if (said) return {number: '', label: said[1].trim().slice(0, 120)};
-    }
+    if (announced.number || announced.label) return announced;
     return {number: '', label: ''};
   }
 

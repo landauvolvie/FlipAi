@@ -1,8 +1,32 @@
 # FlipAi v0.36.0
 
-Two things reported from a real PC: the free audio bridge would not install, and
-a call that reached FlipAi still went to voicemail with nothing on screen to say
-why.
+Three things reported from a real PC: an allowed caller was refused and went to
+voicemail, the free audio bridge would not install, and there was nothing on
+screen afterwards to say what had happened.
+
+## An allowed caller was refused because Google Voice showed a name
+
+The reported call rang, FlipAi saw it, and it went to voicemail anyway. The
+notification read **"Call from Me · mobile · (845) 324-1813"** — and that is the
+whole story. The caller was in Google Contacts, so the ringing card showed the
+name Google has for them and no number at all.
+
+FlipAi read the card first and stopped there. The number, which is what the
+caller is allowed by, was sitting in the notification for the same ring, and
+FlipAi only ever looked at the notification for a ring that had shown nothing at
+all. A name on the card was "identified" — so an allowed caller was refused for
+being someone Google could name.
+
+The ring and its notification are now treated as two views of one call: when the
+card carries a name and no number, the number the notification announced for
+that same ring fills it in. Both of FlipAi's ways of reading the page — the
+script inside it and the control channel outside it — do this, so they cannot
+disagree about who is calling.
+
+A number is only borrowed from an announcement made in the last minute, while
+something is actually on screen to answer. A number sitting elsewhere in the
+Google Voice UI still cannot authorize anything, and an unlisted caller is still
+refused.
 
 ## The audio bridge could not install
 
@@ -44,6 +68,16 @@ Also in this release: "Virtual audio cables: Not found" was still being repeated
 by the desktop-app routing row as if it were a second, unrelated problem.
 
 ## Verified
+
+The refused-caller fix is tested as the reported call: in real headless
+Chromium, a ringing card showing only the name "Me" while the notification
+carries the number is answered, and the number is what gets recorded. Both
+readings of the page are tested this way, and both fail without the fix.
+
+The control channel — FlipAi's second way of seeing a call, and the rung it uses
+when the page's own click is ignored — now runs in that browser harness too,
+against the same stand-in page, decoding into the same types the product
+decodes into. Until now it only ever ran on a Windows runner.
 
 The installer-log summariser is tested against the exact transcript from the
 failing machine and must report the raised error rather than any of the header.

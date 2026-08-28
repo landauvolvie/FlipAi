@@ -111,6 +111,16 @@ func (h *callHarness) shimHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write([]byte(googleVoiceInitScript))
 	})
+	// The control channel's own scripts, served the same way and for the same
+	// reason: the browser runs the exact strings the Windows app evaluates
+	// through WebView2's DevTools channel, with no copy to drift out of date.
+	mux.HandleFunc("/flipai-probe.json", func(w http.ResponseWriter, r *http.Request) {
+		writeResult(w, map[string]string{
+			"snapshot": voicePageSnapshotJS,
+			"click":    voiceClickAnswerJS,
+			"point":    voiceAnswerPointJS,
+		})
+	})
 	mux.HandleFunc("/configure", func(w http.ResponseWriter, r *http.Request) {
 		var cfg harnessConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
@@ -179,7 +189,21 @@ type driverReport struct {
 		Capabilities map[string]string `json:"capabilities"`
 		Observed     observedPage      `json:"observed"`
 		MidCall      observedPage      `json:"midCall"`
+		Probe        probedPage        `json:"probe"`
 	} `json:"scenarios"`
+}
+
+// probedPage is what the control channel saw and did, decoded into the very
+// types the product decodes into. The scripts are the product's own strings and
+// the structs are the product's own structs, so a script whose shape drifts
+// away from what FlipAi expects fails here rather than on a Windows runner.
+type probedPage struct {
+	Ringing   voicePageSnapshot `json:"ringing"`
+	Point     answerPoint       `json:"point"`
+	Clicked   bool              `json:"clicked"`
+	Live      voicePageSnapshot `json:"live"`
+	LivePoint answerPoint       `json:"livePoint"`
+	Idle      voicePageSnapshot `json:"idle"`
 }
 
 type observedPage struct {
@@ -496,6 +520,83 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 		st := loadVoiceRuntime(h.scenario("notification-names-the-caller").dataDir)
 		if st.Caller != "8455551000" {
 			t.Errorf("caller recorded as %q, want the number the notification carried", st.Caller)
+		}
+	})
+
+	// The case reported from a real PC: Google Voice shows the Contacts name it
+	// has for the caller and no number, while the notification for the same ring
+	// carries the number -- and the number is what the user allowed on the
+	// agent. A card showing a name is not a caller FlipAi failed to identify.
+	t.Run("a name on the card does not hide the number in the notification", func(t *testing.T) {
+		i := report.find(t, "notification-number-behind-contact-name")
+		if !report.Scenarios[i].Answered {
+			t.Fatal("a caller shown by name on the card and by number in the notification was not answered")
+		}
+		s := h.scenario("notification-number-behind-contact-name")
+		if acts, _ := s.recorded(); len(acts) != 1 || acts[0] != "C" {
+			t.Errorf("agent activations = %v, want exactly one", acts)
+		}
+		st := loadVoiceRuntime(s.dataDir)
+		if st.Caller != "8455551000" {
+			t.Errorf("caller recorded as %q, want the number the notification carried", st.Caller)
+		}
+		if st.CallerLabel != "Me" {
+			t.Errorf("caller label = %q, want the name the card displayed", st.CallerLabel)
+		}
+	})
+
+	// FlipAi's second way into the page. On Windows this is the rung used when
+	// the page's own click is ignored, and it is the only way FlipAi can see a
+	// call if the injected script has wedged. Everything here is the product's
+	// own script string, run in a real browser, decoded into the product's own
+	// types.
+	t.Run("the control channel reads the call and presses answer", func(t *testing.T) {
+		i := report.find(t, "control-channel-probe")
+		p := report.Scenarios[i].Probe
+
+		if !p.Ringing.Answer || p.Ringing.Hangup {
+			t.Errorf("a ringing call read as answer=%v hangup=%v, want a ring", p.Ringing.Answer, p.Ringing.Hangup)
+		}
+		if !p.Ringing.SignedIn {
+			t.Error("the control channel did not recognize a signed-in Google Voice page")
+		}
+		// Same fix as above, on the other path: the card shows a name, the
+		// notification carries the number, and FlipAi's own read has to agree
+		// with the injected script's or the two disagree about who is calling.
+		if p.Ringing.Caller != "8455559999" {
+			t.Errorf("control channel read the caller as %q, want the notification's number", p.Ringing.Caller)
+		}
+		if p.Ringing.Label != "Me" {
+			t.Errorf("control channel read the label as %q, want the displayed name", p.Ringing.Label)
+		}
+		if len(p.Ringing.Devices) == 0 {
+			t.Error("the control channel's snapshot carried no audio endpoints")
+		}
+		if !p.Point.Found || p.Point.X <= 0 || p.Point.Y <= 0 {
+			t.Errorf("no place to aim a real pointer press at a ringing card: %+v", p.Point)
+		}
+		if !p.Clicked {
+			t.Error("the control channel found nothing to press on a ringing card")
+		}
+
+		// Once the call is up the reading has to flip, or FlipAi answers a call
+		// that is already answered and never notices it ended.
+		if p.Live.Answer || !p.Live.Hangup {
+			t.Errorf("a live call read as answer=%v hangup=%v, want a call in progress", p.Live.Answer, p.Live.Hangup)
+		}
+		if !p.Live.CallControls {
+			t.Error("a live call did not offer the mute and keypad controls that keep it alive")
+		}
+		if p.LivePoint.Found {
+			t.Error("the control channel would have pressed Answer during a live call")
+		}
+
+		// And back to nothing, which is what lets a call end. The ordinary page
+		// offers mute and a keypad of its own, so this deliberately does not
+		// require callControls to be false -- it requires it to be powerless,
+		// which is the machine's job and is tested in voice_session_test.go.
+		if p.Idle.Answer || p.Idle.Hangup {
+			t.Errorf("the hung-up page still read as a call: %+v", p.Idle)
 		}
 	})
 

@@ -234,6 +234,55 @@ await scenario('notification-names-the-caller', baseConfig(), async ({ page, tic
   return { answered: true };
 });
 
+// 1e. The case reported from a real PC. The caller is in Google Contacts, so the
+//     ringing card shows the name Google has for them -- and only that -- while
+//     the notification for the same ring carries the number. The number is what
+//     the user allowed on the agent, so treating the card's name as the whole
+//     answer sent an allowed caller to voicemail.
+await scenario('notification-number-behind-contact-name', baseConfig(), async ({ page, tick, calls }) => {
+  await tick();
+  await page.evaluate(() => {
+    window.gv.notifyIncoming('Call from Me · mobile · (845) 555-1000');
+    window.gv.ring('Me\nMobile');
+  });
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 8000 })
+    .catch(() => {
+      const incoming = calls.filter((c) => c.method === 'flipVoiceIncoming').map((c) => c.args);
+      throw new Error('a card showing only a contact name hid the number the notification carried; ' +
+        `incoming=${JSON.stringify(incoming)}`);
+    });
+  await tick();
+  return { answered: true };
+});
+
+// 1f. FlipAi's second way of seeing and answering a call: the control channel,
+//     which evaluates its own scripts in the page instead of relying on the
+//     injected one. On Windows it is the rung used when the page's own click is
+//     ignored, and until now it only ever ran on a Windows runner. Here it runs
+//     against the same stand-in page, with an unlisted number so the injected
+//     script correctly refuses and leaves the card up to be read and pressed by
+//     hand.
+const probe = await (await fetch(SHIM + 'flipai-probe.json')).json().then((r) => r.result);
+await scenario('control-channel-probe', baseConfig(), async ({ page, tick }) => {
+  await tick();
+  await page.evaluate(() => {
+    window.gv.notifyIncoming('Call from Me · mobile · (845) 555-9999');
+    window.gv.ring('Me\nMobile');
+  });
+  await tick(2);
+  const ringing = await page.evaluate(probe.snapshot);
+  const point = await page.evaluate(probe.point);
+  const clicked = await page.evaluate(probe.click);
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 })
+    .catch(() => { throw new Error('the control channel pressed Answer and no call connected'); });
+  const live = await page.evaluate(probe.snapshot);
+  const livePoint = await page.evaluate(probe.point);
+  await page.evaluate(() => window.gv.hangup());
+  await tick(3);
+  const idle = await page.evaluate(probe.snapshot);
+  return { probe: { ringing, point, clicked, live, livePoint, idle } };
+});
+
 // 2. The caller is in Google Contacts, so Google Voice shows a name and there is
 //    no number to match. Nothing may be answered, and FlipAi has to say why.
 await scenario('contact-name-not-allowed', baseConfig(), async ({ page, tick }) => {

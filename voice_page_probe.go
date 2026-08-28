@@ -100,6 +100,25 @@ const voicePageSnapshotJS = `(async () => {` + voiceCallDOMHelpers + `
   const PHONE_RE = /(?:\+?1[\s.\-]?)?(?:\([0-9]{3}\)|[0-9]{3})[\s.\-]?[0-9]{3}[\s.\-]?[0-9]{4}/;
   const FROM_RE = /(?:incoming\s+call\s+from|call\s+from|calling\s+from)\s+(.+?)\s*$/i;
 
+  // What the incoming-call notification for this same ring said. The page
+  // script publishes it, because the ringing card and the notification are two
+  // views of one ring and only one of them reliably carries the number: when
+  // the caller is in Google Contacts, the card shows the name Google has for
+  // them and nothing else. The number is what the user allowed on the agent,
+  // so a card that shows only a name would otherwise send an allowed caller to
+  // voicemail.
+  const announced = (() => {
+    let ring = null;
+    try { ring = window.__flipVoiceRing; } catch (_) {}
+    const text = ring && typeof ring.text === 'string' ? ring.text : '';
+    if (!text || !(Date.now() - Number(ring.at || 0) < 60000)) return {number: '', label: ''};
+    const spoken = text.match(FROM_RE);
+    return {
+      number: normPhone((text.match(PHONE_RE) || [''])[0]),
+      label: spoken ? spoken[1].trim().slice(0, 120) : ''
+    };
+  })();
+
   let caller = '';
   let label = '';
   const said = answerEl && (answerEl.getAttribute('aria-label') || '').match(FROM_RE);
@@ -112,6 +131,10 @@ const voicePageSnapshotJS = `(async () => {` + voiceCallDOMHelpers + `
     const phoneMatch = scopeText.match(PHONE_RE);
     if (phoneMatch) caller = normPhone(phoneMatch[0]);
   }
+  // Only while something is actually on screen to answer or end. The
+  // announcement outlives the card by up to a minute, and a number left over
+  // from a finished ring must not attach itself to the ordinary page.
+  if (!caller && announced.number && (answerEl || hangEl)) caller = announced.number;
   const UI_LINE = /^(answer|accept|decline|reject|ignore|dismiss|hang\s*up|end\s+call|leave\s+call|incoming\s+call|mute|unmute|keypad|hold|more|options|calling|google\s+voice|block|report\s+spam|send\s+to\s+voicemail|voicemail|mobile|work|home|cell|main|iphone|android|\d{1,2}:\d{2}(:\d{2})?)$/i;
   if (!label) {
     for (const raw of scopeText.split(/\r?\n/)) {
@@ -124,6 +147,7 @@ const voicePageSnapshotJS = `(async () => {` + voiceCallDOMHelpers + `
       if (!label) label = line;
     }
   }
+  if (!label && announced.label && (answerEl || hangEl)) label = announced.label;
 
   let devices = [];
   try {
