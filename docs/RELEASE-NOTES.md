@@ -1,61 +1,59 @@
-# FlipAi v0.40.0
+# FlipAi v0.41.0
 
-The call is answered, the account is signed in, the cables are installed and
-wired — and then the caller could not talk to the agent, because Codex/ChatGPT's
-voice mode never started. This release goes after that, and after the audio
-routing Windows was refusing alongside it.
+The call is answered and the desktop app opens — but voice mode never starts, so
+there is no one to talk to. This release goes at that, having found what the
+voice actually is and how it has to be started.
 
-## "Could not find a Voice control in ChatGPT"
+## What the voice is, and why it would not start
 
-The Codex and ChatGPT desktop apps are Chromium/Electron apps, and Chromium does
-not build its accessibility tree — the thing FlipAi reads to find and press the
-Voice control — until a client attaches, and **not instantly**. FlipAi drove it
-by launching a fresh PowerShell for each check: a brand-new accessibility client
-that asked once and exited. The first query after attaching sees only the
-top-level window, so every check came back with the window and nothing inside
-it. That is exactly the *"it offered: ChatGPT"* in the last-call record.
+Two things were wrong, and both come from the same fact: **the voice a caller
+talks to is ChatGPT Voice (GPT‑Live), which OpenAI ships in the ChatGPT desktop
+app — and from there it can drive Codex.** It is started by clicking **"Start new
+voice chat"**, and there is no keyboard shortcut for it. The standalone Codex
+app has only a separate, less reliable dictation path.
 
-Two changes fix the mechanism:
+- **FlipAi was opening the wrong app.** It launched the standalone Codex app
+  when both are installed, then looked for a voice control that app does not
+  reliably have. FlipAi now prefers the **ChatGPT desktop app** — the one that
+  carries the voice and drives Codex — for launching, the Start Menu shortcut,
+  and the window it drives. A machine that only has the Codex app still falls
+  back to it, and a title you set yourself still wins.
 
-- **FlipAi now keeps one accessibility client alive and re-scans** until the
-  app's web content actually appears, instead of asking once and giving up. A
-  scan that returns only the bare window is treated as a tree that has not built
-  yet, and it waits — up to a bounded few seconds — for the real controls.
-- **The app is brought to the front first.** A minimized or fully hidden
-  Chromium window throttles its renderer and may not build an accessibility tree
-  for its web content at all, so the Voice control would not exist to be found.
-  The caller is not typing, so focusing the app they are calling is right.
+- **It pressed the control in a way Electron ignores.** These apps are
+  Chromium/Electron, and their custom buttons routinely ignore the accessibility
+  "invoke" FlipAi was using — it reports success while nothing happens, which is
+  the "pressed but did not enter voice mode" a call got stuck on. FlipAi now
+  presses the control with a **real synthesized mouse click** on the control
+  itself, the way a person does, and falls back to the accessibility methods
+  only when the control has no usable on‑screen rectangle.
 
-If your app still exposes no Voice control this way, the keyboard fallback is
-unchanged: **Agents → the agent → Voice shortcut**, set to the desktop app's own
-start-voice shortcut. FlipAi presses it when it cannot find the on-screen
-control.
+FlipAi also now recognizes the control by what the app really calls it —
+**"Start new voice chat"** and its headphone/headset icon — not only the older
+"voice mode" wording.
 
-## "Desktop app audio: Windows refused it"
+## If it still does not start
 
-Pointing the desktop app's microphone and speaker at the cables uses a
-Windows interface whose accepted device-id format **differs across Windows
-builds** — some take the raw endpoint id, others a device-path wrapper around
-it. FlipAi sent one form and, when Windows rejected it, reported "Windows
-refused it". It now tries both forms and takes whichever Windows accepts,
-failing only when neither works — and still printing the exact HRESULT and the
-one-time manual fallback when that happens.
+Voice is a ChatGPT‑app feature and needs a Plus, Pro, Business, Edu or Enterprise
+plan, with the ChatGPT desktop app installed and signed in. The failure message
+now says so, and names the "Start new voice chat" control it looked for and what
+the app offered instead — so a missing app, a signed‑out app, or a plan without
+voice is legible rather than a silent "could not start voice".
 
 ## Verified
 
-The driver script is tested to keep one client and re-scan rather than query
-once, to treat a bare window as a not-yet-built tree, to bound the wait, and to
-still emit every report field the rest of FlipAi parses. The router is tested to
-try the SWD wrapper and the raw id, in that order, for both the playback and the
-recording endpoint.
+The driver is tested to press the control with a real click, and to try that
+before the accessibility invoke; to recognize "Start new voice chat" and the
+headphone icon; to keep one accessibility client alive and wait for the Electron
+tree to build; and to prefer ChatGPT over the standalone Codex app for the
+window, the shortcut and the launch path alike.
 
-Plus the usual: the full call lifecycle, the injected page script and the
-control channel in real headless Chromium, the cable plan, the audio-bridge
-setup, the desktop-session hand-off, the Windows build and race test, the
-receiver check on a real Windows runner, and the installer.
+Plus the usual: the full call lifecycle, the injected page script and control
+channel in real headless Chromium, the cable plan, the audio‑bridge setup, the
+desktop‑session hand‑off, the Windows build and race test, the receiver check on
+a real Windows runner, and the installer.
 
-Honest about the limit: whether a specific build of the ChatGPT or Codex desktop
-app exposes a Voice control to Windows accessibility, and whether that build's
-audio endpoints take one id form or the other, can only be confirmed on your PC.
-The last-call record now says which step it reached, so if voice still does not
-start it will say whether the control was found, pressed, or never appeared.
+Honest about the limit: which control a given build of the ChatGPT desktop app
+exposes, and whether the account has a voice‑capable plan, can only be confirmed
+on your PC. The last‑call record says which step it reached — found, pressed, or
+never appeared — so the next thing to change, if any, is named rather than
+guessed.

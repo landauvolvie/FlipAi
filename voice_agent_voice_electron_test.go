@@ -37,6 +37,60 @@ func TestTheVoiceScriptWaitsForTheElectronAccessibilityTree(t *testing.T) {
 	}
 }
 
+// Electron controls routinely ignore UI Automation Invoke, so the driver must
+// press the control with a real synthesized click, and try that before the
+// pattern-based methods.
+func TestTheVoiceScriptClicksTheControlForReal(t *testing.T) {
+	script, err := voiceAgentUIAScript(0x1234, "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script, "mouse_event") || !strings.Contains(script, "SetCursorPos") {
+		t.Error("the driver no longer performs a real pointer click")
+	}
+	clickAt := strings.Index(script, "$done = ClickElement $target")
+	invokeAt := strings.Index(script, "InvokePattern")
+	if clickAt < 0 {
+		t.Fatal("the real click is not the primary action")
+	}
+	if invokeAt >= 0 && invokeAt < clickAt {
+		t.Error("UI Automation Invoke is still tried before the real click")
+	}
+	// The voice control the ChatGPT desktop app actually offers -- "Start new
+	// voice chat" and its headphone icon -- must be recognized.
+	for _, want := range []string{"new\\s+voice\\s+chat", "headphone", "headset"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the control match does not recognize %q", want)
+		}
+	}
+}
+
+// The voice front-end for a call is the ChatGPT desktop app, which drives Codex;
+// the standalone Codex app is only the fallback. Launching, the Start Menu
+// shortcut and the window search must all prefer ChatGPT.
+func TestChatGPTIsPreferredAsTheVoiceFrontEnd(t *testing.T) {
+	if got := agentAppTitles("C"); got[0] != "ChatGPT" {
+		t.Errorf("window search does not prefer ChatGPT: %v", got)
+	}
+	if got := agentAppShortcutNames("C"); got[0] != "ChatGPT" {
+		t.Errorf("the shortcut search does not prefer ChatGPT: %v", got)
+	}
+	exes := agentAppExecutables("C", `C:\u\AppData\Local`, `C:\Program Files`, "")
+	chatIdx, codexIdx := -1, -1
+	for i, p := range exes {
+		lp := strings.ToLower(p)
+		if chatIdx < 0 && strings.Contains(lp, "chatgpt.exe") {
+			chatIdx = i
+		}
+		if codexIdx < 0 && strings.Contains(lp, "codex.exe") {
+			codexIdx = i
+		}
+	}
+	if chatIdx < 0 || codexIdx < 0 || chatIdx > codexIdx {
+		t.Errorf("ChatGPT is not launched before the standalone Codex app: chat=%d codex=%d", chatIdx, codexIdx)
+	}
+}
+
 // Which id format SetPersistedDefaultAudioEndpoint accepts differs across
 // Windows builds; guessing one and failing is the "Windows refused it" reported
 // from the field. Both the SWD wrapper and the raw MMDevice id must be tried.

@@ -82,7 +82,7 @@ func TestVoiceStartFailuresAreSpecific(t *testing.T) {
 	}{
 		{"unreadable", agentVoiceState{}, "Windows accessibility"},
 		{"still starting", agentVoiceState{Found: true}, "may still be starting up"},
-		{"no voice control", agentVoiceState{Found: true, Controls: []string{"New chat", "Settings"}}, "could not find a Voice control"},
+		{"no voice control", agentVoiceState{Found: true, Controls: []string{"New chat", "Settings"}}, "could not find the voice control"},
 		{"refused", agentVoiceState{Found: true, StartControl: "Voice", Result: "invoke-failed"}, "refused to press"},
 		{"pressed but nothing happened", agentVoiceState{Found: true, StartControl: "Voice", Result: "clicked"}, "did not enter voice mode"},
 	}
@@ -200,9 +200,11 @@ func TestDesktopAppIsLookedForWhereItInstallsItself(t *testing.T) {
 		}
 		seen[strings.ToLower(p)] = true
 	}
-	// The most likely location has to be first, or a stale copy elsewhere wins.
-	if !strings.HasPrefix(strings.ToLower(got[0]), `c:\users\me\appdata\local\programs\codex`) {
-		t.Errorf("the per-user install is not tried first: %q", got[0])
+	// ChatGPT is the voice front-end (see agentAppTitles), so its per-user
+	// install is what a spoken call launches first; a stale copy elsewhere, or
+	// the standalone Codex app whose voice is less reliable, must not win.
+	if !strings.HasPrefix(strings.ToLower(got[0]), `c:\users\me\appdata\local\programs\chatgpt`) {
+		t.Errorf("the ChatGPT per-user install is not tried first: %q", got[0])
 	}
 
 	// An empty root contributes nothing rather than a path rooted at nowhere.
@@ -212,23 +214,24 @@ func TestDesktopAppIsLookedForWhereItInstallsItself(t *testing.T) {
 		}
 	}
 
-	if names := agentAppShortcutNames("C"); len(names) == 0 || names[0] != "Codex" {
-		t.Errorf("the Codex Start Menu shortcut is not looked for first: %v", names)
+	if names := agentAppShortcutNames("C"); len(names) == 0 || names[0] != "ChatGPT" {
+		t.Errorf("the ChatGPT Start Menu shortcut is not looked for first: %v", names)
 	}
 	if names := agentAppShortcutNames("A"); len(names) != 1 || names[0] != "Claude" {
 		t.Errorf("the Claude agent looks for the wrong shortcut: %v", names)
 	}
 }
 
-// The window FlipAi drives is the Codex desktop app first and the ChatGPT
-// desktop app second, and a title the user configured beats both.
+// The window FlipAi drives is the ChatGPT desktop app first -- it carries the
+// voice a caller talks to, and drives Codex from there -- and the standalone
+// Codex app second, and a title the user configured beats both.
 func TestConfiguredWindowTitleWinsOverTheBuiltInList(t *testing.T) {
 	titles := agentAppTitles("C")
-	if len(titles) < 2 || titles[0] != "Codex" {
-		t.Fatalf("Codex is not the first desktop app looked for: %v", titles)
+	if len(titles) < 2 || titles[0] != "ChatGPT" {
+		t.Fatalf("ChatGPT is not the first desktop app looked for: %v", titles)
 	}
-	if titles[1] != "ChatGPT" {
-		t.Errorf("the ChatGPT desktop app is not the fallback: %v", titles)
+	if titles[1] != "Codex" {
+		t.Errorf("the standalone Codex app is not the fallback: %v", titles)
 	}
 	if got := agentAppTitles("A"); len(got) != 1 || got[0] != "Claude" {
 		t.Errorf("the Claude agent looks for %v", got)

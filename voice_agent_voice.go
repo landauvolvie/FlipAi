@@ -88,7 +88,7 @@ func agentVoiceStartFailure(appTitle string, s agentVoiceState) error {
 	case s.StartControl == "" && len(s.Controls) == 0:
 		return fmt.Errorf("the %s window exposes no controls to Windows accessibility yet; it may still be starting up", appTitle)
 	case s.StartControl == "":
-		return fmt.Errorf("FlipAi could not find a Voice control in %s. It offered: %s. Set the app's Voice keyboard shortcut in FlipAi to drive it directly", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
+		return fmt.Errorf("FlipAi could not find the voice control in %s. It offered: %s. Voice for a call is ChatGPT Voice in the ChatGPT desktop app -- the \"Start new voice chat\" control, on a Plus/Pro/Business plan. Make sure the ChatGPT desktop app is installed and signed in; if its control still is not found, set the app's Voice keyboard shortcut in FlipAi to drive it directly", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
 	case s.Result == "invoke-failed":
 		return fmt.Errorf("Windows refused to press %q in %s", s.StartControl, appTitle)
 	}
@@ -126,9 +126,37 @@ const voiceAgentUIATemplate = `
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -Namespace FlipWin -Name Native -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+[DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, System.IntPtr dwExtraInfo);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
+'@
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
 if ($null -eq $root) { Write-Output 'found=0'; Write-Output 'result=no-window'; exit 0 }
 Write-Output 'found=1'
+
+# A real pointer click on the control's own centre. The Codex and ChatGPT
+# desktop apps are Chromium/Electron, and their custom buttons -- the "Start new
+# voice chat" headphone control among them -- routinely ignore UI Automation's
+# Invoke: it returns success and nothing happens, which is the "pressed but did
+# not enter voice mode" a call ends up stuck on. A synthesized click through the
+# same input pipeline a person uses is what they actually respond to. The window
+# is already brought to the front before this runs.
+function ClickElement($el) {
+  try {
+    $r = $el.Current.BoundingRectangle
+    if ($r.Width -le 0 -or $r.Height -le 0) { return $false }
+    $cx = [int]($r.X + $r.Width / 2)
+    $cy = [int]($r.Y + $r.Height / 2)
+    [FlipWin.Native]::SetForegroundWindow([System.IntPtr]__HWND__) | Out-Null
+    [FlipWin.Native]::SetCursorPos($cx, $cy) | Out-Null
+    Start-Sleep -Milliseconds 60
+    [FlipWin.Native]::mouse_event(0x0002, 0, 0, 0, [System.IntPtr]::Zero)
+    Start-Sleep -Milliseconds 40
+    [FlipWin.Native]::mouse_event(0x0004, 0, 0, 0, [System.IntPtr]::Zero)
+    return $true
+  } catch { return $false }
+}
 
 $startEl = $null
 $endEl = $null
@@ -173,7 +201,7 @@ while ($true) {
       continue
     }
 
-    if ($text -match '(?i)(start\s+voice|voice\s+mode|voice\s+chat|voice\s+conversation|use\s+voice|talk\s+to|advanced\s+voice|\bvoice\b|\bmicrophone\b|\bmic\b|\bdictat)') {
+    if ($text -match '(?i)(start\s+(new\s+)?voice|new\s+voice\s+chat|voice\s+mode|voice\s+chat|voice\s+conversation|use\s+voice|talk\s+to|advanced\s+voice|headphone|headset|gpt-live|\bgo\s+live\b|live\s+voice|\bvoice\b|\bmicrophone\b|\bmic\b|\bdictat)') {
       if ($text -match '(?i)(setting|settings|input|output|device|volume|permission|help|learn|mute|unmute)') { continue }
       if ($null -eq $startEl -and $enabled) { $startEl = $e; $startName = $text }
     }
@@ -202,8 +230,13 @@ if ('__ACTION__' -eq 'start') {
 }
 if ($null -eq $target) { Write-Output 'result=not-found'; exit 0 }
 
-$done = $false
-try { $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); $done = $true } catch {}
+# A real click first, because that is what an Electron control actually
+# responds to. The pattern-based methods are the fallback for a control whose
+# rectangle is unusable (off-screen, zero-sized) or for a genuine native button.
+$done = ClickElement $target
+if (-not $done) {
+  try { $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); $done = $true } catch {}
+}
 if (-not $done) {
   try { $target.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction(); $done = $true } catch {}
 }
@@ -220,15 +253,19 @@ exit 0
 // agentAppTitles are the window-title fragments FlipAi looks for when an agent
 // has not been told which window to drive.
 //
-// The Codex desktop app and the ChatGPT desktop app are both shipped by OpenAI
-// and both carry the voice mode a caller talks to; which one is installed
-// differs from machine to machine, so both are searched, most specific first.
-// A configured title always wins over this list.
+// ChatGPT is looked for before Codex, deliberately. The voice a caller talks to
+// is ChatGPT Voice (GPT-Live): OpenAI ships it in the ChatGPT desktop app, from
+// where it can drive Codex, and it is started by clicking "Start new voice chat"
+// -- there is no keyboard shortcut for it. The standalone Codex app's own voice
+// is a separate, less reliable dictation path. So the ChatGPT app is the right
+// front-end for a spoken call even when the agent behind it is Codex; the Codex
+// app is the fallback for a machine that only has it. A configured title always
+// wins over this list.
 func agentAppTitles(agent string) []string {
 	if agent == "A" {
 		return []string{"Claude"}
 	}
-	return []string{"Codex", "ChatGPT"}
+	return []string{"ChatGPT", "Codex"}
 }
 
 // agentAppShortcutNames are the Start Menu shortcut names that open the
@@ -243,7 +280,9 @@ func agentAppShortcutNames(agent string) []string {
 	if agent == "A" {
 		return []string{"Claude"}
 	}
-	return []string{"Codex", "ChatGPT"}
+	// ChatGPT first, for the reason in agentAppTitles: it is the app that
+	// carries the voice a caller talks to.
+	return []string{"ChatGPT", "Codex"}
 }
 
 // agentAppExecutables are the direct paths to try before falling back to a
@@ -259,14 +298,16 @@ func agentAppExecutables(agent, localAppData, programFiles, programFilesX86 stri
 			{[]string{"Claude", "Claude.exe"}},
 		}
 	} else {
+		// ChatGPT before Codex, for the reason in agentAppTitles: the ChatGPT
+		// desktop app is the one that carries the voice a caller talks to.
 		layouts = []layout{
+			{[]string{"Programs", "ChatGPT", "ChatGPT.exe"}},
+			{[]string{"OpenAI", "ChatGPT", "ChatGPT.exe"}},
+			{[]string{"ChatGPT", "ChatGPT.exe"}},
 			{[]string{"Programs", "Codex", "Codex.exe"}},
 			{[]string{"Programs", "codex", "Codex.exe"}},
 			{[]string{"OpenAI", "Codex", "Codex.exe"}},
 			{[]string{"Codex", "Codex.exe"}},
-			{[]string{"Programs", "ChatGPT", "ChatGPT.exe"}},
-			{[]string{"OpenAI", "ChatGPT", "ChatGPT.exe"}},
-			{[]string{"ChatGPT", "ChatGPT.exe"}},
 		}
 	}
 	var out []string
