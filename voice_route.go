@@ -170,6 +170,26 @@ public static class FlipAudioRoute
         return hr;
     }
 
+    // A read-only probe at the same interface slot Set uses. It tells apart the
+    // two reasons Set can fail on a given Windows build: if this read also fails
+    // with E_INVALIDARG the interface has grown and SetPersistedDefaultAudio-
+    // Endpoint has moved to a different vtable slot; if this read succeeds the
+    // slot is right and the device-id argument is what Set did not like. It
+    // changes nothing, so it is safe to run before reporting a failure.
+    private static string ProbeSlot(object factory, uint processId)
+    {
+        try
+        {
+            var f21 = factory as IAudioPolicyConfigFactory21H2;
+            string got;
+            int hr = f21 != null
+                ? f21.GetPersistedDefaultAudioEndpoint(processId, 0, 1, out got)
+                : ((IAudioPolicyConfigFactoryPre21H2)factory).GetPersistedDefaultAudioEndpoint(processId, 0, 1, out got);
+            return "read-back HRESULT 0x" + hr.ToString("X8");
+        }
+        catch (Exception e) { return "read-back threw " + e.GetType().Name; }
+    }
+
     public static void Route(uint processId, string renderName, string captureName)
     {
         object factory = null;
@@ -188,12 +208,12 @@ public static class FlipAudioRoute
         if (!string.IsNullOrEmpty(renderName))
         {
             var hr = PersistEither(factory, processId, 0, FindEndpointId(0, renderName));
-            if (hr != 0) throw new Exception("persisting the playback endpoint failed with HRESULT 0x" + hr.ToString("X8"));
+            if (hr != 0) throw new Exception("persisting the playback endpoint failed with HRESULT 0x" + hr.ToString("X8") + " (" + ProbeSlot(factory, processId) + ")");
         }
         if (!string.IsNullOrEmpty(captureName))
         {
             var hr = PersistEither(factory, processId, 1, FindEndpointId(1, captureName));
-            if (hr != 0) throw new Exception("persisting the recording endpoint failed with HRESULT 0x" + hr.ToString("X8"));
+            if (hr != 0) throw new Exception("persisting the recording endpoint failed with HRESULT 0x" + hr.ToString("X8") + " (" + ProbeSlot(factory, processId) + ")");
         }
     }
 }

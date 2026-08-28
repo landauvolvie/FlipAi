@@ -153,6 +153,24 @@ type VoiceRuntimeState struct {
 	LastOpenError string    `json:"lastOpenError,omitempty"`
 	LastOpenAt    time.Time `json:"lastOpenAt,omitempty"`
 
+	// AgentVoice* is what FlipAi's last attempt to start the desktop app's voice
+	// mode actually saw and did: whether the app window could be read through
+	// Windows accessibility at all, the controls it exposed, the control FlipAi
+	// matched as the one that starts voice, and what pressing it reported.
+	//
+	// It exists because "Answered -- starting voice" with nothing beside it is
+	// no way to tell apart an app FlipAi could not read, an app that offered no
+	// voice control, and a control that was pressed and did not respond -- which
+	// need completely different things from the user. The controls list is the
+	// single most useful piece: it says whether the voice control is simply
+	// named something FlipAi did not expect.
+	AgentVoiceReadable bool      `json:"agentVoiceReadable,omitempty"`
+	AgentVoiceControls []string  `json:"agentVoiceControls,omitempty"`
+	AgentVoiceStart    string    `json:"agentVoiceStart,omitempty"`
+	AgentVoiceResult   string    `json:"agentVoiceResult,omitempty"`
+	AgentVoiceApp      string    `json:"agentVoiceApp,omitempty"`
+	AgentVoiceAt       time.Time `json:"agentVoiceAt,omitempty"`
+
 	// DesktopRequest is a desktop-touching Google Voice action the background
 	// host could not perform itself because it is running in a non-interactive
 	// Windows session. The "start before sign-in" power-on task runs the whole

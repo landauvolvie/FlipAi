@@ -96,6 +96,11 @@ func startAgentVoiceSession(dataDir string, cfg VoiceCallConfig, agent string) e
 			lastErr = err
 		} else {
 			last = state
+			// Write down what the app actually exposed on this attempt. This is
+			// the one thing that turns a call stuck on "starting voice" into a
+			// diagnosable picture: whether the window was readable, what controls
+			// it offered, and whether FlipAi found and pressed the voice one.
+			recordAgentVoiceObservation(dataDir, target.AppTitle, state)
 			if state.Active || state.Result == "already-active" {
 				return nil
 			}
@@ -124,6 +129,20 @@ func startAgentVoiceSession(dataDir string, cfg VoiceCallConfig, agent string) e
 		return fmt.Errorf("could not drive %s: %w", target.AppTitle, lastErr)
 	}
 	return agentVoiceStartFailure(target.AppTitle, last)
+}
+
+// recordAgentVoiceObservation writes what the accessibility scan of the desktop
+// app saw into the runtime state, so the Connections page can show it. Without
+// it, a call that could not start voice mode is a dead end with no clue why.
+func recordAgentVoiceObservation(dataDir, appTitle string, state agentVoiceState) {
+	mutateVoiceRuntime(dataDir, func(s *VoiceRuntimeState) {
+		s.AgentVoiceReadable = state.Found
+		s.AgentVoiceControls = append([]string(nil), state.Controls...)
+		s.AgentVoiceStart = state.StartControl
+		s.AgentVoiceResult = state.Result
+		s.AgentVoiceApp = appTitle
+		s.AgentVoiceAt = time.Now()
+	})
 }
 
 // stopAgentVoiceSession ends the voice session started for a call.

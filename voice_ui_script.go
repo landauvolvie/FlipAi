@@ -375,6 +375,21 @@ const voiceDesktopInitScript = `
       out.push(callout('Last call \u2014 '+when,rt.lastCallOutcome+(rt.lastCallTrace?('  FlipAi tried: '+rt.lastCallTrace):'')));
     }
     if(rt.blocked&&!rt.callNote) out.push(callout('Last call was not connected: ',rt.blocked));
+    // What the accessibility scan of the desktop app actually saw. This is the
+    // difference between guessing and knowing why voice mode did or did not
+    // start: whether the window was readable, what controls it offered, which
+    // one FlipAi took to be the voice control, and what pressing it reported.
+    if(rt.agentVoiceAt&&!/^0001/.test(rt.agentVoiceAt)){
+      const app=rt.agentVoiceApp||'the desktop app';
+      if(!rt.agentVoiceReadable){
+        out.push(callout('Desktop app voice: ','FlipAi could not read the '+app+' window through Windows accessibility, so it could not find a voice control. Bring '+app+' to the front and make sure it is signed in.'));
+      } else {
+        const controls=(rt.agentVoiceControls||[]).join(', ')||'(nothing named)';
+        const matched=rt.agentVoiceStart?('matched the voice control "'+rt.agentVoiceStart+'"'):'found no control it recognized as voice';
+        const pressed=rt.agentVoiceResult==='clicked'?'; pressed it':(rt.agentVoiceResult==='not-found'?'':'; press result: '+rt.agentVoiceResult);
+        out.push(callout('Desktop app voice: ',app+' offered ['+controls+']. FlipAi '+matched+pressed+'.'));
+      }
+    }
     if(rt.lastError&&!rt.lastOpenError){
       // A desktop app that would not enter voice mode is not a Google Voice
       // problem, and labelling it as one sends the user to the wrong place.

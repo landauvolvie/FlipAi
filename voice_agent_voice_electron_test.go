@@ -106,6 +106,11 @@ func TestTheAudioRouterTriesBothEndpointIdForms(t *testing.T) {
 	if !strings.Contains(routeAppAudioPS, "Persist(factory, processId, flow, mmDeviceId)") {
 		t.Error("the router no longer falls back to the raw MMDevice id")
 	}
+	// On failure it reads back at the same slot, so the error can tell a moved
+	// vtable slot (read also fails) apart from a rejected device id (read works).
+	if !strings.Contains(routeAppAudioPS, "ProbeSlot") || !strings.Contains(routeAppAudioPS, "GetPersistedDefaultAudioEndpoint") {
+		t.Error("the router no longer reads back to diagnose why Windows refused it")
+	}
 	// The endpoint lookup is still by friendly name, wired through the fallback.
 	if !strings.Contains(routeAppAudioPS, "PersistEither(factory, processId, 0, FindEndpointId(0, renderName))") {
 		t.Error("the playback endpoint is no longer routed through the fallback")

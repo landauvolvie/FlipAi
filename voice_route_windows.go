@@ -75,7 +75,7 @@ func routeAgentAppAudio(dataDir string, cfg VoiceCallConfig, agent string) {
 		return
 	}
 	if err := setAppDefaultEndpoints(dataDir, pid, plan.AgentOutput, plan.AgentInput); err != nil {
-		note(voiceRoutingRefused, fmt.Sprintf("Windows refused the automatic audio routing for %s: %v. One-time fallback: in the app's own audio settings choose %q as its microphone and %q as its speaker.", target.AppTitle, err, plan.AgentInput, plan.AgentOutput))
+		note(voiceRoutingRefused, fmt.Sprintf("Windows would not let FlipAi set %s's audio automatically (%v). Set it once by hand and it sticks: open Windows Settings → System → Sound → Volume mixer, find %s in the app list, and set its Output device to %q and its Input device to %q. (Windows' own Settings can do this because it does not rely on the same undocumented call FlipAi does, which some Windows builds reject.)", target.AppTitle, err, target.AppTitle, plan.AgentOutput, plan.AgentInput))
 		return
 	}
 	note(voiceRoutingApplied, fmt.Sprintf("%s is wired to the cables: it hears the caller on %q and speaks into %q. Applied automatically; nothing to choose in the app.", target.AppTitle, plan.AgentInput, plan.AgentOutput))
