@@ -1,6 +1,7 @@
 name: release
 
 # Version, compiled app and installer version are kept in lockstep before publishing.
+# Rebuild v0.44 after the live-call field test fixes; the existing release assets are replaced only after this workflow passes.
 on:
   push:
     branches: [main]
