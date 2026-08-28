@@ -180,9 +180,16 @@ func (c *CodexClient) route(m rpcEnvelope) {
 	if m.Method != "" {
 		// Capture image-generation bytes before the bridge consumes the same
 		// notification for progress/final text. App Server v2 exposes the exact
-		// generated image on item/completed, so this avoids guessing from disk.
+		// generated image on item/completed. Some builds/version-skew combinations
+		// omit or reshape that notification, so turn/completed is a second exact
+		// source from the same live turn and connection.
 		if m.Method == "item/completed" {
-			captureCodexImageFromItemCompleted(m.Params)
+			if !captureCodexImageFromItemCompleted(m.Params) {
+				captureCodexImageFromItemCompletedFlexible(m.Params)
+			}
+		}
+		if m.Method == "turn/completed" {
+			captureCodexImageFromTurnCompleted(m.Params)
 		}
 		select {
 		case c.notifications <- m:
@@ -398,7 +405,7 @@ func (c *CodexClient) requestRaw(ctx context.Context, method string, params any)
 }
 
 // releaseThread hands a thread back so Codex Desktop can open the same history.
-// Ephemeral threads are exempt: Codex persists no rollout for them, so there is
+// Ephemeral threads are exempt: Codex persists no rollout for those, so there is
 // nothing for the desktop app to open and unsubscribing would only make the
 // thread unusable for the rest of its own turn.
 func (c *CodexClient) releaseThread(ctx context.Context, threadID string) error {

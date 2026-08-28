@@ -65,6 +65,19 @@ func sendThreadedVoiceReply(ctx context.Context, client MailClient, original Gma
 func routeGeneratedImageReply(ctx context.Context, original GmailMessage, body string) (handled bool, fallbackBody string) {
 	image, imageKey := generatedImageForVoiceReplyResolved(original, body)
 	if image == nil {
+		// Image-generation requests used to fail silently here: the user received
+		// the agent's caption, which made it look as though Google Voice had lost
+		// an MMS even when FlipAi had never obtained an image asset. Keep progress
+		// heartbeats quiet, but make a final extraction failure explicit so the
+		// next live test identifies the failing layer without opening logs.
+		if !isTransientVoiceReply(body) && looksLikeImageGenerationRequest(original.Body) {
+			fallbackBody = strings.TrimSpace(body)
+			if fallbackBody == "" {
+				fallbackBody = "I generated the image."
+			}
+			fallbackBody += "\n\nFlipAi could not locate the generated image asset."
+			return false, fallbackBody
+		}
 		return false, body
 	}
 	err := sendGoogleVoiceImageMMS(ctx, original, body, image)
