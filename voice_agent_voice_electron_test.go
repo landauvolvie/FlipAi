@@ -20,13 +20,14 @@ func TestTheVoiceScriptWaitsForTheElectronAccessibilityTree(t *testing.T) {
 	if !strings.Contains(script, "while ($true)") || !strings.Contains(script, "Start-Sleep") {
 		t.Error("the driver script no longer waits for the Electron tree to populate")
 	}
-	// A single FindAll that returned only the window used to end the search; now
-	// a sparse tree keeps it waiting until the deadline.
-	if !strings.Contains(script, "$all.Count -gt 4") {
-		t.Error("the script no longer treats a bare window as a not-yet-built tree")
+	// The scan ends only when a real voice control (or a live session) is found,
+	// or the deadline passes -- never on element count, which the native window
+	// frame alone exceeds.
+	if !strings.Contains(script, "if ($active -or $null -ne $startEl) { break }") {
+		t.Error("the scan no longer waits for an actual voice control before ending")
 	}
 	// And the wait is bounded, so a genuinely empty app still reports back.
-	if !strings.Contains(script, "AddSeconds(9)") {
+	if !strings.Contains(script, "AddSeconds(12)") {
 		t.Error("the accessibility wait is unbounded")
 	}
 	// The report keys the Go side parses must survive the rewrite.
@@ -62,6 +63,49 @@ func TestTheVoiceScriptClicksTheControlForReal(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Errorf("the control match does not recognize %q", want)
 		}
+	}
+	// It must not bail on native window chrome. The old count-based early break
+	// stopped as soon as the tree had more than a handful of elements -- which
+	// the title bar alone exceeds -- so Chromium never got time to build its web
+	// tree, and the scan saw only [App, Minimize, Maximize, Close].
+	if strings.Contains(script, "$all.Count -gt 4") {
+		t.Error("the scan still bails on native window chrome before the web tree builds")
+	}
+	// Only a clickable control can be the voice control. A conversation title
+	// ("Voice Chat Topic Summary") is a list/text item and must be excluded, so
+	// the control-type gate has to be present.
+	if !strings.Contains(script, "ControlType.Id") || !strings.Contains(script, "$clickable") {
+		t.Error("the scan no longer filters out non-clickable items like conversation titles")
+	}
+}
+
+// The signature of a Chromium app with accessibility off is a scan that returns
+// only the window frame. FlipAi has to name that specifically, because the fix
+// (reopen the app so it starts with accessibility on) is different from every
+// other reason a voice control is missing.
+func TestChromeOnlyAccessibilityIsCalledOutSpecifically(t *testing.T) {
+	chromeOnly := agentVoiceState{Found: true, Controls: []string{"Claude", "Minimize", "Maximize", "Close"}}
+	err := agentVoiceStartFailure("Claude", chromeOnly)
+	if err == nil || !strings.Contains(err.Error(), "accessibility off") {
+		t.Fatalf("a window exposing only its frame was not diagnosed as accessibility-off: %v", err)
+	}
+	if !strings.Contains(err.Error(), "reopen") && !strings.Contains(err.Error(), "reopen it") {
+		t.Errorf("the message does not tell the user to reopen the app: %v", err)
+	}
+
+	// A window that exposed real content is a different, ordinary "no voice
+	// control found" -- not the accessibility-off case.
+	withContent := agentVoiceState{Found: true, Controls: []string{"New chat", "Send", "Settings"}}
+	if err := agentVoiceStartFailure("ChatGPT", withContent); err == nil || strings.Contains(err.Error(), "accessibility off") {
+		t.Errorf("a window with real content was mislabelled as accessibility-off: %v", err)
+	}
+
+	// The helper itself: the app's own title counts as frame, real content does not.
+	if !onlyWindowChrome("Claude", []string{"Claude", "Minimize", "Maximize", "Close"}) {
+		t.Error("the classic chrome-only set was not recognized")
+	}
+	if onlyWindowChrome("ChatGPT", []string{"ChatGPT", "Start new voice chat", "Close"}) {
+		t.Error("a window exposing a real control was called chrome-only")
 	}
 }
 

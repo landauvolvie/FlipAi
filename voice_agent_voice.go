@@ -87,12 +87,47 @@ func agentVoiceStartFailure(appTitle string, s agentVoiceState) error {
 		return nil
 	case s.StartControl == "" && len(s.Controls) == 0:
 		return fmt.Errorf("the %s window exposes no controls to Windows accessibility yet; it may still be starting up", appTitle)
+	case s.StartControl == "" && onlyWindowChrome(appTitle, s.Controls):
+		// The scan saw only the title bar and Minimize/Maximize/Close. That is
+		// the signature of a Chromium/Electron app with accessibility turned
+		// off: its window is readable but its contents are not. Reopening it so
+		// it starts with accessibility forced is the fix.
+		return fmt.Errorf("%s is only exposing its window frame to Windows accessibility (%s), not its contents, so FlipAi cannot see the voice control. This is a Chromium app with accessibility off. Quit %s completely -- including from the system tray -- and let FlipAi reopen it, so it starts with accessibility enabled", appTitle, truncate(strings.Join(s.Controls, ", "), 120), appTitle)
 	case s.StartControl == "":
-		return fmt.Errorf("FlipAi could not find the voice control in %s. It offered: %s. Voice for a call is ChatGPT Voice in the ChatGPT desktop app -- the \"Start new voice chat\" control, on a Plus/Pro/Business plan. Make sure the ChatGPT desktop app is installed and signed in; if its control still is not found, set the app's Voice keyboard shortcut in FlipAi to drive it directly", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
+		return fmt.Errorf("FlipAi could not find the voice control in %s. It offered: %s. Voice for a call is the \"Start new voice chat\" control in the ChatGPT desktop app (which now hosts Codex, Work and Chat). If the app is signed in and shows that control on screen but FlipAi cannot find it, set the app's Voice keyboard shortcut in FlipAi to drive it directly", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
 	case s.Result == "invoke-failed":
 		return fmt.Errorf("Windows refused to press %q in %s", s.StartControl, appTitle)
 	}
 	return fmt.Errorf("FlipAi pressed %q in %s but it did not enter voice mode", s.StartControl, appTitle)
+}
+
+// onlyWindowChrome reports whether every control the scan saw is part of the
+// native window frame -- the app's own title and the standard caption buttons.
+// When that is all Windows accessibility returns for a Chromium/Electron app,
+// the app's web contents are not being exposed at all.
+func onlyWindowChrome(appTitle string, controls []string) bool {
+	if len(controls) == 0 {
+		return false
+	}
+	title := strings.ToLower(strings.TrimSpace(appTitle))
+	for _, c := range controls {
+		l := strings.ToLower(strings.TrimSpace(c))
+		switch l {
+		case "minimize", "maximize", "restore", "close", "system", "application", "more options":
+			continue
+		}
+		if strings.Contains(l, "minimize") || strings.Contains(l, "maximize") ||
+			strings.Contains(l, "close") || strings.Contains(l, "restore") {
+			continue
+		}
+		// The window's own title -- the app's name -- is part of the frame too.
+		if title != "" && (l == title || strings.Contains(l, title) || strings.Contains(title, l)) {
+			continue
+		}
+		// Anything else is real content, so the app is exposing more than chrome.
+		return false
+	}
+	return true
 }
 
 // voiceAgentUIAScript builds the PowerShell that reads or drives one window's
@@ -165,16 +200,19 @@ $endName = ''
 $active = $false
 $controls = New-Object System.Collections.Generic.List[string]
 
-# The Codex and ChatGPT desktop apps are Chromium/Electron. Chromium does not
-# build its UI Automation tree until a client has attached, and it does not
-# build it instantly: the very first query after attaching sees only the
-# top-level window, which is exactly the "it offered: ChatGPT" and nothing else
-# that left voice mode never starting. So this keeps ONE client alive and
-# re-scans until the web content shows up, instead of spawning a fresh client
-# that asks once and gives up. A scan is judged populated once it has found a
-# voice control, found that voice is already running, or simply seen more than
-# the handful of native window elements.
-$deadline = (Get-Date).AddSeconds(9)
+# The Codex and ChatGPT (and Claude) desktop apps are Chromium/Electron.
+# Chromium does not expose its web content to Windows accessibility until a
+# client attaches AND keeps asking: with accessibility off, a scan sees only the
+# native window -- its title and the Minimize/Maximize/Close buttons, which is
+# exactly the "[Claude, Minimize, Maximize, Close]" reported from the field. So
+# this keeps ONE client alive and re-scans until an actual voice control appears
+# or the deadline passes.
+#
+# It deliberately does NOT stop early just because the tree has "more than a few"
+# elements: the native window alone has more than that, so bailing on element
+# count is what made every scan give up before Chromium built its web tree.
+# A scan ends only when the voice control (or a live voice session) is found.
+$deadline = (Get-Date).AddSeconds(12)
 while ($true) {
   $startEl = $null
   $endEl = $null
@@ -189,9 +227,20 @@ while ($true) {
       $id = '' + $e.Current.AutomationId
       $help = '' + $e.Current.HelpText
       $enabled = $e.Current.IsEnabled
+      $ctrlType = $e.Current.ControlType.Id
     } catch { continue }
     $text = ($name + ' ' + $id + ' ' + $help).Trim()
     if ($text -eq '') { continue }
+
+    if ($controls.Count -lt 24 -and $name -ne '' -and $name.Length -le 60) { $controls.Add($name) }
+
+    # Only something clickable can be the voice control. The false match reported
+    # from the field was "Voice Chat Topic Summary" -- a conversation title in
+    # the sidebar, a list/text item, not a button. So text, list items, tree
+    # items, documents, edits and images are never taken as the control to press,
+    # no matter what their name says.
+    $clickable = -not ($ctrlType -eq 50020 -or $ctrlType -eq 50007 -or $ctrlType -eq 50013 -or $ctrlType -eq 50030 -or $ctrlType -eq 50004 -or $ctrlType -eq 50006 -or $ctrlType -eq 50008 -or $ctrlType -eq 50024)
+    if (-not $clickable) { continue }
 
     # A control that ends voice is the clearest sign voice is running.
     if ($text -match '(?i)(end|stop|exit|leave|close|hang)[\s_-]*(the\s+)?(voice|conversation|call|chat|talk)' -or
@@ -202,13 +251,11 @@ while ($true) {
     }
 
     if ($text -match '(?i)(start\s+(new\s+)?voice|new\s+voice\s+chat|voice\s+mode|voice\s+chat|voice\s+conversation|use\s+voice|talk\s+to|advanced\s+voice|headphone|headset|gpt-live|\bgo\s+live\b|live\s+voice|\bvoice\b|\bmicrophone\b|\bmic\b|\bdictat)') {
-      if ($text -match '(?i)(setting|settings|input|output|device|volume|permission|help|learn|mute|unmute)') { continue }
+      if ($text -match '(?i)(setting|settings|input|output|device|volume|permission|help|learn|mute|unmute|summary|topic|title|history|rename|delete)') { continue }
       if ($null -eq $startEl -and $enabled) { $startEl = $e; $startName = $text }
     }
-
-    if ($controls.Count -lt 24 -and $name -ne '' -and $name.Length -le 60) { $controls.Add($name) }
   }
-  if ($active -or $null -ne $startEl -or $all.Count -gt 4) { break }
+  if ($active -or $null -ne $startEl) { break }
   if ((Get-Date) -ge $deadline) { break }
   Start-Sleep -Milliseconds 700
 }

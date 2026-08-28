@@ -1,64 +1,59 @@
-# FlipAi v0.42.0
+# FlipAi v0.43.0
 
-Two things reported from a real call: it answers, the desktop app opens, and
-then it sits on "Answered — starting voice" with no clue why; and the desktop
-app audio routing fails with "Windows refused it". This release makes the first
-one legible and pins down the second.
+The diagnostic in v0.42.0 did its job. The "Desktop app voice:" line from a real
+call read: **"Claude offered [Claude, Minimize, Maximize, Close]. FlipAi found no
+control it recognized as voice."** That is the whole answer, and this release
+acts on it.
 
-## "Answered — starting voice", and nothing else
+## Why voice mode would not start
 
-When voice mode would not start, there was nothing on screen to say whether
-FlipAi could even read the app, what controls it found, or whether it pressed
-one. The "Last call" trace showed only "Connected". Guessing at a fix from that
-is exactly what the last few releases were doing.
+Two faults, both now fixed.
 
-FlipAi now writes down what its accessibility scan of the desktop app actually
-saw, on every attempt, and shows it on Connections as **"Desktop app voice:"**:
+**The scan gave up before the app's content appeared.** These desktop apps are
+Chromium/Electron, and Chromium does not expose its web content to Windows
+accessibility until a client keeps asking — with it off, a scan sees only the
+window frame: the title and the Minimize/Maximize/Close buttons. FlipAi's wait
+loop was meant to hold on until the content built, but it stopped the moment the
+tree had "more than a few" elements — and the window frame alone has more than a
+few. So it bailed on the first scan, every time, and never gave Chromium the
+second or two it needs. The loop now waits for an actual voice control (or a
+running session) to appear, or a bounded twelve seconds, and nothing less.
 
-- whether the app window was **readable through Windows accessibility** at all;
-- the **list of controls** the app exposed — the single most useful line, because
-  it shows whether the voice control is simply named something FlipAi did not
-  expect;
-- which control FlipAi **matched** as the one that starts voice, if any;
-- and what **pressing it reported**.
+**It could press the wrong thing.** An earlier trace showed FlipAi pressing
+*"Voice Chat Topic Summary"* — a conversation title in the sidebar, not a
+button. The matcher now only ever takes a **clickable** control: list items,
+text, document and tree nodes are excluded, so a conversation whose name happens
+to contain "voice chat" can never be mistaken for the control that starts one.
 
-This is written straight to the status the page reads, so it updates during the
-attempt rather than only at the end — a call is no longer a dead end with no
-clue. It is also what makes the next fix precise instead of another guess: the
-line names exactly what the app offered.
+**And it now asks the app to expose itself.** When FlipAi launches the desktop
+app, it starts it with Chromium's accessibility forced on, so the voice control
+is there to be found. An app you already had open is untouched — which is why,
+if the scan still sees only the window frame, FlipAi now says so in plain words
+and tells you to **quit the app completely (system tray included) and let FlipAi
+reopen it**, so it starts with accessibility on.
 
-## "Windows refused it" — HRESULT 0x80070057
+## Audio routing
 
-The routing failure is E_INVALIDARG. FlipAi's interop for the per-app audio API
-matches EarTrumpet's known-good definition exactly (same 19-method layout, same
-device-id form), and Windows' own Settings app can still set the same thing — so
-the likely cause is that this API grew more methods on a newer Windows build,
-moving the call FlipAi makes to a different vtable slot.
+Unchanged in mechanism, still diagnosed: the read-back probe from v0.42.0 tells
+apart a moved interface slot from a rejected device id. The one-time manual step
+in the message works today. Set the app's Output and Input to the two cables in
+**Settings → System → Sound → Volume mixer** and it sticks.
 
-FlipAi now proves which it is: on a routing failure it does a **read-back at the
-same slot** (a call that changes nothing) and puts the result in the message. If
-the read-back also fails, the slot moved; if it succeeds, the device id is what
-was rejected. That single fact decides the real fix safely, without FlipAi
-poking at vtable slots blindly on your PC.
+## Also
 
-Meanwhile the routing message now names the exact one-time manual step that
-always works, because Windows' own Settings does not rely on that undocumented
-call: **Settings → System → Sound → Volume mixer**, find the app, set its Output
-and Input to the two named cables. It sticks.
+The browser test harness now allows more time for a scenario to answer on a slow
+CI runner, so releases stop stalling on a timing flake rather than a real
+failure.
 
 ## Verified
 
-The desktop-voice observation is tested to survive into the status the page
-reads, with the session token still stripped. The router is tested to try both
-device-id forms and to read back at the same slot on failure so the reason is
-diagnosable.
+The driver script is tested to wait for a real voice control rather than bail on
+window chrome, and to take only clickable controls. The accessibility-off
+signature — a scan returning only the window frame — is tested to be diagnosed
+specifically, apart from every other reason a voice control is missing, so the
+"reopen the app" fix is the one surfaced.
 
 Plus the usual: the full call lifecycle, the injected page script and control
 channel in real headless Chromium, the cable plan, the audio-bridge setup, the
 desktop-session hand-off, the Windows build and race test, the receiver check on
 a real Windows runner, and the installer.
-
-Honest about the limit: the accessibility scan and the audio interface both
-behave in ways only your specific Windows build and desktop-app version reveal.
-This release is built to report exactly what they do, so the next change is aimed
-rather than guessed.

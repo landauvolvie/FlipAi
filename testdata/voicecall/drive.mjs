@@ -157,7 +157,7 @@ await scenario('authorized-number', baseConfig(), async ({ page, tick }) => {
   await tick();
   await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
   await tick();
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 });
   await tick(2);
   const midCall = await page.evaluate(() => window.gv.observed());
   await page.evaluate(() => window.gv.hangup());
@@ -179,7 +179,7 @@ await scenario('hangup-control-renamed', baseConfig(), async ({ page, tick }) =>
   await tick();
   await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
   await tick();
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 });
   // The call is up and FlipAi knows it. Now Google renames the control that
   // ends it, under a conversation already in progress.
   await tick();
@@ -200,7 +200,7 @@ await scenario('answers-despite-legacy-autoanswer-off', baseConfig({}, { autoAns
   await tick();
   await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
   await tick();
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 })
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 })
     .catch(() => { throw new Error('a legacy autoAnswer=false stopped an authorized call being answered'); });
   return { answered: true };
 });
@@ -211,7 +211,7 @@ await scenario('ring-inside-iframe', baseConfig(), async ({ page, tick }) => {
   await tick();
   await page.evaluate(() => window.gv.ringInFrame('(845) 555-1000\nMobile'));
   await tick(2);
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 8000 })
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 })
     .catch(() => { throw new Error('a ring rendered inside a same-origin iframe was never answered'); });
   await tick();
   return { answered: true };
@@ -226,7 +226,7 @@ await scenario('notification-names-the-caller', baseConfig(), async ({ page, tic
     window.gv.notifyIncoming('Incoming call from (845) 555-1000');
     window.gv.ring('Incoming call');
   });
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 8000 })
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 })
     .catch(async () => {
       const gv = await page.evaluate(() => window.gv.observed());
       const incoming = calls.filter((c) => c.method === 'flipVoiceIncoming').map((c) => c.args);
@@ -248,7 +248,7 @@ await scenario('notification-number-behind-contact-name', baseConfig(), async ({
     window.gv.notifyIncoming('Call from Me · mobile · (845) 555-1000');
     window.gv.ring('Me\nMobile');
   });
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 8000 })
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 })
     .catch(() => {
       const incoming = calls.filter((c) => c.method === 'flipVoiceIncoming').map((c) => c.args);
       throw new Error('a card showing only a contact name hid the number the notification carried; ' +
@@ -276,7 +276,7 @@ await scenario('control-channel-probe', baseConfig(), async ({ page, tick }) => 
   const ringing = await page.evaluate(probe.snapshot);
   const point = await page.evaluate(probe.point);
   const clicked = await page.evaluate(probe.click);
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 })
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 })
     .catch(() => { throw new Error('the control channel pressed Answer and no call connected'); });
   const live = await page.evaluate(probe.snapshot);
   const livePoint = await page.evaluate(probe.point);
@@ -303,7 +303,7 @@ await scenario('contact-name-allowed', baseConfig({
   await tick();
   await page.evaluate(() => window.gv.ring('Jane Appleseed\nMobile'));
   await tick();
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 });
   await tick();
   return { answered: true };
 });
@@ -314,7 +314,7 @@ await scenario('caller-named-on-answer-button', baseConfig(), async ({ page, tic
   await page.evaluate(() =>
     window.gv.ring('Incoming call', null, 'Answer call from (845) 555-1000'));
   await tick();
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 });
   await tick();
   return { answered: true };
 });
@@ -351,7 +351,7 @@ await scenario('no-double-answer', baseConfig(), async ({ page, tick }) => {
       window.__flipVoiceTick(), window.__flipVoiceTick(),
     ]);
   });
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 5000 });
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 });
   await tick(3);
   return { answered: true };
 });
@@ -365,7 +365,7 @@ await scenario('no-double-answer', baseConfig(), async ({ page, tick }) => {
 await scenario('answers-without-the-poll-timer', baseConfig(), async ({ page }) => {
   await page.waitForTimeout(600);           // let the one surviving tick run and the loop die
   await page.evaluate(() => window.gv.ring('(845) 555-1000\nMobile'));
-  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 8000 })
+  await page.waitForFunction(() => !!document.getElementById('remote'), null, { timeout: 20000 })
     .catch(() => { throw new Error('a ringing call was never answered once the poll timer stopped'); });
   return { answered: true, pollTimers: await page.evaluate(() => window.__flipDroppedPollTimers || 0) };
 }, {

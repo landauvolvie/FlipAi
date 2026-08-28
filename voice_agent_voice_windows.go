@@ -302,7 +302,12 @@ func launchAgentApp(agent string, target VoiceAgentCallConfig) error {
 	}
 	for _, p := range agentAppExecutables(agent, os.Getenv("LOCALAPPDATA"), os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")) {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return shellOpen(p)
+			// These are Chromium/Electron apps, and Chromium exposes its web
+			// content to Windows accessibility -- the voice control included --
+			// far more reliably when started with this flag. It only takes
+			// effect on a fresh launch, which is exactly the launch FlipAi is
+			// doing here; an app the user already had open is unaffected.
+			return shellOpenArgs(p, "--force-renderer-accessibility")
 		}
 	}
 	if link := findAgentStartMenuShortcut(agent); link != "" {
@@ -349,7 +354,13 @@ func findAgentStartMenuShortcut(agent string) string {
 
 // shellOpen starts something the way double-clicking it would, which is the
 // only way to start a Store-packaged app.
-func shellOpen(path string) error {
+func shellOpen(path string) error { return shellOpenArgs(path, "") }
+
+// shellOpenArgs starts something the way double-clicking it would, optionally
+// with command-line arguments. Arguments are only honoured when the target is a
+// real executable; a Store-packaged app launched by its shortcut ignores them,
+// which is fine -- the flag is a best-effort nudge, not a requirement.
+func shellOpenArgs(path, args string) error {
 	verb, err := syscall.UTF16PtrFromString("open")
 	if err != nil {
 		return err
@@ -358,8 +369,15 @@ func shellOpen(path string) error {
 	if err != nil {
 		return err
 	}
+	var argsPtr *uint16
+	if strings.TrimSpace(args) != "" {
+		if argsPtr, err = syscall.UTF16PtrFromString(args); err != nil {
+			return err
+		}
+	}
 	r, _, callErr := procVoiceShellExecute.Call(0,
-		uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), 0, 0, 1)
+		uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)),
+		uintptr(unsafe.Pointer(argsPtr)), 0, 1)
 	if r <= 32 {
 		return fmt.Errorf("Windows would not start %s (ShellExecuteW=%d): %v", filepath.Base(path), r, callErr)
 	}
