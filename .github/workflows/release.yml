@@ -170,14 +170,17 @@ jobs:
           if(-not (Test-Path $notesFile)){throw "docs/RELEASE-NOTES.md is missing; release notes ship with the release"}
           $notes=Get-Content $notesFile -Raw
           if($notes -notmatch [regex]::Escape($version)){throw "docs/RELEASE-NOTES.md does not describe $version"}
-          # --notes-file rather than --notes: the body is prose with quotation
-          # marks in it, and handing that to a native command as an argument is
-          # how a release body gets mangled.
-          if(gh release view $tag *> $null){
+          # Native command output cannot be used as the condition here because
+          # it is redirected to $null. Check gh's exit code explicitly instead.
+          gh release view $tag *> $null
+          $releaseExists=($LASTEXITCODE -eq 0)
+          if($releaseExists){
             gh release upload $tag $setup .\installer-output\SHA256SUMS.txt --clobber
+            if($LASTEXITCODE -ne 0){throw "uploading replacement assets for $tag failed with exit code $LASTEXITCODE"}
             gh release edit $tag --title "FlipAi $tag" --notes-file $notesFile
+            if($LASTEXITCODE -ne 0){throw "editing $tag failed with exit code $LASTEXITCODE"}
           } else {
             gh release create $tag $setup .\installer-output\SHA256SUMS.txt --title "FlipAi $tag" --notes-file $notesFile
+            if($LASTEXITCODE -ne 0){throw "creating $tag failed with exit code $LASTEXITCODE"}
           }
-          if($LASTEXITCODE -ne 0){throw "publishing $tag failed with exit code $LASTEXITCODE"}
           Write-Host "Published $tag with the installer and SHA256SUMS.txt"
