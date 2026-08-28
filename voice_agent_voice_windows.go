@@ -34,13 +34,15 @@ import (
 // cable when the next call arrives.
 
 const (
-	// agentVoiceStartTimeout is how long voice mode is given to come up. The
-	// caller is already connected and can hear silence, so this is short
-	// enough to report a problem while they are still on the line.
-	agentVoiceStartTimeout = 12 * time.Second
+	// agentVoiceStartTimeout is how long voice mode is given to come up. Each
+	// accessibility read now waits, inside one client, for the Electron app to
+	// build its UI Automation tree, so a single read can take several seconds --
+	// the overall budget has to hold a few of those plus the app entering voice
+	// mode. The caller hears silence while this runs, so it is not open-ended.
+	agentVoiceStartTimeout = 45 * time.Second
 	// agentVoiceStopTimeout is the same for shutting it down. Nothing is
 	// waiting on it, but the next call is.
-	agentVoiceStopTimeout = 8 * time.Second
+	agentVoiceStopTimeout = 20 * time.Second
 	// agentVoicePoll is the gap between checks of the accessibility tree. Each
 	// check is a PowerShell process, so this is deliberately not tight.
 	agentVoicePoll = 900 * time.Millisecond
@@ -59,6 +61,14 @@ func startAgentVoiceSession(dataDir string, cfg VoiceCallConfig, agent string) e
 		routeAgentAppAudio(dataDir, cfg, agent)
 		return err
 	}
+
+	// Bring the app to the front before anything else. A Chromium/Electron app
+	// that is minimized or fully occluded throttles its renderer and may not
+	// build the accessibility tree for its web content at all -- so the Voice
+	// control FlipAi is about to look for would not exist to be found. The
+	// caller is not typing, so taking focus for the app they are calling is
+	// exactly right.
+	bringToFront(hwnd)
 
 	// The cables first. Voice mode opens its microphone the moment it starts,
 	// and Windows hands a process the endpoint that was assigned to it when

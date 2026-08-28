@@ -130,41 +130,62 @@ $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND
 if ($null -eq $root) { Write-Output 'found=0'; Write-Output 'result=no-window'; exit 0 }
 Write-Output 'found=1'
 
-$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-
 $startEl = $null
 $endEl = $null
 $startName = ''
 $endName = ''
 $active = $false
-$listed = 0
+$controls = New-Object System.Collections.Generic.List[string]
 
-foreach ($e in $all) {
-  $name = '' + $e.Current.Name
-  $id = '' + $e.Current.AutomationId
-  $help = '' + $e.Current.HelpText
-  $text = ($name + ' ' + $id + ' ' + $help).Trim()
-  if ($text -eq '') { continue }
+# The Codex and ChatGPT desktop apps are Chromium/Electron. Chromium does not
+# build its UI Automation tree until a client has attached, and it does not
+# build it instantly: the very first query after attaching sees only the
+# top-level window, which is exactly the "it offered: ChatGPT" and nothing else
+# that left voice mode never starting. So this keeps ONE client alive and
+# re-scans until the web content shows up, instead of spawning a fresh client
+# that asks once and gives up. A scan is judged populated once it has found a
+# voice control, found that voice is already running, or simply seen more than
+# the handful of native window elements.
+$deadline = (Get-Date).AddSeconds(9)
+while ($true) {
+  $startEl = $null
+  $endEl = $null
+  $startName = ''
+  $endName = ''
+  $active = $false
+  $controls.Clear()
+  $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+  foreach ($e in $all) {
+    try {
+      $name = '' + $e.Current.Name
+      $id = '' + $e.Current.AutomationId
+      $help = '' + $e.Current.HelpText
+      $enabled = $e.Current.IsEnabled
+    } catch { continue }
+    $text = ($name + ' ' + $id + ' ' + $help).Trim()
+    if ($text -eq '') { continue }
 
-  # A control that ends voice is the clearest sign voice is running.
-  if ($text -match '(?i)(end|stop|exit|leave|close)[\s_-]*(the\s+)?(voice|conversation|call|chat)' -or
-      $text -match '(?i)(voice|conversation)[\s_-]*(mode\s+)?(end|stop|exit|leave|close)') {
-    $active = $true
-    if ($null -eq $endEl -and $e.Current.IsEnabled) { $endEl = $e; $endName = $text }
-    continue
+    # A control that ends voice is the clearest sign voice is running.
+    if ($text -match '(?i)(end|stop|exit|leave|close|hang)[\s_-]*(the\s+)?(voice|conversation|call|chat|talk)' -or
+        $text -match '(?i)(voice|conversation)[\s_-]*(mode\s+)?(end|stop|exit|leave|close)') {
+      $active = $true
+      if ($null -eq $endEl -and $enabled) { $endEl = $e; $endName = $text }
+      continue
+    }
+
+    if ($text -match '(?i)(start\s+voice|voice\s+mode|voice\s+chat|voice\s+conversation|use\s+voice|talk\s+to|advanced\s+voice|\bvoice\b|\bmicrophone\b|\bmic\b|\bdictat)') {
+      if ($text -match '(?i)(setting|settings|input|output|device|volume|permission|help|learn|mute|unmute)') { continue }
+      if ($null -eq $startEl -and $enabled) { $startEl = $e; $startName = $text }
+    }
+
+    if ($controls.Count -lt 24 -and $name -ne '' -and $name.Length -le 60) { $controls.Add($name) }
   }
-
-  if ($text -match '(?i)(start\s+voice|voice\s+mode|voice\s+chat|voice\s+conversation|use\s+voice|talk\s+to|advanced\s+voice|\bvoice\b|\bmicrophone\b|\bmic\b)') {
-    if ($text -match '(?i)(setting|settings|input|output|device|volume|permission|help|learn)') { continue }
-    if ($null -eq $startEl -and $e.Current.IsEnabled) { $startEl = $e; $startName = $text }
-  }
-
-  if ($listed -lt 24 -and $name -ne '' -and $name.Length -le 60) {
-    Write-Output ('control=' + $name)
-    $listed = $listed + 1
-  }
+  if ($active -or $null -ne $startEl -or $all.Count -gt 4) { break }
+  if ((Get-Date) -ge $deadline) { break }
+  Start-Sleep -Milliseconds 700
 }
 
+foreach ($c in $controls) { Write-Output ('control=' + $c) }
 if ($active) { Write-Output 'active=1' } else { Write-Output 'active=0' }
 Write-Output ('start=' + $startName)
 Write-Output ('end=' + $endName)

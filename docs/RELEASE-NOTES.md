@@ -1,74 +1,61 @@
-# FlipAi v0.39.0
+# FlipAi v0.40.0
 
-After a restart, Google Voice would not start ("no interactive desktop
-session"), Retry did nothing, and Set up opened no browser. One cause sat under
-all three, and this release fixes it.
+The call is answered, the account is signed in, the cables are installed and
+wired — and then the caller could not talk to the agent, because Codex/ChatGPT's
+voice mode never started. This release goes after that, and after the audio
+routing Windows was refusing alongside it.
 
-## Google Voice, Retry, and Set up all did nothing
+## "Could not find a Voice control in ChatGPT"
 
-They share a root: **"Start before sign-in."**
+The Codex and ChatGPT desktop apps are Chromium/Electron apps, and Chromium does
+not build its accessibility tree — the thing FlipAi reads to find and press the
+Voice control — until a client attaches, and **not instantly**. FlipAi drove it
+by launching a fresh PowerShell for each check: a brand-new accessibility client
+that asked once and exited. The first query after attaching sees only the
+top-level window, so every check came back with the window and nothing inside
+it. That is exactly the *"it offered: ChatGPT"* in the last-call record.
 
-That option runs FlipAi from a power-on scheduled task, before anyone logs in,
-so FlipAi is already handling texts after a reboot. But a power-on task runs in
-**Windows Session 0 — a session with no desktop.** And everything about calling
-needs a desktop: the Google Voice window is a real browser view, the desktop AI
-app is a real window, and Set up opens a real browser.
+Two changes fix the mechanism:
 
-FlipAi's background host — the part that owned Google Voice and the audio-bridge
-setup — was the process that power-on task started, so it sat in Session 0. From
-there:
+- **FlipAi now keeps one accessibility client alive and re-scans** until the
+  app's web content actually appears, instead of asking once and giving up. A
+  scan that returns only the bare window is treated as a tree that has not built
+  yet, and it waits — up to a bounded few seconds — for the real controls.
+- **The app is brought to the front first.** A minimized or fully hidden
+  Chromium window throttles its renderer and may not build an accessibility tree
+  for its web content at all, so the Voice control would not exist to be found.
+  The caller is not typing, so focusing the app they are calling is right.
 
-- **Google Voice reported "no interactive desktop session" and never started.**
-  It was right: it cannot draw a window where there is no desktop.
-- **Retry did nothing**, because Retry asked that same Session 0 host.
-- **Set up opened a browser into Session 0**, where no signed-in user could see
-  it — so, from the desktop, nothing happened.
+If your app still exposes no Voice control this way, the keyboard fallback is
+unchanged: **Agents → the agent → Voice shortcut**, set to the desktop app's own
+start-voice shortcut. FlipAi presses it when it cannot find the on-screen
+control.
 
-Signing in did not rescue it. When you signed in and opened FlipAi, your own
-session found the Session 0 host already answering and never started one of its
-own, so the only host stayed where it could not help.
+## "Desktop app audio: Windows refused it"
 
-## The fix: the desktop work runs in your session, not Session 0
-
-A tray icon cannot exist without a desktop, so the FlipAi **tray** is always in
-your signed-in session. Google Voice supervision and the audio-bridge setup
-endpoint now live there. The background host, wherever it is running, hands any
-desktop action it cannot perform itself to that interactive tray.
-
-So with **Start before sign-in on**, texts are still handled from the moment the
-PC powers on, exactly as before — and the calling window, Retry, and Set up all
-work as soon as you have signed in and opened FlipAi. With the option off,
-nothing changes: everything was already in your session.
-
-**One thing to know:** the calling side is inherently a signed-in-desktop
-feature. It answers calls whenever you are logged in with FlipAi open; it cannot
-answer them at the Windows lock screen, because Google Voice and the desktop AI
-app have nowhere to run there.
-
-## What a real call now reports
-
-The call in the last report **was answered** — it did not go to voicemail. The
-caller-ID fix from v0.36.0 is holding. The "Last call" record shows the call
-connecting and then stopping at the next step: *"could not find a Voice control
-in ChatGPT."* That is Codex/ChatGPT's own voice control not being found
-automatically. FlipAi already tells you the fix and has the setting for it:
-**Agents → the agent → Voice shortcut**, set to the desktop app's own
-push-to-talk / start-voice keyboard shortcut (for ChatGPT desktop, the Voice
-Mode shortcut). FlipAi presses that to start voice mode when it cannot find the
-on-screen control.
+Pointing the desktop app's microphone and speaker at the cables uses a
+Windows interface whose accepted device-id format **differs across Windows
+builds** — some take the raw endpoint id, others a device-path wrapper around
+it. FlipAi sent one form and, when Windows rejected it, reported "Windows
+refused it". It now tries both forms and takes whichever Windows accepts,
+failing only when neither works — and still printing the exact HRESULT and the
+one-time manual fallback when that happens.
 
 ## Verified
 
-The hand-off is tested: an interactive host opens Google Voice directly; a
-non-interactive one hands the work to the worker and reports back the worker's
-own outcome — success, or the real reason it failed — rather than a generic
-error; and a request left pending while nobody was signed in is dropped, never
-replayed on the next sign-in.
+The driver script is tested to keep one client and re-scan rather than query
+once, to treat a bare window as a not-yet-built tree, to bound the wait, and to
+still emit every report field the rest of FlipAi parses. The router is tested to
+try the SWD wrapper and the raw id, in that order, for both the playback and the
+recording endpoint.
 
 Plus the usual: the full call lifecycle, the injected page script and the
 control channel in real headless Chromium, the cable plan, the audio-bridge
-setup, the Windows build and race test, the receiver check on a real Windows
-runner, and the installer's install and uninstall.
+setup, the desktop-session hand-off, the Windows build and race test, the
+receiver check on a real Windows runner, and the installer.
 
-Still only verifiable on your own PC: whether a real call is answered end to end
-and whether the desktop app enters voice mode.
+Honest about the limit: whether a specific build of the ChatGPT or Codex desktop
+app exposes a Voice control to Windows accessibility, and whether that build's
+audio endpoints take one id form or the other, can only be confirmed on your PC.
+The last-call record now says which step it reached, so if voice still does not
+start it will say whether the control was found, pressed, or never appeared.

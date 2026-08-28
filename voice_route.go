@@ -155,6 +155,21 @@ public static class FlipAudioRoute
         return 0;
     }
 
+    // Which string SetPersistedDefaultAudioEndpoint accepts as the device id
+    // differs across Windows builds: some take the raw MMDevice id that
+    // IMMDevice::GetId returns, others the SWD device-path wrapper around it.
+    // Guessing wrong is exactly the "Windows refused it" (a failing HRESULT)
+    // reported from the field, so both are tried and whichever the OS accepts
+    // wins. The last HRESULT is returned when neither does.
+    private static int PersistEither(object factory, uint processId, int flow, string mmDeviceId)
+    {
+        int hr = Persist(factory, processId, flow, SwdId(flow, mmDeviceId));
+        if (hr == 0) return 0;
+        int raw = Persist(factory, processId, flow, mmDeviceId);
+        if (raw == 0) return 0;
+        return hr;
+    }
+
     public static void Route(uint processId, string renderName, string captureName)
     {
         object factory = null;
@@ -172,12 +187,12 @@ public static class FlipAudioRoute
         }
         if (!string.IsNullOrEmpty(renderName))
         {
-            var hr = Persist(factory, processId, 0, SwdId(0, FindEndpointId(0, renderName)));
+            var hr = PersistEither(factory, processId, 0, FindEndpointId(0, renderName));
             if (hr != 0) throw new Exception("persisting the playback endpoint failed with HRESULT 0x" + hr.ToString("X8"));
         }
         if (!string.IsNullOrEmpty(captureName))
         {
-            var hr = Persist(factory, processId, 1, SwdId(1, FindEndpointId(1, captureName)));
+            var hr = PersistEither(factory, processId, 1, FindEndpointId(1, captureName));
             if (hr != 0) throw new Exception("persisting the recording endpoint failed with HRESULT 0x" + hr.ToString("X8"));
         }
     }
