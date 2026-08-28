@@ -1,72 +1,74 @@
-# FlipAi v0.38.0
+# FlipAi v0.39.0
 
-The one-click audio-bridge installer could never have worked. This release
-removes it and replaces it with a path that does.
+After a restart, Google Voice would not start ("no interactive desktop
+session"), Retry did nothing, and Set up opened no browser. One cause sat under
+all three, and this release fixes it.
 
-## "Windows rejected a virtual audio device (problem code 52)"
+## Google Voice, Retry, and Set up all did nothing
 
-FlipAi downloaded a free virtual audio driver, verified its signature, put it in
-the Windows driver store, created the device node — and then Windows refused to
-start it.
+They share a root: **"Start before sign-in."**
 
-The reason is not fixable by trying harder. On 64-bit Windows 10 and 11, the
-Code Integrity engine loads a **kernel-mode** driver only when its catalog is
-signed by the **Microsoft Windows Hardware Compatibility Publisher** — the
-signature a vendor gets by submitting the driver to Microsoft. The driver FlipAi
-used is signed by SignPath Foundation through GlobalSign. That is a perfectly
-valid Authenticode code-signing certificate, and it is irrelevant to loading a
-driver. The driver project's own README says so plainly: it *"requires test
-signing to be enabled"*.
+That option runs FlipAi from a power-on scheduled task, before anyone logs in,
+so FlipAi is already handling texts after a reboot. But a power-on task runs in
+**Windows Session 0 — a session with no desktop.** And everything about calling
+needs a desktop: the Google Voice window is a real browser view, the desktop AI
+app is a real window, and Set up opens a real browser.
 
-So FlipAi's signature check passed and told the truth — the signature **is**
-valid — while asking Windows for something it was always going to refuse.
-Problem code 52 is `CM_PROB_UNSIGNED_DRIVER`, and it was correct every time.
+FlipAi's background host — the part that owned Google Voice and the audio-bridge
+setup — was the process that power-on task started, so it sat in Session 0. From
+there:
 
-The only ways past it are switching on Windows test-signing or turning off
-Secure Boot. FlipAi will not do either to somebody's PC to make a button look
-like it works.
+- **Google Voice reported "no interactive desktop session" and never started.**
+  It was right: it cannot draw a window where there is no desktop.
+- **Retry did nothing**, because Retry asked that same Session 0 host.
+- **Set up opened a browser into Session 0**, where no signed-in user could see
+  it — so, from the desktop, nothing happened.
 
-## What replaces it
+Signing in did not rescue it. When you signed in and opened FlipAi, your own
+session found the Session 0 host already answering and never started one of its
+own, so the only host stayed where it could not help.
 
-Two free virtual audio pairs that **are** signed the way Windows requires, so
-they install on a stock Windows 11 with Secure Boot left on:
+## The fix: the desktop work runs in your session, not Session 0
 
-- **VB-CABLE Virtual Audio Device** — carries the caller's voice to the desktop app
-- **VoiceMeeter** — carries the app's reply back to the caller
+A tray icon cannot exist without a desktop, so the FlipAi **tray** is always in
+your signed-in session. Google Voice supervision and the audio-bridge setup
+endpoint now live there. The background host, wherever it is running, hands any
+desktop action it cannot perform itself to that interactive tray.
 
-The button on the cables row now opens whichever of the two the PC is still
-missing, and it says *Set up*, not *Install*, because FlipAi is not the one
-installing it. Install, restart, come back: **FlipAi finds the endpoints and
-wires both directions itself, on every call, exactly as before.** Nothing about
-the per-call behaviour changes — that part always worked and still does.
+So with **Start before sign-in on**, texts are still handled from the moment the
+PC powers on, exactly as before — and the calling window, Retry, and Set up all
+work as soon as you have signed in and opened FlipAi. With the option off,
+nothing changes: everything was already in your session.
 
-FlipAi already recognised both of these, along with CABLE A/B, VB-Audio Point
-and the VoiceMeeter AUX and VAIO3 strips. Anyone who already has cables
-installed is unaffected.
+**One thing to know:** the calling side is inherently a signed-in-desktop
+feature. It answers calls whenever you are logged in with FlipAi open; it cannot
+answer them at the Windows lock screen, because Google Voice and the desktop AI
+app have nowhere to run there.
 
-## Also gone
+## What a real call now reports
 
-The driver download, the SHA-256 pins, the device-node tool that existed only to
-install that driver, the elevated PowerShell install script, and the installer
-log summariser that existed only to explain why it failed. About 350 lines,
-whose only job was to fail.
+The call in the last report **was answered** — it did not go to voicemail. The
+caller-ID fix from v0.36.0 is holding. The "Last call" record shows the call
+connecting and then stopping at the next step: *"could not find a Voice control
+in ChatGPT."* That is Codex/ChatGPT's own voice control not being found
+automatically. FlipAi already tells you the fix and has the setting for it:
+**Agents → the agent → Voice shortcut**, set to the desktop app's own
+push-to-talk / start-voice keyboard shortcut (for ChatGPT desktop, the Voice
+Mode shortcut). FlipAi presses that to start voice mode when it cannot find the
+on-screen control.
 
 ## Verified
 
-A test walks every non-test source file and fails the build if the driver
-package, the device-node tool, `testsigning` or `bcdedit` are ever referenced
-again outside the one file that explains why they cannot be used.
-
-Another test installs — in the cable planner — exactly what FlipAi now
-recommends, and requires the result to be a complete, working bridge with the
-PC's own speakers and microphone left out of it. A recommendation FlipAi cannot
-then wire is the failure this release is about, and it is now impossible to ship
-one.
+The hand-off is tested: an interactive host opens Google Voice directly; a
+non-interactive one hands the work to the worker and reports back the worker's
+own outcome — success, or the real reason it failed — rather than a generic
+error; and a request left pending while nobody was signed in is dropped, never
+replayed on the next sign-in.
 
 Plus the usual: the full call lifecycle, the injected page script and the
-control channel in real headless Chromium, the cable plan, the Windows build and
-race test, the receiver check on a real Windows runner, and the installer's
-install and uninstall.
+control channel in real headless Chromium, the cable plan, the audio-bridge
+setup, the Windows build and race test, the receiver check on a real Windows
+runner, and the installer's install and uninstall.
 
 Still only verifiable on your own PC: whether a real call is answered end to end
 and whether the desktop app enters voice mode.

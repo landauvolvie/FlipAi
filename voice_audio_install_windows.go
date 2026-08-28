@@ -5,7 +5,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,20 +24,11 @@ const voiceAudioInstallListen = "127.0.0.1:8772"
 
 var voiceAudioInstallMu sync.Mutex
 
-func init() {
-	if len(os.Args) < 2 || os.Args[1] != "--host" {
-		return
-	}
-	dataDir, cfgPath, _, _, err := appPaths()
-	if err != nil {
-		return
-	}
-	cfg, err := loadConfig(cfgPath, dataDir)
-	if err != nil {
-		cfg = defaultConfig(dataDir)
-	}
-	go startVoiceAudioInstallServer(dataDir, cfg.Listen)
-}
+// This server is started by the interactive tray worker, not by an init() in
+// the host. Pressing Set up opens a browser, and a browser opened from the
+// non-interactive host (Session 0, under "start before sign-in") appears on no
+// desktop the user can see -- which is exactly why Set up "did nothing". See
+// voice_desktop_worker.go.
 
 type voiceAudioInstallResult struct {
 	OK      bool   `json:"ok"`

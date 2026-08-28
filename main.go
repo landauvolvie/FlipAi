@@ -373,6 +373,11 @@ func runTrayProcess(dataDir, cfgPath string) {
 		requestQuit(dataDir, "tray quit")
 		cancel()
 	}
+	// The tray is the one FlipAi process guaranteed to be in the user's own
+	// desktop session -- a tray icon cannot exist without one. So it, not the
+	// background host, owns everything about Google Voice that needs a desktop.
+	// This does nothing in the Session 0 tray the power-on task also starts.
+	startVoiceDesktopWorker(dataDir, cfg.Listen)
 	if err := runSystemTray(ctx, "FlipAi — running", openSettings, quit); err != nil {
 		// The watchdog will retry the tray process. This commonly happens only
 		// when Explorer has not finished starting yet.

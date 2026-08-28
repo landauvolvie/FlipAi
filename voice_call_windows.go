@@ -75,9 +75,11 @@ func init() {
 		os.Exit(0)
 	case "--host":
 		startVoiceControlServer(dataDir, cfgPath, statePath)
-		if voiceInteractiveSession() {
-			go superviseGoogleVoice(dataDir)
-		}
+		// Google Voice is no longer supervised here. It needs a signed-in
+		// desktop, and the host may have none: "start before sign-in" runs it in
+		// Session 0. The interactive tray owns Google Voice now -- see
+		// voice_desktop_worker.go -- and the host hands it any desktop action it
+		// cannot perform itself.
 	}
 	// The Google Voice window has exactly one supervisor, in the host, and it
 	// is started above. There used to be three -- the host's, a second watchdog

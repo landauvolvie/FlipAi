@@ -152,7 +152,18 @@ type VoiceRuntimeState struct {
 	// can never be mistaken for the reason a window did not appear.
 	LastOpenError string    `json:"lastOpenError,omitempty"`
 	LastOpenAt    time.Time `json:"lastOpenAt,omitempty"`
-	UpdatedAt     time.Time `json:"updatedAt,omitempty"`
+
+	// DesktopRequest is a desktop-touching Google Voice action the background
+	// host could not perform itself because it is running in a non-interactive
+	// Windows session. The "start before sign-in" power-on task runs the whole
+	// stack in Session 0, which has no desktop, so opening the WebView2 window
+	// or a browser there does nothing a signed-in user can see. The interactive
+	// tray worker performs the request instead. DesktopRequestAt bounds it, so a
+	// request left over from a previous sign-in is never replayed.
+	DesktopRequest   string    `json:"desktopRequest,omitempty"`
+	DesktopRequestAt time.Time `json:"desktopRequestAt,omitempty"`
+
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }
 
 type voiceControlSnapshot struct {
@@ -883,7 +894,7 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 		// Google Voice has no window of its own to open any more: it lives in
 		// the FlipAi panel or nowhere. This makes sure it is running and
 		// standing where the page asked for it.
-		if err := openGoogleVoiceWindow(dataDir, true); err != nil {
+		if err := voiceOpenForUI(dataDir); err != nil {
 			activity.Add("error", "voice", "Open Google Voice failed: "+truncate(err.Error(), 300), "", "", "")
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -912,7 +923,7 @@ func voiceControlHandler(dataDir, mainListen string, mainConfig func() Config, a
 			s.RenderAttempt++
 		})
 		activity.Add("info", "voice", "Restarting the Google Voice window.", "", "", "")
-		platformRestartGoogleVoice(dataDir)
+		voiceRestartForUI(dataDir)
 		writeJSON(w, voiceSnapshot(dataDir, mainConfig))
 	}))
 	// /signout forgets the Google account the Google Voice window is signed in
