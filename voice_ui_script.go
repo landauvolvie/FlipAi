@@ -97,6 +97,16 @@ const voiceDesktopInitScript = `
     return pill('Not applied yet','warn');
   }
 
+  // A call that was refused, or one FlipAi could not manage to answer, used to
+  // leave the page reading "Idle" and nothing else -- the same screen as a call
+  // that never happened. This is the one row that says which.
+  function lastCallPill(rt){
+    const outcome=rt?.lastCallOutcome;
+    if(!outcome) return pill('None yet');
+    const bad=/not allowed|could not|did not|has not|not bridged|no agent/i.test(outcome);
+    return pill(bad?'Did not connect':'Connected',bad?'warn':'ok');
+  }
+
   function cablesPill(){
     const audio=snapshot?.audio||{};
     if(audio.warning&&!(audio.cables||[]).length) return pill('Not found','warn');
@@ -328,6 +338,7 @@ const voiceDesktopInitScript = `
     set('vcs-agents',(snapshot.callAgents||[]).length?pill((snapshot.callAgents||[]).join(' and '),'ok'):pill('Nobody yet','warn'));
     set('vcs-call',callPill(rt)||pill('Idle'));
     set('vcs-ring',rt.lastRingAt&&!/^0001/.test(rt.lastRingAt)?pill(new Date(rt.lastRingAt).toLocaleString(),'ok'):pill('Never','warn'));
+    set('vcs-lastcall',lastCallPill(rt));
     set('vcs-webview2',snapshot.webView2?pill(snapshot.webView2,'ok'):pill('Not installed','warn'));
     set('vcs-permissions',pill('Mic + notifications allowed','ok'));
     const sw=q('#vc-enabled'); if(sw) sw.checked=!!cfg.enabled;
@@ -352,6 +363,13 @@ const voiceDesktopInitScript = `
       out.push(callout('A call reached this window but FlipAi found nothing to press. ','Google Voice announced an incoming call and never drew an Answer control in the page. Open Connections while a call comes in to see what it is showing, and check Google Voice\u2019s own Settings \u2192 Calls for receiving calls on this device.'));
     }
     if(rt.callNote) out.push(callout('This call: ',rt.callNote));
+    // And once it is over, what happened to it -- with what FlipAi tried, in
+    // order, so a call that was not answered can be told apart from a call that
+    // was never allowed and from one that never rang.
+    if(!rt.callNote&&rt.lastCallOutcome){
+      const when=rt.lastCallAt&&!/^0001/.test(rt.lastCallAt)?new Date(rt.lastCallAt).toLocaleString()+': ':'';
+      out.push(callout('Last call \u2014 '+when,rt.lastCallOutcome+(rt.lastCallTrace?('  FlipAi tried: '+rt.lastCallTrace):'')));
+    }
     if(rt.blocked&&!rt.callNote) out.push(callout('Last call was not connected: ',rt.blocked));
     if(rt.lastError&&!rt.lastOpenError){
       // A desktop app that would not enter voice mode is not a Google Voice
@@ -410,6 +428,7 @@ const voiceDesktopInitScript = `
     rows.append(row('Agents on calls','Set by giving an agent a number that may call, on the Agents page.',cell('vcs-agents')));
     rows.append(row('Current call','',cell('vcs-call')));
     rows.append(row('Ring seen','Whether a call has reached Google Voice.',cell('vcs-ring')));
+    rows.append(row('Last call','What happened to the most recent call, kept after it ends.',cell('vcs-lastcall')));
     rows.append(row('Edge WebView2 runtime','The Windows component FlipAi draws both its own window and Google Voice with.',cell('vcs-webview2')));
     rows.append(row('Browser permissions','Microphone and notifications for Google Voice are granted by FlipAi.',cell('vcs-permissions')));
     body.append(rows);

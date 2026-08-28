@@ -122,6 +122,20 @@ const (
 	voiceEffectStopAgentVoice
 )
 
+// voiceAnswerRungName names one rung of the answer ladder, for the record of
+// what FlipAi tried on a call that was not answered.
+func voiceAnswerRungName(attempt int) string {
+	switch attempt {
+	case 1:
+		return "the page's own click"
+	case 2:
+		return "a real pointer press"
+	case 3:
+		return "Windows accessibility"
+	}
+	return "unknown"
+}
+
 func (k voiceEffectKind) String() string {
 	switch k {
 	case voiceEffectAnswer:

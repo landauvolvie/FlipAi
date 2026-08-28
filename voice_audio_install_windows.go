@@ -144,20 +144,23 @@ func installFlipAiAudioBridge(dataDir string) voiceAudioInstallResult {
 	}
 	exitCode, runErr := runElevatedPowerShell(script)
 	logBytes, _ := os.ReadFile(logPath)
-	logText := strings.TrimSpace(string(logBytes))
+	// What went wrong, not what the transcript header says. See
+	// summarizeInstallLog: the header alone is longer than the message.
+	reason := summarizeInstallLog(string(logBytes), 700)
+	where := " The full installer log is at " + logPath + "."
 	if runErr != nil {
 		msg := runErr.Error()
-		if logText != "" {
-			msg += ": " + truncate(logText, 900)
+		if reason != "" {
+			msg += ": " + reason
 		}
-		return voiceAudioInstallResult{Message: msg}
+		return voiceAudioInstallResult{Message: msg + where}
 	}
 	if exitCode != 0 && exitCode != 3010 {
-		msg := fmt.Sprintf("Windows could not start the free audio bridge (installer exit %d)", exitCode)
-		if logText != "" {
-			msg += ": " + truncate(logText, 900)
+		msg := fmt.Sprintf("The audio bridge did not install (installer exit %d)", exitCode)
+		if reason != "" {
+			msg += ": " + reason
 		}
-		return voiceAudioInstallResult{Message: msg}
+		return voiceAudioInstallResult{Message: msg + where}
 	}
 
 	// Edge enumerates devices on every control tick; once Windows publishes the
@@ -361,26 +364,46 @@ try {
 
   $hardware='Root\VirtualAudioDriver'
   $pattern='^Root\\VirtualAudioDriver$'
-  $devices=@(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -match $pattern })
-  if($devices.Count -eq 0) {
-    & $nefcon install $inf $hardware --no-duplicates 2>&1 | ForEach-Object { Write-Output $_ }
-    if($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) { throw "nefcon install failed with exit code $LASTEXITCODE" }
-    Start-Sleep -Seconds 1
+
+  # Put the verified package in the Windows driver store first. pnputil ships
+  # with Windows and is the supported way to do this; nefcon is used only for
+  # the one thing Windows has no built-in command for, which is creating a root
+  # device node for a driver that has no hardware behind it.
+  $addOut = & pnputil.exe /add-driver $inf /install 2>&1
+  $addCode = $LASTEXITCODE
+  Write-Output ('INFO pnputil exit ' + $addCode)
+  Write-Output ($addOut | Out-String)
+  # 259 = ERROR_NO_MORE_ITEMS, which pnputil returns when the package is
+  # already in the store. 3010 asks for a reboot. Neither is a failure.
+  if($addCode -ne 0 -and $addCode -ne 259 -and $addCode -ne 3010) {
+    throw "pnputil could not add the driver package (exit $addCode)"
   }
 
   $devices=@(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -match $pattern })
-  while($devices.Count -lt 2) {
-    & $nefcon --create-device-node --hardware-id $hardware --class-name MEDIA --class-guid '4D36E96C-E325-11CE-BFC1-08002BE10318' 2>&1 | ForEach-Object { Write-Output $_ }
-    if($LASTEXITCODE -ne 0) { throw "creating the second virtual audio device failed with exit code $LASTEXITCODE" }
-    & $nefcon --install-driver --inf-path $inf 2>&1 | ForEach-Object { Write-Output $_ }
-    if($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) { throw "binding the virtual audio driver failed with exit code $LASTEXITCODE" }
-    Start-Sleep -Seconds 1
+  Write-Output ('INFO existing virtual audio devices: ' + $devices.Count)
+  $attempts = 0
+  while($devices.Count -lt 2 -and $attempts -lt 4) {
+    $attempts++
+    $nodeOut = & $nefcon --create-device-node --hardware-id $hardware --class-name MEDIA --class-guid '4d36e96c-e325-11ce-bfc1-08002be10318' 2>&1
+    $nodeCode = $LASTEXITCODE
+    Write-Output ('INFO create-device-node exit ' + $nodeCode)
+    Write-Output ($nodeOut | Out-String)
+    if($nodeCode -ne 0) { throw "creating a virtual audio device failed (nefcon exit $nodeCode)" }
+    $bindOut = & $nefcon --install-driver --inf-path $inf 2>&1
+    $bindCode = $LASTEXITCODE
+    Write-Output ('INFO install-driver exit ' + $bindCode)
+    Write-Output ($bindOut | Out-String)
+    if($bindCode -ne 0 -and $bindCode -ne 3010) { throw "binding the virtual audio driver failed (nefcon exit $bindCode)" }
+    Start-Sleep -Seconds 2
     $devices=@(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -match $pattern })
+    Write-Output ('INFO virtual audio devices now: ' + $devices.Count)
   }
 
-  # Re-bind all instances to the verified package in case an older/bad package
-  # had created a device node on this PC.
-  & $nefcon --install-driver --inf-path $inf 2>&1 | ForEach-Object { Write-Output $_ }
+  # Re-bind every instance to the verified package, in case an older or broken
+  # package had created a device node on this PC before.
+  $rebindOut = & $nefcon --install-driver --inf-path $inf 2>&1
+  Write-Output ('INFO rebind exit ' + $LASTEXITCODE)
+  Write-Output ($rebindOut | Out-String)
   Start-Sleep -Seconds 3
   $devices=@(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -match $pattern })
   if($devices.Count -lt 2) { throw "Windows exposed only $($devices.Count) virtual audio device(s); FlipAi needs two" }

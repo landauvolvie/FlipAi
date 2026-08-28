@@ -464,3 +464,111 @@ func TestAnsweredCallSaysWhenItHasNoAudioPath(t *testing.T) {
 		t.Errorf("a fully wired machine still warned: %q", st.LastError)
 	}
 }
+
+// A call that was refused, or one FlipAi could not manage to answer, used to
+// leave the status page reading "Idle" and nothing else -- the same screen as a
+// call that never happened. Every field describing a call was cleared the
+// moment it returned to idle, so there was no way to tell which of those it
+// had been. The record has to outlive the call.
+func TestWhatHappenedToACallSurvivesTheCallEnding(t *testing.T) {
+	dir := t.TempDir()
+	main := voiceTestConfig(t)
+	if err := saveVoiceCallConfig(dir, enabledVoiceConfig()); err != nil {
+		t.Fatal(err)
+	}
+	b := newVoiceBridge(dir, func() Config { return main },
+		func(VoiceCallConfig, string) error { return nil },
+		func(VoiceCallConfig, string) error { return nil })
+
+	// Somebody nobody allowed rings, and then stops ringing.
+	if b.Incoming("8455559999", "") {
+		t.Fatal("an unauthorized caller was answered")
+	}
+	b.Ended()
+
+	st := loadVoiceRuntime(dir)
+	if st.InCall {
+		t.Fatalf("the call did not clean up: %+v", st)
+	}
+	if st.LastCallOutcome == "" {
+		t.Fatal("a refused call left no record of why, so the page reads Idle and nothing else")
+	}
+	if !strings.Contains(st.LastCallOutcome, "not allowed") {
+		t.Errorf("the record does not say the caller was refused: %q", st.LastCallOutcome)
+	}
+	if st.LastCallAt.IsZero() {
+		t.Error("the record does not say when")
+	}
+}
+
+// For a call that was allowed, the record has to say what FlipAi actually did,
+// in order. "It did not work" with nothing behind it is what several rounds of
+// this have already produced.
+func TestTheRecordSaysWhatFlipAiTried(t *testing.T) {
+	dir := t.TempDir()
+	main := voiceTestConfig(t)
+	if err := saveVoiceCallConfig(dir, enabledVoiceConfig()); err != nil {
+		t.Fatal(err)
+	}
+	var started []string
+	b := newVoiceBridge(dir, func() Config { return main },
+		func(_ VoiceCallConfig, agent string) error { started = append(started, agent); return nil },
+		func(VoiceCallConfig, string) error { return nil })
+	// A press that never lands, as it would on a card FlipAi cannot press.
+	b.press = func(effect voiceCallEffect) error {
+		return errors.New("the ringing card has no Answer control on it yet")
+	}
+
+	if !b.Incoming("8455551000", "") {
+		t.Fatal("an allowed caller was not answered")
+	}
+	st := loadVoiceRuntime(dir)
+	if st.LastCallTrace == "" {
+		t.Fatal("nothing was recorded about what FlipAi tried")
+	}
+	if !strings.Contains(st.LastCallTrace, "answer attempt 1") {
+		t.Errorf("the record does not name the attempt: %q", st.LastCallTrace)
+	}
+	if !strings.Contains(st.LastCallTrace, "no Answer control") {
+		t.Errorf("the record does not say why the attempt failed: %q", st.LastCallTrace)
+	}
+
+	// And a call that is bridged records that too, so a working call is
+	// distinguishable from one that merely stopped ringing.
+	if !b.Answered("8455551000", "") {
+		t.Fatal("an allowed call was not bridged")
+	}
+	if len(started) != 1 {
+		t.Fatalf("voice mode was started %d times", len(started))
+	}
+	st = loadVoiceRuntime(dir)
+	if !strings.Contains(st.LastCallTrace, "voice mode started") {
+		t.Errorf("a bridged call did not record it: %q", st.LastCallTrace)
+	}
+}
+
+// Each new call starts its own record; a ring is not appended to the last one.
+func TestEachCallGetsItsOwnRecord(t *testing.T) {
+	dir := t.TempDir()
+	main := voiceTestConfig(t)
+	if err := saveVoiceCallConfig(dir, enabledVoiceConfig()); err != nil {
+		t.Fatal(err)
+	}
+	b := newVoiceBridge(dir, func() Config { return main },
+		func(VoiceCallConfig, string) error { return nil },
+		func(VoiceCallConfig, string) error { return nil })
+	b.press = func(voiceCallEffect) error { return errors.New("first call could not be pressed") }
+
+	b.Incoming("8455551000", "")
+	b.Ended()
+	b.press = func(voiceCallEffect) error { return errors.New("second call could not be pressed either") }
+	b.Incoming("8455551000", "")
+
+	trace := loadVoiceRuntime(dir).LastCallTrace
+	if strings.Contains(trace, "first call could not be pressed") {
+		t.Errorf("the second call inherited the first call's record: %q", trace)
+	}
+	if !strings.Contains(trace, "second call could not be pressed") {
+		t.Errorf("the second call recorded nothing of its own: %q", trace)
+	}
+}

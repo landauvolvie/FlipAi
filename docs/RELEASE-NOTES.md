@@ -1,75 +1,59 @@
-# FlipAi v0.35.0
+# FlipAi v0.36.0
 
-This release fixes a bug introduced in v0.33.0 that stopped incoming calls being
-answered at all. If you are on v0.33.0 or v0.34.0, update.
+Two things reported from a real PC: the free audio bridge would not install, and
+a call that reached FlipAi still went to voicemail with nothing on screen to say
+why.
 
-## What was wrong
+## The audio bridge could not install
 
-Google Voice's ordinary page offers a keypad to dial with and a mute control of
-its own. v0.33.0 added a second, weaker way of recognising a call in progress —
-"a call always offers mute and a keypad" — as protection against Google renaming
-the control that ends a call. That signal matched the page with **no call on it
-at all**.
+The installer drove **nefcon** with **devcon**'s command line
+(`nefconc install <inf> <hardware-id>`). nefcon does not accept that, so the
+very first step failed and nothing was ever installed.
 
-The consequences ran in order:
+It now uses the documented commands: Windows' own `pnputil /add-driver <inf>
+/install` puts the verified package in the driver store, and nefcon is used only
+for the one thing Windows has no built-in command for — creating a root device
+node for a driver with no hardware behind it. Each step logs its exit code.
 
-- FlipAi decided it was in a call with a caller it could not identify, and
-  reported **"Answered by hand — not bridged"** for a call nobody had answered.
-- From then on it treated every real incoming call as call waiting and ignored
-  it, so **no call was ever answered again** and allowed callers rang out to
-  voicemail.
-- Nothing recovered from that state on its own, because a ringing page never
-  reached the code that ends a call.
+**And the error message showed the wrong thing.** The installer runs under
+`Start-Transcript`, whose header — the machine name, the account, the PowerShell
+build numbers — is longer than the message the user is shown, so the failure was
+truncated away before the sentence that said what went wrong. The message now
+carries the error the installer actually raised, and the path to the full log.
 
-## What changed
+## A call reached FlipAi and still went to voicemail
 
-**That signal can no longer start a call.** It may only keep a call FlipAi
-already knows about from being declared over — which is what it was for. The
-control that ends a call is once again the only thing that may say a call has
-started.
+Every field describing a call was cleared the moment it returned to idle. So a
+call that was refused, one FlipAi could not manage to answer, and one that never
+rang at all **all left the same screen**: "Current call: Idle", and nothing else.
+There was no way to tell which had happened, on a page whose whole job is to say.
 
-**A ring clears a stale call immediately.** However FlipAi comes to believe a
-call is up when one is not, an Answer control with no hang-up control beside it
-corrects it on the spot rather than after a debounce. Waiting out a debounce
-during a ring is waiting out the ring. Call waiting is unaffected: a second call
-ringing during a live one still shows the control that ends the live one.
+There is now a **Last call** row that outlives the call, carrying:
 
-**FlipAi recognises the cables it installs itself.** The built-in audio bridge
-was matched by endpoint names carrying a specific vendor suffix. Where the
-driver names its endpoints differently, the cables installed correctly and the
-status still said **Not found** — driver present, call still silent. The match
-no longer depends on that suffix.
+- what happened to it, in a sentence — refused and why, answered and bridged, or
+  answered with the desktop voice session failing to start;
+- **what FlipAi actually tried, in order** — each rung of the answer ladder it
+  used and what that rung reported back, then starting the desktop voice
+  session, then ending it.
 
-**The install is offered where the failure is reported.** "Virtual audio cables:
-Not found" now carries its own **Install** button, instead of only a callout
-further down the page that has to be found first. A machine with one cable is
-offered the second.
+So a call that is not answered now says whether the caller was not on any
+agent's list, whether Google Voice drew nothing FlipAi could press, or whether
+it pressed and the call did not connect. Each call starts its own record.
 
-**"Desktop app audio: Waiting" no longer appears when there is no cable.** That
-outcome was inferred from the wording of a status note, so a PC with nothing to
-route to was told the desktop app was being waited for — sending the user to
-look at the app, which was not the problem. Each outcome now says which one it
-is: applied, no cable to route to, waiting for the desktop app, or Windows
-refused it. The missing cable is reported once, by the row that can fix it.
-
-**A ring with nothing to press says so.** If Google Voice announces an incoming
-call and never draws an Answer control in the page, that is now stated plainly
-rather than looking like FlipAi doing nothing.
+Also in this release: "Virtual audio cables: Not found" was still being repeated
+by the desktop-app routing row as if it were a second, unrelated problem.
 
 ## Verified
 
-The exact field failure is now a test: an idle Google Voice page never starts a
-call, and a ring after a stale call state is answered. Against the shipped
-v0.34.0 logic that test fails — the ring is never answered. The browser harness
-also renames the control that ends a call *during* a live conversation and
-requires the call to survive, which is the protection the bad signal was added
-for in the first place.
+The installer-log summariser is tested against the exact transcript from the
+failing machine and must report the raised error rather than any of the header.
+The call record is tested three ways: a refused call leaves a reason that
+survives the call ending, an allowed call records each answer attempt and what
+it reported, and a second call never inherits the first call's record.
 
 Plus the usual: the full call lifecycle, the injected page script in real
-Chromium with real device selection, the cable plan under three different
-endpoint namings, the Windows build, the receiver check on a real Windows
-runner, and the installer's install and uninstall.
+Chromium, the cable plan, the Windows build, the receiver check on a real
+Windows runner, and the installer's install and uninstall.
 
-Still only verifiable on your own PC: that a call to your number rings in this
-browser, that your Codex desktop app exposes a Voice control FlipAi can press,
-and that audio flows over the cables in both directions.
+Still only verifiable on your own PC: whether the driver installs on that
+machine, and whether a real call is answered end to end.

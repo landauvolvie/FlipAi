@@ -125,6 +125,20 @@ type VoiceRuntimeState struct {
 	Controls   string    `json:"controls,omitempty"`
 	LastRingAt time.Time `json:"lastRingAt,omitempty"`
 
+	// LastCall* is what happened to the most recent call, and it deliberately
+	// survives the call ending.
+	//
+	// Every field describing a call used to be cleared the moment it returned
+	// to idle, so a caller who was refused, or one FlipAi could not manage to
+	// answer, left a status page reading "Idle" and nothing else. The user was
+	// looking at the same screen whether the call had been refused, never rung,
+	// rung with nothing to press, or been answered and bridged -- which is no
+	// way to find out which of those happened.
+	LastCallAt      time.Time `json:"lastCallAt,omitempty"`
+	LastCallOutcome string    `json:"lastCallOutcome,omitempty"`
+	// LastCallTrace is what FlipAi actually tried, in order.
+	LastCallTrace string `json:"lastCallTrace,omitempty"`
+
 	// ControlPort and ControlToken are the loopback endpoint the Google Voice
 	// process serves so the FlipAi host can ask it to send an image through the
 	// signed-in session it owns. They are written here rather than derived from
@@ -966,6 +980,14 @@ type voiceBridge struct {
 
 	machine *voiceCallMachine
 
+	// The record of the current call, kept so it can outlive the call. See
+	// VoiceRuntimeState.LastCall*.
+	traceMu      sync.Mutex
+	traceSession int
+	trace        []string
+	outcome      string
+	outcomeAt    time.Time
+
 	mu           sync.Mutex
 	agentWork    chan func()
 	answerWork   chan func()
@@ -1051,10 +1073,13 @@ func (b *voiceBridge) pressLatest(effect voiceCallEffect) {
 			return
 		}
 		if err := b.press(*next); err != nil {
+			b.note(next.Session, fmt.Sprintf("attempt %d failed: %s", next.Attempt, truncate(err.Error(), 160)))
 			mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
 				s.LastError = "FlipAi is trying to answer an allowed caller and has not managed it yet: " + truncate(err.Error(), 300)
 			})
+			return
 		}
+		b.note(next.Session, fmt.Sprintf("attempt %d pressed Answer", next.Attempt))
 	}
 	if queue == nil {
 		take()
@@ -1124,6 +1149,42 @@ func (b *voiceBridge) Devices(raw string) {
 		s.DeviceLabelsHidden = hidden && len(named) == 0
 	})
 	platformVoiceDevicesChanged(b.dataDir)
+}
+
+// note records one thing FlipAi tried, or one thing that happened, for the call
+// it is currently handling. The list starts again with each new call.
+func (b *voiceBridge) note(session int, line string) {
+	if line == "" {
+		return
+	}
+	b.traceMu.Lock()
+	defer b.traceMu.Unlock()
+	if session != b.traceSession {
+		b.traceSession = session
+		b.trace = nil
+	}
+	// Repeating the same attempt twenty times while a phone rings says no more
+	// than saying it once and counting.
+	if n := len(b.trace); n > 0 && b.trace[n-1] == line {
+		return
+	}
+	b.trace = append(b.trace, line)
+	if len(b.trace) > 14 {
+		b.trace = b.trace[len(b.trace)-14:]
+	}
+}
+
+// record keeps the outcome of a call so it survives the call ending.
+func (b *voiceBridge) record(status voiceCallStatus) (outcome, trace string, at time.Time) {
+	b.traceMu.Lock()
+	defer b.traceMu.Unlock()
+	if status.Phase != voicePhaseIdle {
+		if note := voiceCallStatusNote(status); note != "" {
+			b.outcome = note
+			b.outcomeAt = time.Now()
+		}
+	}
+	return b.outcome, strings.Join(b.trace, " → "), b.outcomeAt
 }
 
 // Observe is the single entrance for everything that can see the call.
@@ -1198,6 +1259,7 @@ func (b *voiceBridge) run(effects []voiceCallEffect) {
 			// the caller had given up. The newest attempt replaces the one
 			// waiting because it is the one that reflects the card on screen
 			// now.
+			b.note(effect.Session, fmt.Sprintf("answer attempt %d (%s)", effect.Attempt, voiceAnswerRungName(effect.Attempt)))
 			b.pressLatest(effect)
 		case voiceEffectRouteAudio:
 			if b.route == nil {
@@ -1214,9 +1276,15 @@ func (b *voiceBridge) run(effects []voiceCallEffect) {
 }
 
 func (b *voiceBridge) startAgentVoice(cfg VoiceCallConfig, effect voiceCallEffect) {
+	b.note(effect.Session, "starting "+agentDisplayName(effect.Agent)+" voice mode")
 	var err error
 	if b.activate != nil {
 		err = b.activate(cfg, effect.Agent)
+	}
+	if err != nil {
+		b.note(effect.Session, "voice mode did not start: "+truncate(err.Error(), 200))
+	} else {
+		b.note(effect.Session, "voice mode started")
 	}
 	b.machine.AgentVoiceResult(effect.Session, err)
 	status := b.machine.Status()
@@ -1233,6 +1301,7 @@ func (b *voiceBridge) stopAgentVoice(cfg VoiceCallConfig, effect voiceCallEffect
 	if b.deactivate != nil && (effect.Agent == "A" || effect.Agent == "C") {
 		err = b.deactivate(cfg, effect.Agent)
 	}
+	b.note(effect.Session, "call over; voice mode ended")
 	b.machine.AgentVoiceStopped(effect.Session)
 	if err != nil {
 		mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
@@ -1250,7 +1319,18 @@ func (b *voiceBridge) writeCallState(status voiceCallStatus) {
 		audioProblem = currentVoiceCablePlan(b.dataDir).Warning
 	}
 	now := time.Now()
+	outcome, trace, outcomeAt := b.record(status)
 	mutateVoiceRuntime(b.dataDir, func(s *VoiceRuntimeState) {
+		// Kept whatever the call does next, including ending. Clearing these
+		// with the rest of the call state is what left a refused or unanswered
+		// call showing an empty "Idle" and no reason at all.
+		if outcome != "" {
+			s.LastCallOutcome = outcome
+			s.LastCallAt = outcomeAt
+		}
+		if trace != "" {
+			s.LastCallTrace = trace
+		}
 		s.InCall = status.InCall()
 		s.Caller = status.Caller
 		s.CallerLabel = status.Label
