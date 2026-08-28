@@ -1,5 +1,6 @@
 name: release
 
+# Version, compiled app and installer version are kept in lockstep before publishing.
 on:
   push:
     branches: [main]
