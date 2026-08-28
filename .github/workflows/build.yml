@@ -35,8 +35,18 @@ jobs:
           echo "FLIPAI_PLAYWRIGHT_MODULE=$(npm root -g)/playwright/index.mjs" >> "$GITHUB_ENV"
 
       - name: Call flow, page script and control channel in headless Chromium
-        # FLIPAI_PLAYWRIGHT_MODULE is set, so these tests fail rather than skip
-        # if the browser install did not work.
+        # Named explicitly and checked for a PASS line, because the failure this
+        # job exists to prevent is a browser test reporting "ok" without having
+        # run. FLIPAI_PLAYWRIGHT_MODULE is set, so they also fail rather than
+        # skip if the browser install did not work.
+        run: |
+          set -euo pipefail
+          go test -count=1 -v -run 'RealBrowser$' . 2>&1 | tee browser.log
+          for t in TestGoogleVoiceCallFlowInRealBrowser TestVoiceCardsWorkInARealBrowser; do
+            grep -q -- "--- PASS: $t" browser.log || { echo "::error::$t did not run"; exit 1; }
+          done
+
+      - name: Full test suite on Linux
         run: go test -count=1 ./...
 
   test-and-build:
