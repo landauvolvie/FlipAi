@@ -38,29 +38,34 @@ func TestTheVoiceScriptWaitsForTheElectronAccessibilityTree(t *testing.T) {
 	}
 }
 
-// Electron controls routinely ignore UI Automation Invoke, so the driver must
-// press the control with a real synthesized click, and try that before the
-// pattern-based methods.
-func TestTheVoiceScriptClicksTheControlForReal(t *testing.T) {
-	script, err := voiceAgentUIAScript(0x1234, "start")
+// The v0.45 field test proved that a successful mouse_event call is not proof
+// that Electron handled the control: FlipAi reported it pressed "Start voice
+// chat" while ChatGPT stayed in text mode. v0.46 therefore keeps every input
+// mechanism but executes them as separate attempts, UIA Invoke first, and lets
+// Go verify that live Voice became active before another method is tried.
+func TestTheVoiceScriptUsesSeparateVerifiedActivationMethods(t *testing.T) {
+	invoke, err := voiceAgentUIAScript(0x1234, "start-invoke")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(script, "mouse_event") || !strings.Contains(script, "SetCursorPos") {
-		t.Error("the driver no longer performs a real pointer click")
+	pointer, err := voiceAgentUIAScript(0x1234, "start-pointer")
+	if err != nil {
+		t.Fatal(err)
 	}
-	clickAt := strings.Index(script, "$done = ClickElement $target")
-	invokeAt := strings.Index(script, "InvokePattern")
-	if clickAt < 0 {
-		t.Fatal("the real click is not the primary action")
+	if !strings.Contains(pointer, "mouse_event") || !strings.Contains(pointer, "SetCursorPos") {
+		t.Error("the pointer fallback was removed")
 	}
-	if invokeAt >= 0 && invokeAt < clickAt {
-		t.Error("UI Automation Invoke is still tried before the real click")
+	if !strings.Contains(invoke, "InvokeElement $target") || !strings.Contains(invoke, "invoke-sent") {
+		t.Error("UI Automation Invoke is not a distinct Voice activation attempt")
 	}
-	// The voice control the ChatGPT desktop app actually offers -- "Start new
-	// voice chat" and its headphone icon -- must be recognized.
+	if !strings.Contains(pointer, "PointerClickElement $target") || !strings.Contains(pointer, "pointer-sent") {
+		t.Error("the real pointer press is not a distinct Voice activation attempt")
+	}
+	// The Voice control the ChatGPT desktop app actually offers -- "Start new
+	// voice chat" / "Start voice chat" and its headphone icon -- must remain
+	// recognized regardless of which activation method is being attempted.
 	for _, want := range []string{"new\\s+voice\\s+chat", "headphone", "headset"} {
-		if !strings.Contains(script, want) {
+		if !strings.Contains(invoke, want) {
 			t.Errorf("the control match does not recognize %q", want)
 		}
 	}
@@ -68,13 +73,12 @@ func TestTheVoiceScriptClicksTheControlForReal(t *testing.T) {
 	// stopped as soon as the tree had more than a handful of elements -- which
 	// the title bar alone exceeds -- so Chromium never got time to build its web
 	// tree, and the scan saw only [App, Minimize, Maximize, Close].
-	if strings.Contains(script, "$all.Count -gt 4") {
+	if strings.Contains(invoke, "$all.Count -gt 4") {
 		t.Error("the scan still bails on native window chrome before the web tree builds")
 	}
 	// Only a clickable control can be the voice control. A conversation title
-	// ("Voice Chat Topic Summary") is a list/text item and must be excluded, so
-	// the control-type gate has to be present.
-	if !strings.Contains(script, "ControlType.Id") || !strings.Contains(script, "$clickable") {
+	// ("Voice Chat Topic Summary") is a list/text item and must be excluded.
+	if !strings.Contains(invoke, "ControlType.Id") || !strings.Contains(invoke, "$clickable") {
 		t.Error("the scan no longer filters out non-clickable items like conversation titles")
 	}
 }
@@ -137,29 +141,35 @@ func TestChatGPTIsPreferredAsTheVoiceFrontEnd(t *testing.T) {
 
 // Which id format SetPersistedDefaultAudioEndpoint accepts differs across
 // Windows builds; guessing one and failing is the "Windows refused it" reported
-// from the field. Both the SWD wrapper and the raw MMDevice id must be tried.
-func TestTheAudioRouterTriesBothEndpointIdForms(t *testing.T) {
+// from the field. Both the SWD wrapper and the raw MMDevice id must still be
+// tried, now for every live process in the Electron tree rather than only the
+// top-level window-owner PID.
+func TestTheAudioRouterTriesBothEndpointIdFormsForElectronProcessTree(t *testing.T) {
 	if !strings.Contains(routeAppAudioPS, "PersistEither") {
 		t.Fatal("the router no longer has a two-format fallback")
 	}
-	// It tries the SWD wrapper and the raw id, in that order, and only fails
-	// when neither is accepted.
 	if !strings.Contains(routeAppAudioPS, "Persist(factory, processId, flow, SwdId(flow, mmDeviceId))") {
 		t.Error("the router no longer tries the SWD device-path form")
 	}
 	if !strings.Contains(routeAppAudioPS, "Persist(factory, processId, flow, mmDeviceId)") {
 		t.Error("the router no longer falls back to the raw MMDevice id")
 	}
-	// On failure it reads back at the same slot, so the error can tell a moved
-	// vtable slot (read also fails) apart from a rejected device id (read works).
-	if !strings.Contains(routeAppAudioPS, "ProbeSlot") || !strings.Contains(routeAppAudioPS, "GetPersistedDefaultAudioEndpoint") {
-		t.Error("the router no longer reads back to diagnose why Windows refused it")
+	// v0.45's read-back probe returned E_INVALIDARG too. Comparing against
+	// EarTrumpet showed the COM layout was already correct, so v0.46 must not
+	// turn that read-back into a false vtable diagnosis again.
+	if strings.Contains(routeAppAudioPS, "ProbeSlot") || strings.Contains(routeAppAudioPS, "read-back HRESULT") {
+		t.Error("the disproven read-back/vtable diagnostic returned")
 	}
-	// The endpoint lookup is still by friendly name, wired through the fallback.
-	if !strings.Contains(routeAppAudioPS, "PersistEither(factory, processId, 0, FindEndpointId(0, renderName))") {
-		t.Error("the playback endpoint is no longer routed through the fallback")
+	// The endpoint lookup is still by friendly name, but the resulting MMDevice
+	// id is applied across the whole Electron process tree. This reaches the
+	// child/utility PID that owns the actual audio session after Voice starts.
+	if !strings.Contains(routeAppAudioPS, "PersistProcessTree(factory, processId, 0, FindEndpointId(0, renderName)") {
+		t.Error("the playback endpoint is not routed through the process-tree fallback")
 	}
-	if !strings.Contains(routeAppAudioPS, "PersistEither(factory, processId, 1, FindEndpointId(1, captureName))") {
-		t.Error("the recording endpoint is no longer routed through the fallback")
+	if !strings.Contains(routeAppAudioPS, "PersistProcessTree(factory, processId, 1, FindEndpointId(1, captureName)") {
+		t.Error("the recording endpoint is not routed through the process-tree fallback")
+	}
+	if !strings.Contains(routeAppAudioPS, "CandidateProcessIds(rootProcessId)") {
+		t.Error("the router no longer reaches Electron child processes")
 	}
 }
