@@ -77,10 +77,6 @@ func TestCodexRouteCapturesImageFromTurnCompletedBeforeDelivery(t *testing.T) {
 
 func TestCaptureCodexImageFromTurnCompletedIgnoresTextOnlyTurn(t *testing.T) {
 	clearCapturedCodexImage()
-	params := json.RawMessage(`{"threadId":"thread-test","turn":{"id":"turn-test","status":"completed","items":[{"type":"agentMessage","text":"hello"}]}}`)
-	// The fixture above intentionally uses a raw literal below to verify the
-	// parser does not manufacture media from a non-image turn.
-	params = json.RawMessage(`{"threadId":"thread-test"}`)
 	raw, err := json.Marshal(map[string]any{
 		"threadId": "thread-test",
 		"turn": map[string]any{
@@ -92,8 +88,7 @@ func TestCaptureCodexImageFromTurnCompletedIgnoresTextOnlyTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	params = raw
-	if captureCodexImageFromTurnCompleted(params) {
+	if captureCodexImageFromTurnCompleted(raw) {
 		t.Fatal("text-only turn must not capture an image")
 	}
 	if got := takeCapturedCodexImage(); got != nil {
