@@ -83,8 +83,8 @@ func TestVoiceStartFailuresAreSpecific(t *testing.T) {
 		{"unreadable", agentVoiceState{}, "Windows accessibility"},
 		{"still starting", agentVoiceState{Found: true}, "may still be starting up"},
 		{"no voice control", agentVoiceState{Found: true, Controls: []string{"New chat", "Settings"}}, "could not find the voice control"},
-		{"refused", agentVoiceState{Found: true, StartControl: "Voice", Result: "invoke-failed"}, "refused to press"},
-		{"pressed but nothing happened", agentVoiceState{Found: true, StartControl: "Voice", Result: "clicked"}, "did not enter voice mode"},
+		{"activation refused", agentVoiceState{Found: true, StartControl: "Voice", Result: "invoke-failed"}, "verified activation methods"},
+		{"activated but nothing happened", agentVoiceState{Found: true, StartControl: "Voice", Result: "pointer-sent"}, "did not enter voice mode"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,14 +106,14 @@ func TestVoiceStartFailuresAreSpecific(t *testing.T) {
 }
 
 // The script is built by substitution, and the only thing substituted into it
-// besides a window handle is one of three fixed words.
+// besides a window handle is one of the fixed action names below.
 func TestVoiceScriptOnlyAcceptsKnownActions(t *testing.T) {
-	for _, action := range []string{"state", "start", "stop"} {
+	for _, action := range []string{"state", "start", "start-invoke", "start-keyboard", "start-legacy", "start-pointer", "stop"} {
 		script, err := voiceAgentUIAScript(0x1234, action)
 		if err != nil {
 			t.Fatalf("%s: %v", action, err)
 		}
-		if !strings.Contains(script, "'"+action+"' -eq 'state'") && !strings.Contains(script, "'"+action+"'") {
+		if !strings.Contains(script, "'"+action+"'") {
 			t.Errorf("%s was not substituted into the script", action)
 		}
 		if strings.Contains(script, "__ACTION__") || strings.Contains(script, "__HWND__") {
@@ -123,7 +123,7 @@ func TestVoiceScriptOnlyAcceptsKnownActions(t *testing.T) {
 			t.Errorf("%s did not carry the window handle", action)
 		}
 	}
-	for _, bad := range []string{"", "Start", "state; Remove-Item C:\\", "invoke"} {
+	for _, bad := range []string{"", "Start", "state; Remove-Item C:\\", "invoke", "start-magic"} {
 		if _, err := voiceAgentUIAScript(0x1234, bad); err == nil {
 			t.Errorf("action %q was accepted", bad)
 		}
