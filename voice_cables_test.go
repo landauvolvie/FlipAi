@@ -90,8 +90,8 @@ func TestCablePlanExplainsWhatIsMissing(t *testing.T) {
 	if none.complete() {
 		t.Fatal("a machine with no cables reported a complete path")
 	}
-	if !strings.Contains(none.Warning, "built-in audio-bridge installer") {
-		t.Errorf("a cableless machine must point at the built-in free installer, got %q", none.Warning)
+	if !strings.Contains(none.Warning, "two free virtual audio pairs") {
+		t.Errorf("a cableless machine must say what it needs and that it is free, got %q", none.Warning)
 	}
 
 	one := planVoiceCables([]VoiceAudioDevice{
@@ -103,6 +103,13 @@ func TestCablePlanExplainsWhatIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(one.Warning, "two independent pairs") {
 		t.Errorf("one cable must ask for the missing pair, got %q", one.Warning)
+	}
+	// No warning anywhere may promise that FlipAi installs a driver. It
+	// cannot, and saying so is what sent this user chasing problem code 52.
+	for _, w := range []string{none.Warning, one.Warning} {
+		if strings.Contains(strings.ToLower(w), "flipai installs") {
+			t.Errorf("a warning still promises FlipAi will install a driver: %q", w)
+		}
 	}
 
 	empty := planVoiceCables(nil)

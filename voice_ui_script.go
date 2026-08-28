@@ -123,10 +123,14 @@ const voiceDesktopInitScript = `
     const missing=(audio.cables||[]).length<2;
     if(!missing||typeof globalThis.__flipaiInstallAudioBridge!=='function') return wrap;
     const b=E('button','btn small accent'); b.type='button'; b.style.marginLeft='8px';
-    b.textContent=(audio.cables||[]).length?'Add the second':'Install';
-    b.title='FlipAi installs two free signed virtual speaker/microphone pairs. Windows asks for administrator approval once.';
+    b.textContent=(audio.cables||[]).length?'Get the second':'Set up';
+    // FlipAi cannot install the driver itself: Windows loads a virtual audio
+    // driver only when Microsoft signed it. The button opens the free,
+    // properly signed one instead. Saying "Install" here would be the same
+    // promise that produced problem code 52.
+    b.title='Opens the free virtual audio cable FlipAi needs. Install it, restart, and FlipAi wires both directions itself.';
     b.addEventListener('click',async()=>{
-      const label=b.textContent; b.disabled=true; b.textContent='Installing...';
+      const label=b.textContent; b.disabled=true; b.textContent='Opening...';
       try{ await globalThis.__flipaiInstallAudioBridge(); }
       catch(e){ toast(e.message||String(e),true); }
       finally{ b.disabled=false; b.textContent=label; }

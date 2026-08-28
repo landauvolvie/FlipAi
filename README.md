@@ -462,8 +462,8 @@ caller -> Google Voice (inside FlipAi)
 
 **The routing is chosen and applied entirely by FlipAi -- there are no device
 pickers anywhere.** FlipAi reads the machine's endpoint list, recognizes the
-installed cable families (VB-CABLE, VB-CABLE A/B, VoiceMeeter, and the free
-driver its own audio-bridge installer places), pins Google Voice's microphone
+installed cable families (VB-CABLE, VB-CABLE A/B, VoiceMeeter and its AUX and
+VAIO3 strips, VB-Audio Point), pins Google Voice's microphone
 and speaker inside the page itself, and writes the desktop app's
 per-application default microphone and speaker through the same Windows per-app
 audio store the Settings app uses. The desktop app is wired while the phone is

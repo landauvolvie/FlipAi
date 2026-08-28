@@ -1,99 +1,72 @@
-# FlipAi v0.36.0
+# FlipAi v0.37.0
 
-Three things reported from a real PC: an allowed caller was refused and went to
-voicemail, the free audio bridge would not install, and there was nothing on
-screen afterwards to say what had happened.
+The one-click audio-bridge installer could never have worked. This release
+removes it and replaces it with a path that does.
 
-## An allowed caller was refused because Google Voice showed a name
+## "Windows rejected a virtual audio device (problem code 52)"
 
-The reported call rang, FlipAi saw it, and it went to voicemail anyway. The
-notification read **"Call from Me · mobile · (845) 324-1813"** — and that is the
-whole story. The caller was in Google Contacts, so the ringing card showed the
-name Google has for them and no number at all.
+FlipAi downloaded a free virtual audio driver, verified its signature, put it in
+the Windows driver store, created the device node — and then Windows refused to
+start it.
 
-FlipAi read the card first and stopped there. The number, which is what the
-caller is allowed by, was sitting in the notification for the same ring, and
-FlipAi only ever looked at the notification for a ring that had shown nothing at
-all. A name on the card was "identified" — so an allowed caller was refused for
-being someone Google could name.
+The reason is not fixable by trying harder. On 64-bit Windows 10 and 11, the
+Code Integrity engine loads a **kernel-mode** driver only when its catalog is
+signed by the **Microsoft Windows Hardware Compatibility Publisher** — the
+signature a vendor gets by submitting the driver to Microsoft. The driver FlipAi
+used is signed by SignPath Foundation through GlobalSign. That is a perfectly
+valid Authenticode code-signing certificate, and it is irrelevant to loading a
+driver. The driver project's own README says so plainly: it *"requires test
+signing to be enabled"*.
 
-The ring and its notification are now treated as two views of one call: when the
-card carries a name and no number, the number the notification announced for
-that same ring fills it in. Both of FlipAi's ways of reading the page — the
-script inside it and the control channel outside it — do this, so they cannot
-disagree about who is calling.
+So FlipAi's signature check passed and told the truth — the signature **is**
+valid — while asking Windows for something it was always going to refuse.
+Problem code 52 is `CM_PROB_UNSIGNED_DRIVER`, and it was correct every time.
 
-A number is only borrowed from an announcement made in the last minute, while
-something is actually on screen to answer. A number sitting elsewhere in the
-Google Voice UI still cannot authorize anything, and an unlisted caller is still
-refused.
+The only ways past it are switching on Windows test-signing or turning off
+Secure Boot. FlipAi will not do either to somebody's PC to make a button look
+like it works.
 
-## The audio bridge could not install
+## What replaces it
 
-The installer drove **nefcon** with **devcon**'s command line
-(`nefconc install <inf> <hardware-id>`). nefcon does not accept that, so the
-very first step failed and nothing was ever installed.
+Two free virtual audio pairs that **are** signed the way Windows requires, so
+they install on a stock Windows 11 with Secure Boot left on:
 
-It now uses the documented commands: Windows' own `pnputil /add-driver <inf>
-/install` puts the verified package in the driver store, and nefcon is used only
-for the one thing Windows has no built-in command for — creating a root device
-node for a driver with no hardware behind it. Each step logs its exit code.
+- **VB-CABLE Virtual Audio Device** — carries the caller's voice to the desktop app
+- **VoiceMeeter** — carries the app's reply back to the caller
 
-**And the error message showed the wrong thing.** The installer runs under
-`Start-Transcript`, whose header — the machine name, the account, the PowerShell
-build numbers — is longer than the message the user is shown, so the failure was
-truncated away before the sentence that said what went wrong. The message now
-carries the error the installer actually raised, and the path to the full log.
+The button on the cables row now opens whichever of the two the PC is still
+missing, and it says *Set up*, not *Install*, because FlipAi is not the one
+installing it. Install, restart, come back: **FlipAi finds the endpoints and
+wires both directions itself, on every call, exactly as before.** Nothing about
+the per-call behaviour changes — that part always worked and still does.
 
-## A call reached FlipAi and still went to voicemail
+FlipAi already recognised both of these, along with CABLE A/B, VB-Audio Point
+and the VoiceMeeter AUX and VAIO3 strips. Anyone who already has cables
+installed is unaffected.
 
-Every field describing a call was cleared the moment it returned to idle. So a
-call that was refused, one FlipAi could not manage to answer, and one that never
-rang at all **all left the same screen**: "Current call: Idle", and nothing else.
-There was no way to tell which had happened, on a page whose whole job is to say.
+## Also gone
 
-There is now a **Last call** row that outlives the call, carrying:
-
-- what happened to it, in a sentence — refused and why, answered and bridged, or
-  answered with the desktop voice session failing to start;
-- **what FlipAi actually tried, in order** — each rung of the answer ladder it
-  used and what that rung reported back, then starting the desktop voice
-  session, then ending it.
-
-So a call that is not answered now says whether the caller was not on any
-agent's list, whether Google Voice drew nothing FlipAi could press, or whether
-it pressed and the call did not connect. Each call starts its own record.
-
-Also in this release: "Virtual audio cables: Not found" was still being repeated
-by the desktop-app routing row as if it were a second, unrelated problem.
+The driver download, the SHA-256 pins, the device-node tool that existed only to
+install that driver, the elevated PowerShell install script, and the installer
+log summariser that existed only to explain why it failed. About 350 lines,
+whose only job was to fail.
 
 ## Verified
 
-The refused-caller fix is tested as the reported call: in real headless
-Chromium, a ringing card showing only the name "Me" while the notification
-carries the number is answered, and the number is what gets recorded. Both
-readings of the page are tested this way, and both fail without the fix.
+A test walks every non-test source file and fails the build if the driver
+package, the device-node tool, `testsigning` or `bcdedit` are ever referenced
+again outside the one file that explains why they cannot be used.
 
-The control channel — FlipAi's second way of seeing a call, and the rung it uses
-when the page's own click is ignored — now runs in that browser harness too,
-against the same stand-in page, decoding into the same types the product
-decodes into. Until now it only ever ran on a Windows runner.
+Another test installs — in the cable planner — exactly what FlipAi now
+recommends, and requires the result to be a complete, working bridge with the
+PC's own speakers and microphone left out of it. A recommendation FlipAi cannot
+then wire is the failure this release is about, and it is now impossible to ship
+one.
 
-**And that harness now runs in CI at all.** Both workflows only ever used a
-Windows runner, where the browser it needs is not installed, so every call-flow
-regression test in it was quietly skipped on every push and passed only on a
-developer's machine. A Linux job runs it now, on every push and before any
-release is cut, and it fails rather than skips if the browser install breaks.
+Plus the usual: the full call lifecycle, the injected page script and the
+control channel in real headless Chromium, the cable plan, the Windows build and
+race test, the receiver check on a real Windows runner, and the installer's
+install and uninstall.
 
-The installer-log summariser is tested against the exact transcript from the
-failing machine and must report the raised error rather than any of the header.
-The call record is tested three ways: a refused call leaves a reason that
-survives the call ending, an allowed call records each answer attempt and what
-it reported, and a second call never inherits the first call's record.
-
-Plus the usual: the full call lifecycle, the injected page script in real
-Chromium, the cable plan, the Windows build, the receiver check on a real
-Windows runner, and the installer's install and uninstall.
-
-Still only verifiable on your own PC: whether the driver installs on that
-machine, and whether a real call is answered end to end.
+Still only verifiable on your own PC: whether a real call is answered end to end
+and whether the desktop app enters voice mode.

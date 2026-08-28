@@ -84,8 +84,15 @@ func TestTheMissingCableRowOffersTheInstall(t *testing.T) {
 		t.Fatal("the audio-bridge installer no longer exposes a way for the status row to start it")
 	}
 	// One cable is still a broken call, so that case must offer the second.
-	if !strings.Contains(voiceDesktopInitScript, "'Add the second'") {
+	if !strings.Contains(voiceDesktopInitScript, "'Get the second'") {
 		t.Error("a machine with one cable is not offered the missing pair")
+	}
+	// FlipAi cannot install the driver itself -- Windows loads a virtual audio
+	// driver only when Microsoft signed it -- so the button must not say it
+	// will. That word is what turned a refusal Windows had already made into
+	// the user's problem to debug.
+	if strings.Contains(voiceDesktopInitScript, "b.textContent='Installing...'") {
+		t.Error("the cables button still claims FlipAi is installing a driver")
 	}
 }
 

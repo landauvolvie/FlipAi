@@ -12,9 +12,9 @@ import (
 //
 // Nobody should have to pick these by hand. FlipAi reads the machine's device
 // list, recognizes supported cable families, and wires both directions itself.
-// FlipAi's preferred free path is two instances of the MIT-licensed Virtual
-// Audio Driver by MTT, installed by the one-click audio-bridge installer. Existing
-// VB-CABLE/VoiceMeeter installs remain supported too.
+// Getting the pairs onto the PC is a one-time job and is not FlipAi's to do --
+// see voice_audio_bridge.go for why installing a driver directly cannot work on
+// Windows. Any supported family already on the PC is used as it is found.
 
 type VoiceAudioDevice struct {
 	Kind     string `json:"kind"` // audioinput or audiooutput
@@ -161,12 +161,12 @@ func planVoiceCables(devices []VoiceAudioDevice) voiceCablePlan {
 			plan.Warning = "The audio devices on this PC are not known yet; they are read by the Google Voice window once it is running."
 			return plan
 		}
-		plan.Warning = "No two-way virtual audio bridge is installed yet. Use the free built-in audio-bridge installer below; FlipAi installs two signed virtual speaker/microphone pairs and wires them automatically."
+		plan.Warning = "No two-way virtual audio bridge is installed yet. FlipAi needs two free virtual audio pairs; press Set up to be taken to the first one. Once they are installed FlipAi wires both directions itself, on every call."
 	case 1:
 		plan.GoogleVoiceOutput = usable[0].render
 		plan.AgentInput = usable[0].capture
 		plan.Cables = []string{usable[0].family}
-		plan.Warning = "Only one virtual audio pair was found. FlipAi needs two independent pairs for caller-to-agent and agent-to-caller audio. Use the built-in audio-bridge installer to create the missing pair."
+		plan.Warning = "Only one virtual audio pair was found. FlipAi needs two independent pairs for caller-to-agent and agent-to-caller audio. Press Set up for the second one; it is free."
 	default:
 		plan.GoogleVoiceOutput = usable[0].render
 		plan.AgentInput = usable[0].capture
