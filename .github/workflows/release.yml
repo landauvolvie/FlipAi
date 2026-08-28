@@ -1,7 +1,7 @@
 name: release
 
 # Version, compiled app and installer version are kept in lockstep before publishing.
-# Rebuild v0.44 after the live-call field test fixes; the existing release assets are replaced only after this workflow passes.
+# Publish the CI-green v0.44 field fix; existing v0.44 assets are replaced only after every release check passes.
 on:
   push:
     branches: [main]
