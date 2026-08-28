@@ -184,7 +184,9 @@ func (c *CodexClient) route(m rpcEnvelope) {
 		// omit or reshape that notification, so turn/completed is a second exact
 		// source from the same live turn and connection.
 		if m.Method == "item/completed" {
-			captureCodexImageFromItemCompleted(m.Params)
+			if !captureCodexImageFromItemCompleted(m.Params) {
+				captureCodexImageFromItemCompletedFlexible(m.Params)
+			}
 		}
 		if m.Method == "turn/completed" {
 			captureCodexImageFromTurnCompleted(m.Params)
