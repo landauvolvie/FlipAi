@@ -8,6 +8,25 @@ import (
 	"strings"
 )
 
+// captureCodexImageFromItemCompletedFlexible handles the same live event as the
+// original strict v2 parser, but tolerates older/version-skewed item spelling
+// and data-URL results. Keep the strict parser as the first path; this is a
+// compatibility net for the exact failure seen on a real PC.
+func captureCodexImageFromItemCompletedFlexible(params json.RawMessage) bool {
+	var p struct {
+		Item json.RawMessage `json:"item"`
+	}
+	if json.Unmarshal(params, &p) != nil || len(p.Item) == 0 {
+		return false
+	}
+	img := codexImageFromThreadItem(p.Item)
+	if img == nil {
+		return false
+	}
+	storeCapturedCodexImage(img)
+	return true
+}
+
 // captureCodexImageFromTurnCompleted is an exact-turn fallback for Codex builds
 // where the standalone item/completed image-generation notification is missing,
 // delayed, or shaped differently. App Server's turn/completed notification
