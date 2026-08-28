@@ -94,11 +94,11 @@ func agentVoiceStartFailure(appTitle string, s agentVoiceState) error {
 		// it starts with accessibility forced is the fix.
 		return fmt.Errorf("%s is only exposing its window frame to Windows accessibility (%s), not its contents, so FlipAi cannot see the voice control. This is a Chromium app with accessibility off. Quit %s completely -- including from the system tray -- and let FlipAi reopen it, so it starts with accessibility enabled", appTitle, truncate(strings.Join(s.Controls, ", "), 120), appTitle)
 	case s.StartControl == "":
-		return fmt.Errorf("FlipAi could not find the voice control in %s. It offered: %s. Voice for a call is the \"Start new voice chat\" control in the ChatGPT desktop app (which now hosts Codex, Work and Chat). If the app is signed in and shows that control on screen but FlipAi cannot find it, set the app's Voice keyboard shortcut in FlipAi to drive it directly", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
+		return fmt.Errorf("FlipAi could not find the live voice control in %s. It offered: %s. For ChatGPT, FlipAi requires the actual \"Start new voice chat\"/Voice Mode control and deliberately ignores dictation and text-message microphone controls", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
 	case s.Result == "invoke-failed":
 		return fmt.Errorf("Windows refused to press %q in %s", s.StartControl, appTitle)
 	}
-	return fmt.Errorf("FlipAi pressed %q in %s but it did not enter voice mode", s.StartControl, appTitle)
+	return fmt.Errorf("FlipAi pressed %q in %s but it did not enter live voice mode", s.StartControl, appTitle)
 }
 
 // onlyWindowChrome reports whether every control the scan saw is part of the
@@ -172,11 +172,10 @@ Write-Output 'found=1'
 
 # A real pointer click on the control's own centre. The Codex and ChatGPT
 # desktop apps are Chromium/Electron, and their custom buttons -- the "Start new
-# voice chat" headphone control among them -- routinely ignore UI Automation's
-# Invoke: it returns success and nothing happens, which is the "pressed but did
-# not enter voice mode" a call ends up stuck on. A synthesized click through the
-# same input pipeline a person uses is what they actually respond to. The window
-# is already brought to the front before this runs.
+# voice chat" control among them -- routinely ignore UI Automation's Invoke: it
+# can return success while nothing happens. A synthesized click through the same
+# input pipeline a person uses is what they actually respond to. The window is
+# already brought to the front before this runs.
 function ClickElement($el) {
   try {
     $r = $el.Current.BoundingRectangle
@@ -197,27 +196,22 @@ $startEl = $null
 $endEl = $null
 $startName = ''
 $endName = ''
+$startScore = -1
 $active = $false
 $controls = New-Object System.Collections.Generic.List[string]
 
-# The Codex and ChatGPT (and Claude) desktop apps are Chromium/Electron.
-# Chromium does not expose its web content to Windows accessibility until a
-# client attaches AND keeps asking: with accessibility off, a scan sees only the
-# native window -- its title and the Minimize/Maximize/Close buttons, which is
-# exactly the "[Claude, Minimize, Maximize, Close]" reported from the field. So
-# this keeps ONE client alive and re-scans until an actual voice control appears
-# or the deadline passes.
-#
-# It deliberately does NOT stop early just because the tree has "more than a few"
-# elements: the native window alone has more than that, so bailing on element
-# count is what made every scan give up before Chromium built its web tree.
-# A scan ends only when the voice control (or a live voice session) is found.
+# Chromium does not always expose its web content immediately. Keep one UIA
+# client alive and re-scan until the REAL live-Voice control appears, voice is
+# already active, or the deadline passes. A generic microphone/dictation button
+# is not success: that starts text dictation, which is exactly how an answered
+# phone call can end up with a chat open but no spoken conversation.
 $deadline = (Get-Date).AddSeconds(12)
 while ($true) {
   $startEl = $null
   $endEl = $null
   $startName = ''
   $endName = ''
+  $startScore = -1
   $active = $false
   $controls.Clear()
   $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
@@ -234,11 +228,8 @@ while ($true) {
 
     if ($controls.Count -lt 24 -and $name -ne '' -and $name.Length -le 60) { $controls.Add($name) }
 
-    # Only something clickable can be the voice control. The false match reported
-    # from the field was "Voice Chat Topic Summary" -- a conversation title in
-    # the sidebar, a list/text item, not a button. So text, list items, tree
-    # items, documents, edits and images are never taken as the control to press,
-    # no matter what their name says.
+    # Only something clickable can be the voice control. Conversation titles,
+    # list items and text named "Voice ..." are never candidates.
     $clickable = -not ($ctrlType -eq 50020 -or $ctrlType -eq 50007 -or $ctrlType -eq 50013 -or $ctrlType -eq 50030 -or $ctrlType -eq 50004 -or $ctrlType -eq 50006 -or $ctrlType -eq 50008 -or $ctrlType -eq 50024)
     if (-not $clickable) { continue }
 
@@ -250,9 +241,26 @@ while ($true) {
       continue
     }
 
-    if ($text -match '(?i)(start\s+(new\s+)?voice|new\s+voice\s+chat|voice\s+mode|voice\s+chat|voice\s+conversation|use\s+voice|talk\s+to|advanced\s+voice|headphone|headset|gpt-live|\bgo\s+live\b|live\s+voice|\bvoice\b|\bmicrophone\b|\bmic\b|\bdictat)') {
-      if ($text -match '(?i)(setting|settings|input|output|device|volume|permission|help|learn|mute|unmute|summary|topic|title|history|rename|delete)') { continue }
-      if ($null -eq $startEl -and $enabled) { $startEl = $e; $startName = $text }
+    # Rank ALL candidates in the tree instead of pressing the first thing whose
+    # name merely contains "voice". ChatGPT exposes text dictation/microphone
+    # controls alongside live Voice. The exact live-control wording wins by a
+    # wide margin, and microphone/mic/dictation are intentionally not candidates.
+    $score = -1
+    if ($text -match '(?i)\bstart\s+(a\s+)?new\s+voice\s+chat\b|\bnew\s+voice\s+chat\b') {
+      $score = 100
+    } elseif ($text -match '(?i)\bstart\s+(the\s+)?voice(\s+mode|\s+chat|\s+conversation)?\b|\badvanced\s+voice\b|\bgpt-live\b|\bgo\s+live\b|\blive\s+voice\b') {
+      $score = 90
+    } elseif ($text -match '(?i)\bvoice\s+(mode|chat|conversation)\b|\buse\s+voice\b') {
+      $score = 80
+    } elseif ($text -match '(?i)\bheadphones?\b|\bheadset\b') {
+      $score = 60
+    }
+    if ($score -lt 0) { continue }
+    if ($text -match '(?i)(setting|settings|input|output|device|volume|permission|help|learn|mute|unmute|summary|topic|title|history|rename|delete)') { continue }
+    if ($enabled -and $score -gt $startScore) {
+      $startEl = $e
+      $startName = $text
+      $startScore = $score
     }
   }
   if ($active -or $null -ne $startEl) { break }
@@ -377,7 +385,7 @@ func agentAppExecutables(agent, localAppData, programFiles, programFilesX86 stri
 // joinPathParts is filepath.Join with the separator fixed to Windows, so the
 // candidate list is the same whichever OS the test runs on.
 func joinPathParts(root string, parts []string) string {
-	all := append([]string{strings.TrimRight(root, `\/`)}, parts...)
+	all := append([]string{strings.TrimRight(root, `\\/`)}, parts...)
 	return strings.Join(all, `\`)
 }
 
