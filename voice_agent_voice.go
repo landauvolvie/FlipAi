@@ -88,10 +88,6 @@ func agentVoiceStartFailure(appTitle string, s agentVoiceState) error {
 	case s.StartControl == "" && len(s.Controls) == 0:
 		return fmt.Errorf("the %s window exposes no controls to Windows accessibility yet; it may still be starting up", appTitle)
 	case s.StartControl == "" && onlyWindowChrome(appTitle, s.Controls):
-		// The scan saw only the title bar and Minimize/Maximize/Close. That is
-		// the signature of a Chromium/Electron app with accessibility turned
-		// off: its window is readable but its contents are not. Reopening it so
-		// it starts with accessibility forced is the fix.
 		return fmt.Errorf("%s is only exposing its window frame to Windows accessibility (%s), not its contents, so FlipAi cannot see the voice control. This is a Chromium app with accessibility off. Quit %s completely -- including from the system tray -- and let FlipAi reopen it, so it starts with accessibility enabled", appTitle, truncate(strings.Join(s.Controls, ", "), 120), appTitle)
 	case s.StartControl == "":
 		return fmt.Errorf("FlipAi could not find the voice control in %s. It offered: %s. FlipAi now requires the actual live Voice control such as \"Start new voice chat\" or Voice Mode and deliberately ignores dictation and text-message microphone controls", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
@@ -101,10 +97,6 @@ func agentVoiceStartFailure(appTitle string, s agentVoiceState) error {
 	return fmt.Errorf("FlipAi pressed %q in %s but it did not enter voice mode; live Voice never became active", s.StartControl, appTitle)
 }
 
-// onlyWindowChrome reports whether every control the scan saw is part of the
-// native window frame -- the app's own title and the standard caption buttons.
-// When that is all Windows accessibility returns for a Chromium/Electron app,
-// the app's web contents are not being exposed at all.
 func onlyWindowChrome(appTitle string, controls []string) bool {
 	if len(controls) == 0 {
 		return false
@@ -116,28 +108,17 @@ func onlyWindowChrome(appTitle string, controls []string) bool {
 		case "minimize", "maximize", "restore", "close", "system", "application", "more options":
 			continue
 		}
-		if strings.Contains(l, "minimize") || strings.Contains(l, "maximize") ||
-			strings.Contains(l, "close") || strings.Contains(l, "restore") {
+		if strings.Contains(l, "minimize") || strings.Contains(l, "maximize") || strings.Contains(l, "close") || strings.Contains(l, "restore") {
 			continue
 		}
-		// The window's own title -- the app's name -- is part of the frame too.
 		if title != "" && (l == title || strings.Contains(l, title) || strings.Contains(title, l)) {
 			continue
 		}
-		// Anything else is real content, so the app is exposing more than chrome.
 		return false
 	}
 	return true
 }
 
-// voiceAgentUIAScript builds the PowerShell that reads or drives one window's
-// voice mode.
-//
-// The script is coordinate-free on purpose. The desktop app can be moved,
-// resized, shown on a different display or at a different scale factor, and the
-// same accessible control is still the one invoked -- which is the difference
-// between an automation that works on the developer's machine and one that
-// works on the user's.
 func voiceAgentUIAScript(hwnd uintptr, action string) (string, error) {
 	if hwnd == 0 {
 		return "", errors.New("no desktop app window to drive")
@@ -149,14 +130,6 @@ func voiceAgentUIAScript(hwnd uintptr, action string) (string, error) {
 	return strings.ReplaceAll(script, "__ACTION__", action), nil
 }
 
-// voiceAgentUIATemplate walks the desktop app's accessibility tree once and
-// reports what it found before doing anything, so a failure always comes with
-// the list of controls the app actually offered.
-//
-// Matching is name-based across Name, AutomationId and HelpText because desktop
-// AI apps render their Voice control as a plain icon at least as often as a
-// labelled button. Ending is matched first and separately: pressing something
-// that says both "voice" and "end" to start a call would hang it up.
 const voiceAgentUIATemplate = `
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
@@ -170,12 +143,6 @@ $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND
 if ($null -eq $root) { Write-Output 'found=0'; Write-Output 'result=no-window'; exit 0 }
 Write-Output 'found=1'
 
-# A real pointer click on the control's own centre. The Codex and ChatGPT
-# desktop apps are Chromium/Electron, and their custom buttons -- the "Start new
-# voice chat" control among them -- routinely ignore UI Automation's Invoke: it
-# can return success while nothing happens. A synthesized click through the same
-# input pipeline a person uses is what they actually respond to. The window is
-# already brought to the front before this runs.
 function ClickElement($el) {
   try {
     $r = $el.Current.BoundingRectangle
@@ -200,11 +167,8 @@ $startScore = -1
 $active = $false
 $controls = New-Object System.Collections.Generic.List[string]
 
-# Chromium does not always expose its web content immediately. Keep one UIA
-# client alive and re-scan until the REAL live-Voice control appears, voice is
-# already active, or the deadline passes. A generic microphone/dictation button
-# is not success: that starts text dictation, which is exactly how an answered
-# phone call can end up with a chat open but no spoken conversation.
+# Chromium may expose text input/dictation before its live Voice control. Keep
+# scanning one UIA client until actual live Voice is visible or the deadline ends.
 $deadline = (Get-Date).AddSeconds(12)
 while ($true) {
   $startEl = $null
@@ -225,15 +189,11 @@ while ($true) {
     } catch { continue }
     $text = ($name + ' ' + $id + ' ' + $help).Trim()
     if ($text -eq '') { continue }
-
     if ($controls.Count -lt 24 -and $name -ne '' -and $name.Length -le 60) { $controls.Add($name) }
 
-    # Only something clickable can be the voice control. Conversation titles,
-    # list items and text named "Voice ..." are never candidates.
     $clickable = -not ($ctrlType -eq 50020 -or $ctrlType -eq 50007 -or $ctrlType -eq 50013 -or $ctrlType -eq 50030 -or $ctrlType -eq 50004 -or $ctrlType -eq 50006 -or $ctrlType -eq 50008 -or $ctrlType -eq 50024)
     if (-not $clickable) { continue }
 
-    # A control that ends voice is the clearest sign voice is running.
     if ($text -match '(?i)(end|stop|exit|leave|close|hang)[\s_-]*(the\s+)?(voice|conversation|call|chat|talk)' -or
         $text -match '(?i)(voice|conversation)[\s_-]*(mode\s+)?(end|stop|exit|leave|close)') {
       $active = $true
@@ -241,10 +201,9 @@ while ($true) {
       continue
     }
 
-    # Rank ALL candidates in the tree instead of pressing the first thing whose
-    # name merely contains "voice". ChatGPT exposes text dictation/microphone
-    # controls alongside live Voice. The exact live-control wording wins by a
-    # wide margin, and microphone/mic/dictation are intentionally not candidates.
+    # Scan every candidate and keep the best one. Do not treat the message-box
+    # microphone, mic/dictation or an arbitrary element containing "voice" as
+    # the live Voice control.
     $score = -1
     if ($text -match '(?i)\bstart\s+(a\s+)?new\s+voice\s+chat\b|\bnew\s+voice\s+chat\b') {
       $score = 100
@@ -285,9 +244,6 @@ if ('__ACTION__' -eq 'start') {
 }
 if ($null -eq $target) { Write-Output 'result=not-found'; exit 0 }
 
-# A real click first, because that is what an Electron control actually
-# responds to. The pattern-based methods are the fallback for a control whose
-# rectangle is unusable (off-screen, zero-sized) or for a genuine native button.
 $done = ClickElement $target
 if (-not $done) {
   try { $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); $done = $true } catch {}
@@ -305,17 +261,6 @@ if ($done) { Write-Output 'result=clicked' } else { Write-Output 'result=invoke-
 exit 0
 `
 
-// agentAppTitles are the window-title fragments FlipAi looks for when an agent
-// has not been told which window to drive.
-//
-// ChatGPT is looked for before Codex, deliberately. The voice a caller talks to
-// is ChatGPT Voice (GPT-Live): OpenAI ships it in the ChatGPT desktop app, from
-// where it can drive Codex, and it is started by clicking "Start new voice chat"
-// -- there is no keyboard shortcut for it. The standalone Codex app's own voice
-// is a separate, less reliable dictation path. So the ChatGPT app is the right
-// front-end for a spoken call even when the agent behind it is Codex; the Codex
-// app is the fallback for a machine that only has it. A configured title always
-// wins over this list.
 func agentAppTitles(agent string) []string {
 	if agent == "A" {
 		return []string{"Claude"}
@@ -323,26 +268,13 @@ func agentAppTitles(agent string) []string {
 	return []string{"ChatGPT", "Codex"}
 }
 
-// agentAppShortcutNames are the Start Menu shortcut names that open the
-// desktop app.
-//
-// Looking the app up by its shortcut is what makes this work on a machine
-// FlipAi has never seen. A desktop AI app can be a per-user install, a
-// machine-wide install, or a Store package whose executable lives in a folder
-// nothing is allowed to run from directly -- and all three put a shortcut with
-// the same name in the Start Menu.
 func agentAppShortcutNames(agent string) []string {
 	if agent == "A" {
 		return []string{"Claude"}
 	}
-	// ChatGPT first, for the reason in agentAppTitles: it is the app that
-	// carries the voice a caller talks to.
 	return []string{"ChatGPT", "Codex"}
 }
 
-// agentAppExecutables are the direct paths to try before falling back to a
-// shortcut, most specific first. The roots are passed in rather than read from
-// the environment so the list is testable.
 func agentAppExecutables(agent, localAppData, programFiles, programFilesX86 string) []string {
 	type layout struct{ parts []string }
 	var layouts []layout
@@ -353,8 +285,6 @@ func agentAppExecutables(agent, localAppData, programFiles, programFilesX86 stri
 			{[]string{"Claude", "Claude.exe"}},
 		}
 	} else {
-		// ChatGPT before Codex, for the reason in agentAppTitles: the ChatGPT
-		// desktop app is the one that carries the voice a caller talks to.
 		layouts = []layout{
 			{[]string{"Programs", "ChatGPT", "ChatGPT.exe"}},
 			{[]string{"OpenAI", "ChatGPT", "ChatGPT.exe"}},
@@ -377,25 +307,16 @@ func agentAppExecutables(agent, localAppData, programFiles, programFilesX86 stri
 				seen[key] = true
 				out = append(out, p)
 			}
+		}
 	}
 	return out
 }
 
-// joinPathParts is filepath.Join with the separator fixed to Windows, so the
-// candidate list is the same whichever OS the test runs on.
 func joinPathParts(root string, parts []string) string {
 	all := append([]string{strings.TrimRight(root, `\\/`)}, parts...)
 	return strings.Join(all, `\`)
 }
 
-// googleVoiceAnswerUIAScript presses Answer in the Google Voice window through
-// Windows accessibility.
-//
-// This is the last rung of the answer ladder and the only one that does not go
-// through the page at all. A browser exposes its rendered buttons to Windows
-// accessibility, so this reaches the same control a screen-reader user would
-// press -- which still works when the page has stopped running FlipAi's script
-// and when a scripted click is being ignored.
 func googleVoiceAnswerUIAScript(hwnd uintptr) (string, error) {
 	if hwnd == 0 {
 		return "", errors.New("the Google Voice window is not available")
@@ -419,8 +340,6 @@ foreach ($e in $all) {
   if ($text -eq '') { continue }
   if ($listed -lt 24 -and $name -ne '' -and $name.Length -le 60) { Write-Output ('control=' + $name); $listed = $listed + 1 }
   if ($null -ne $answer) { continue }
-  # Decline, Ignore and Send to voicemail sit right beside Answer. Pressing one
-  # of those would be worse than not answering at all.
   if ($text -match '(?i)(decline|reject|ignore|dismiss|voicemail|block|spam)') { continue }
   if ($text -notmatch '(?i)(answer|accept|pick\s*up|take\s+call)') { continue }
   if (-not $e.Current.IsEnabled) { continue }
