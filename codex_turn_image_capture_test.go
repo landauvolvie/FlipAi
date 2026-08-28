@@ -63,6 +63,29 @@ func TestCaptureCodexImageFromTurnCompletedAcceptsLegacyTypeAndDataURL(t *testin
 	}
 }
 
+func TestCaptureCodexImageFromItemCompletedFlexibleAcceptsLegacyDataURL(t *testing.T) {
+	clearCapturedCodexImage()
+	want := testPNG(t)
+	result := "data:image/png;base64," + base64.StdEncoding.EncodeToString(want)
+	params, err := json.Marshal(map[string]any{
+		"turnId": "turn-image-test",
+		"item": map[string]any{
+			"type":   "image_generation",
+			"result": result,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !captureCodexImageFromItemCompletedFlexible(params) {
+		t.Fatal("expected tolerant item/completed parser to capture image")
+	}
+	got := takeCapturedCodexImage()
+	if got == nil || !bytes.Equal(got.Data, want) {
+		t.Fatal("tolerant item/completed image bytes were not captured")
+	}
+}
+
 func TestCodexRouteCapturesImageFromTurnCompletedBeforeDelivery(t *testing.T) {
 	clearCapturedCodexImage()
 	want := testPNG(t)
