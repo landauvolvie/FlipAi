@@ -94,11 +94,11 @@ func agentVoiceStartFailure(appTitle string, s agentVoiceState) error {
 		// it starts with accessibility forced is the fix.
 		return fmt.Errorf("%s is only exposing its window frame to Windows accessibility (%s), not its contents, so FlipAi cannot see the voice control. This is a Chromium app with accessibility off. Quit %s completely -- including from the system tray -- and let FlipAi reopen it, so it starts with accessibility enabled", appTitle, truncate(strings.Join(s.Controls, ", "), 120), appTitle)
 	case s.StartControl == "":
-		return fmt.Errorf("FlipAi could not find the live voice control in %s. It offered: %s. For ChatGPT, FlipAi requires the actual \"Start new voice chat\"/Voice Mode control and deliberately ignores dictation and text-message microphone controls", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
+		return fmt.Errorf("FlipAi could not find the voice control in %s. It offered: %s. FlipAi now requires the actual live Voice control such as \"Start new voice chat\" or Voice Mode and deliberately ignores dictation and text-message microphone controls", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
 	case s.Result == "invoke-failed":
 		return fmt.Errorf("Windows refused to press %q in %s", s.StartControl, appTitle)
 	}
-	return fmt.Errorf("FlipAi pressed %q in %s but it did not enter live voice mode", s.StartControl, appTitle)
+	return fmt.Errorf("FlipAi pressed %q in %s but it did not enter voice mode; live Voice never became active", s.StartControl, appTitle)
 }
 
 // onlyWindowChrome reports whether every control the scan saw is part of the
@@ -377,7 +377,6 @@ func agentAppExecutables(agent, localAppData, programFiles, programFilesX86 stri
 				seen[key] = true
 				out = append(out, p)
 			}
-		}
 	}
 	return out
 }
