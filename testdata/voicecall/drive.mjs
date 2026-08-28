@@ -8,7 +8,10 @@
 // stand in for the virtual audio cables the feature uses on a real PC. The
 // microphone capture and the media-element sink are genuinely applied by the
 // browser, so the routing assertions are real rather than mocked.
-import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+// Playwright lives in a different place on a development machine and on a CI
+// runner, so the Go side resolves it and says where.
+const { chromium } = await import(process.env.FLIPAI_PLAYWRIGHT_MODULE ||
+  '/opt/node22/lib/node_modules/playwright/index.mjs');
 
 const BASE = process.env.FLIPAI_TEST_BASE;   // https://voice.google.com/ (browser-visible)
 const SHIM = process.env.FLIPAI_TEST_SHIM;   // http://127.0.0.1:PORT/ (this script only)

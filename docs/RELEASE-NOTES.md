@@ -79,6 +79,12 @@ when the page's own click is ignored — now runs in that browser harness too,
 against the same stand-in page, decoding into the same types the product
 decodes into. Until now it only ever ran on a Windows runner.
 
+**And that harness now runs in CI at all.** Both workflows only ever used a
+Windows runner, where the browser it needs is not installed, so every call-flow
+regression test in it was quietly skipped on every push and passed only on a
+developer's machine. A Linux job runs it now, on every push and before any
+release is cut, and it fails rather than skips if the browser install breaks.
+
 The installer-log summariser is tested against the exact transcript from the
 failing machine and must report the raised error rather than any of the header.
 The call record is tested three ways: a refused call leaves a reason that

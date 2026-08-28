@@ -30,9 +30,7 @@ func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not available; skipping the browser UI harness")
 	}
-	if _, err := os.Stat(playwrightModule); err != nil {
-		t.Skip("playwright is not installed; skipping the browser UI harness")
-	}
+	pw := playwrightModule(t)
 
 	// The script talks to a fixed loopback port, and the endpoint only answers
 	// the FlipAi page's own origin, so both ports are fixed here too. A machine
@@ -104,6 +102,7 @@ func TestVoiceCardsWorkInARealBrowser(t *testing.T) {
 	cmd.Env = append(scrubProxyEnv(os.Environ()),
 		"FLIPAI_UI_SETTINGS=http://127.0.0.1:8765/settings",
 		"FLIPAI_UI_CONNECTIONS=http://127.0.0.1:8765/connections",
+		"FLIPAI_PLAYWRIGHT_MODULE="+pw,
 	)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

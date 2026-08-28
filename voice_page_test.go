@@ -26,7 +26,25 @@ import (
 // What it still cannot cover: Google's own markup, WebView2, the telephony
 // itself, and whether the desktop AI app enters voice mode.
 
-const playwrightModule = "/opt/node22/lib/node_modules/playwright/index.mjs"
+// defaultPlaywrightModule is where a development machine has it. A runner
+// installs it somewhere else and says so; setting FLIPAI_PLAYWRIGHT_MODULE also
+// makes this test mandatory rather than skippable, so a CI job whose browser
+// install quietly broke fails instead of reporting a pass it never ran.
+const defaultPlaywrightModule = "/opt/node22/lib/node_modules/playwright/index.mjs"
+
+func playwrightModule(t *testing.T) string {
+	t.Helper()
+	if pinned := os.Getenv("FLIPAI_PLAYWRIGHT_MODULE"); pinned != "" {
+		if _, err := os.Stat(pinned); err != nil {
+			t.Fatalf("FLIPAI_PLAYWRIGHT_MODULE=%s is not readable: %v", pinned, err)
+		}
+		return pinned
+	}
+	if _, err := os.Stat(defaultPlaywrightModule); err != nil {
+		t.Skip("playwright is not installed; skipping the browser harness")
+	}
+	return defaultPlaywrightModule
+}
 
 type harnessScenario struct {
 	bridge  *voiceBridge
@@ -258,9 +276,7 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not available; skipping the browser call-flow harness")
 	}
-	if _, err := os.Stat(playwrightModule); err != nil {
-		t.Skip("playwright is not installed; skipping the browser call-flow harness")
-	}
+	pw := playwrightModule(t)
 
 	page, err := os.ReadFile(filepath.Join("testdata", "voicecall", "googlevoice.html"))
 	if err != nil {
@@ -290,6 +306,7 @@ func TestGoogleVoiceCallFlowInRealBrowser(t *testing.T) {
 		"FLIPAI_TEST_BASE=https://voice.google.com/",
 		"FLIPAI_TEST_SHIM="+shim.URL+"/",
 		"FLIPAI_TEST_MAP="+fmt.Sprintf("MAP voice.google.com:443 127.0.0.1:%s", sitePort),
+		"FLIPAI_PLAYWRIGHT_MODULE="+pw,
 	)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

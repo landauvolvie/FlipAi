@@ -6,7 +6,10 @@
 // The UI is two cards on two pages: Settings carries the switch, the sign-ins
 // and the status checks; Connections carries the live Google Voice preview.
 // This walks both.
-import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+// Playwright lives in a different place on a development machine and on a CI
+// runner, so the Go side resolves it and says where.
+const { chromium } = await import(process.env.FLIPAI_PLAYWRIGHT_MODULE ||
+  '/opt/node22/lib/node_modules/playwright/index.mjs');
 
 const SETTINGS = process.env.FLIPAI_UI_SETTINGS;      // http://127.0.0.1:8765/settings
 const CONNECTIONS = process.env.FLIPAI_UI_CONNECTIONS; // http://127.0.0.1:8765/connections

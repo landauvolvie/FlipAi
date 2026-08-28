@@ -12,7 +12,37 @@ permissions:
   contents: write
 
 jobs:
+  # No release is cut without the call flow having been run in a real browser:
+  # the script FlipAi injects into Google Voice and the scripts its control
+  # channel evaluates, against a stand-in Google Voice page with the real call
+  # bridge behind them. See build.yml for why this needs a Linux runner.
+  call-flow-in-a-real-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright Chromium
+        run: |
+          set -euo pipefail
+          npm install -g playwright@1.49.1
+          npx --yes playwright@1.49.1 install --with-deps chromium
+          echo "FLIPAI_PLAYWRIGHT_MODULE=$(npm root -g)/playwright/index.mjs" >> "$GITHUB_ENV"
+
+      - name: Call flow, page script and control channel in headless Chromium
+        # FLIPAI_PLAYWRIGHT_MODULE is set, so these tests fail rather than skip
+        # if the browser install did not work.
+        run: go test -count=1 ./...
+
   release-windows-x64:
+    needs: call-flow-in-a-real-browser
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
