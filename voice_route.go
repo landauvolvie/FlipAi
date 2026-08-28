@@ -17,10 +17,12 @@ const (
 // runs it is Windows-only.
 
 // routeAppAudioPS is the PowerShell/C# helper that does the actual write. The
-// interop mirrors what EarTrumpet and Windows' own Settings app use: resolve
-// the endpoint IDs through MMDevice, then persist them per-process through
-// the AudioPolicyConfig factory (trying the 21H2+ interface first, then the
-// original one).
+// AudioPolicyConfig interface and HSTRING ABI mirror EarTrumpet. Electron adds
+// one extra wrinkle: the PID owning the top-level ChatGPT window is not
+// necessarily the PID owning its audio session. The helper therefore writes the
+// policy for the whole live process tree. startAgentVoiceSessionVerified runs it
+// once before Voice opens and once again after Voice is active, when Electron's
+// audio utility process definitely exists.
 const routeAppAudioPS = `
 param(
   [Parameter(Mandatory=$true)][uint32]$ProcessId,
@@ -30,6 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 public static class FlipAudioRoute
@@ -73,11 +76,9 @@ public static class FlipAudioRoute
     [StructLayout(LayoutKind.Explicit)]
     private struct PropVariant { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
 
-    // The per-app policy store. The interface layout is stable; its IID moved
-    // once, at Windows 11 21H2. Set takes a native HSTRING handle, not a CLR
-    // string. Marshaling the fourth argument as a string looks plausible but
-    // changes the ABI and is exactly the kind of call Windows rejects with an
-    // HRESULT even though the factory itself was found successfully.
+    // These declarations are the same method order used by current EarTrumpet.
+    // Set takes a native HSTRING handle. v0.45 corrected that ABI; v0.46 keeps
+    // it and fixes which Electron process IDs the policy is persisted against.
     [ComImport, Guid("ab3d4648-e242-459f-b02f-541c70306324"), InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
     private interface IAudioPolicyConfigFactory21H2
     {
@@ -85,7 +86,7 @@ public static class FlipAudioRoute
         int i(); int j(); int k(); int l(); int m(); int n(); int o(); int p();
         int q(); int r(); int s();
         [PreserveSig] int SetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, IntPtr deviceId);
-        [PreserveSig] int GetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [MarshalAs(UnmanagedType.HString)] out string deviceId);
+        [PreserveSig] int GetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [Out, MarshalAs(UnmanagedType.HString)] out string deviceId);
         [PreserveSig] int ClearAllPersistedApplicationDefaultEndpoints();
     }
 
@@ -96,15 +97,42 @@ public static class FlipAudioRoute
         int i(); int j(); int k(); int l(); int m(); int n(); int o(); int p();
         int q(); int r(); int s();
         [PreserveSig] int SetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, IntPtr deviceId);
-        [PreserveSig] int GetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [MarshalAs(UnmanagedType.HString)] out string deviceId);
+        [PreserveSig] int GetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [Out, MarshalAs(UnmanagedType.HString)] out string deviceId);
         [PreserveSig] int ClearAllPersistedApplicationDefaultEndpoints();
     }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
 
     [DllImport("combase.dll")]
     private static extern int RoInitialize(int initType);
 
     [DllImport("combase.dll", CharSet = CharSet.Unicode)]
-    private static extern int WindowsCreateString(string sourceString, uint length, out IntPtr hstring);
+    private static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string sourceString, uint length, out IntPtr hstring);
 
     [DllImport("combase.dll")]
     private static extern int WindowsDeleteString(IntPtr hstring);
@@ -147,8 +175,8 @@ public static class FlipAudioRoute
 
     private static string SwdId(int flow, string mmDeviceId)
     {
-        var iface = flow == 0 ? "{e6327cad-dcec-4949-ae8a-991e976a79d2}" : "{2eef81be-33fa-4800-9670-1cd474972c3f}";
-        return "\\\\?\\SWD#MMDEVAPI#" + mmDeviceId + "#" + iface;
+        var iface = flow == 0 ? "#{e6327cad-dcec-4949-ae8a-991e976a79d2}" : "#{2eef81be-33fa-4800-9670-1cd474972c3f}";
+        return "\\\\?\\SWD#MMDEVAPI#" + mmDeviceId + iface;
     }
 
     private static int SetOne(object factory, uint processId, int flow, int role, IntPtr hstring)
@@ -165,16 +193,14 @@ public static class FlipAudioRoute
         if (createHr != 0) return createHr;
         try
         {
-            // EarTrumpet/Windows use Multimedia and Console for the persisted
-            // per-app preference. Those two are required. Communications is
-            // useful for voice apps on builds that accept it, but it is best
-            // effort: rejecting that optional role must not turn two successful
-            // writes into the misleading "Windows refused it" failure.
             foreach (var role in new[] { 1 /*Multimedia*/, 0 /*Console*/ })
             {
                 int hr = SetOne(factory, processId, flow, role, hstring);
                 if (hr != 0) return hr;
             }
+            // Some builds accept Communications and some do not. It is useful
+            // for voice apps, but it must never turn two successful required
+            // writes into a failure.
             SetOne(factory, processId, flow, 2 /*Communications*/, hstring);
             return 0;
         }
@@ -184,11 +210,10 @@ public static class FlipAudioRoute
         }
     }
 
-    // Which device-id representation Windows accepts differs across builds.
-    // The SWD wrapper is what current EarTrumpet passes; the raw MMDevice id is
-    // retained as a compatibility fallback for older builds.
     private static int PersistEither(object factory, uint processId, int flow, string mmDeviceId)
     {
+        // Current Windows/EarTrumpet uses the SWD-wrapped MMDevice id. Keep the
+        // raw id as a compatibility fallback for builds that still accept it.
         int hr = Persist(factory, processId, flow, SwdId(flow, mmDeviceId));
         if (hr == 0) return 0;
         int raw = Persist(factory, processId, flow, mmDeviceId);
@@ -196,24 +221,69 @@ public static class FlipAudioRoute
         return hr;
     }
 
-    // A read-only probe at the same interface slot Set uses. It tells apart the
-    // two reasons Set can fail on a given Windows build: if this read also fails
-    // with E_INVALIDARG the interface has grown and SetPersistedDefaultAudio-
-    // Endpoint has moved to a different vtable slot; if this read succeeds the
-    // slot is right and the device-id argument is what Set did not like. It
-    // changes nothing, so it is safe to run before reporting a failure.
-    private static string ProbeSlot(object factory, uint processId)
+    // Electron owns one top-level window but normally several renderer/utility
+    // processes. EarTrumpet persists an endpoint against the PID obtained from
+    // IAudioSessionControl2, not necessarily the PID that owns the window. Walk
+    // the live descendants so the actual audio-session process is always among
+    // the PIDs receiving the policy. Processes that disappear mid-scan are
+    // harmless: success on any remaining candidate keeps the route valid.
+    private static uint[] CandidateProcessIds(uint rootProcessId)
     {
+        var ids = new HashSet<uint>();
+        var ordered = new List<uint>();
+        ids.Add(rootProcessId);
+        ordered.Add(rootProcessId);
+
+        var pairs = new List<uint[]>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(0x00000002 /*TH32CS_SNAPPROCESS*/, 0);
+        if (snapshot == new IntPtr(-1)) return ordered.ToArray();
         try
         {
-            var f21 = factory as IAudioPolicyConfigFactory21H2;
-            string got;
-            int hr = f21 != null
-                ? f21.GetPersistedDefaultAudioEndpoint(processId, 0, 1, out got)
-                : ((IAudioPolicyConfigFactoryPre21H2)factory).GetPersistedDefaultAudioEndpoint(processId, 0, 1, out got);
-            return "read-back HRESULT 0x" + hr.ToString("X8");
+            var entry = new PROCESSENTRY32();
+            entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+            if (Process32FirstW(snapshot, ref entry))
+            {
+                do
+                {
+                    pairs.Add(new uint[] { entry.th32ProcessID, entry.th32ParentProcessID });
+                    entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+                }
+                while (Process32NextW(snapshot, ref entry));
+            }
         }
-        catch (Exception e) { return "read-back threw " + e.GetType().Name; }
+        finally { CloseHandle(snapshot); }
+
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var pair in pairs)
+            {
+                uint pid = pair[0], parent = pair[1];
+                if (ids.Contains(parent) && ids.Add(pid))
+                {
+                    ordered.Add(pid);
+                    changed = true;
+                }
+            }
+        }
+        while (changed);
+        return ordered.ToArray();
+    }
+
+    private static int PersistProcessTree(object factory, uint rootProcessId, int flow, string mmDeviceId, out int applied, out uint lastPid)
+    {
+        applied = 0;
+        lastPid = rootProcessId;
+        int lastHr = unchecked((int)0x80070057);
+        foreach (uint candidatePid in CandidateProcessIds(rootProcessId))
+        {
+            int hr = PersistEither(factory, candidatePid, flow, mmDeviceId);
+            lastPid = candidatePid;
+            if (hr == 0) applied++;
+            else lastHr = hr;
+        }
+        return applied > 0 ? 0 : lastHr;
     }
 
     public static void Route(uint processId, string renderName, string captureName)
@@ -231,15 +301,22 @@ public static class FlipAudioRoute
             var iid = typeof(IAudioPolicyConfigFactoryPre21H2).GUID;
             RoGetActivationFactory(cls, ref iid, out factory);
         }
+
         if (!string.IsNullOrEmpty(renderName))
         {
-            var hr = PersistEither(factory, processId, 0, FindEndpointId(0, renderName));
-            if (hr != 0) throw new Exception("persisting the playback endpoint failed with HRESULT 0x" + hr.ToString("X8") + " (" + ProbeSlot(factory, processId) + ")");
+            int applied;
+            uint lastPid;
+            int hr = PersistProcessTree(factory, processId, 0, FindEndpointId(0, renderName), out applied, out lastPid);
+            if (hr != 0)
+                throw new Exception("persisting the playback endpoint failed for the desktop app process tree rooted at PID " + processId + "; last candidate PID " + lastPid + " returned HRESULT 0x" + hr.ToString("X8"));
         }
         if (!string.IsNullOrEmpty(captureName))
         {
-            var hr = PersistEither(factory, processId, 1, FindEndpointId(1, captureName));
-            if (hr != 0) throw new Exception("persisting the recording endpoint failed with HRESULT 0x" + hr.ToString("X8") + " (" + ProbeSlot(factory, processId) + ")");
+            int applied;
+            uint lastPid;
+            int hr = PersistProcessTree(factory, processId, 1, FindEndpointId(1, captureName), out applied, out lastPid);
+            if (hr != 0)
+                throw new Exception("persisting the recording endpoint failed for the desktop app process tree rooted at PID " + processId + "; last candidate PID " + lastPid + " returned HRESULT 0x" + hr.ToString("X8"));
         }
     }
 }
