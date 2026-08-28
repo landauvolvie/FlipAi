@@ -1,4 +1,4 @@
-# FlipAi v0.37.0
+# FlipAi v0.38.0
 
 The one-click audio-bridge installer could never have worked. This release
 removes it and replaces it with a path that does.
