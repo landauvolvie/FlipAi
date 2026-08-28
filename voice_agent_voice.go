@@ -31,7 +31,8 @@ type agentVoiceState struct {
 	// in words instead of failing silently.
 	StartControl string
 	EndControl   string
-	// Result is what an action did: clicked, not-found, invoke-failed.
+	// Result is what an action did: read, not-found, already-active, or the
+	// concrete activation method that Windows accepted/refused.
 	Result string
 	// Controls is a short list of what the window offered, for the status page
 	// when nothing matched.
@@ -39,8 +40,19 @@ type agentVoiceState struct {
 }
 
 // voiceAgentActions are the only actions the script accepts. Nothing outside
-// this list is ever interpolated into PowerShell.
-var voiceAgentActions = map[string]bool{"state": true, "start": true, "stop": true}
+// this list is ever interpolated into PowerShell. The separate start actions
+// matter: a successful Win32 mouse call only means Windows accepted mouse input,
+// not that Chromium handled the button. The caller verifies each method before
+// moving to the next one.
+var voiceAgentActions = map[string]bool{
+	"state":          true,
+	"start":          true, // compatibility alias for start-invoke
+	"start-invoke":   true,
+	"start-keyboard": true,
+	"start-legacy":   true,
+	"start-pointer":  true,
+	"stop":           true,
+}
 
 // parseAgentVoiceReport turns the script's key=value output into state.
 func parseAgentVoiceReport(out string) agentVoiceState {
@@ -91,10 +103,10 @@ func agentVoiceStartFailure(appTitle string, s agentVoiceState) error {
 		return fmt.Errorf("%s is only exposing its window frame to Windows accessibility (%s), not its contents, so FlipAi cannot see the voice control. This is a Chromium app with accessibility off. Quit %s completely -- including from the system tray -- and let FlipAi reopen it, so it starts with accessibility enabled", appTitle, truncate(strings.Join(s.Controls, ", "), 120), appTitle)
 	case s.StartControl == "":
 		return fmt.Errorf("FlipAi could not find the voice control in %s. It offered: %s. FlipAi now requires the actual live Voice control such as \"Start new voice chat\" or Voice Mode and deliberately ignores dictation and text-message microphone controls", appTitle, truncate(strings.Join(s.Controls, ", "), 240))
-	case s.Result == "invoke-failed":
-		return fmt.Errorf("Windows refused to press %q in %s", s.StartControl, appTitle)
+	case strings.HasSuffix(s.Result, "-failed"):
+		return fmt.Errorf("Windows could see %q in %s, but none of FlipAi's verified activation methods started live Voice (last result: %s)", s.StartControl, appTitle, s.Result)
 	}
-	return fmt.Errorf("FlipAi pressed %q in %s but it did not enter voice mode; live Voice never became active", s.StartControl, appTitle)
+	return fmt.Errorf("FlipAi activated %q in %s (%s) but it did not enter voice mode; live Voice never became active", s.StartControl, appTitle, s.Result)
 }
 
 func onlyWindowChrome(appTitle string, controls []string) bool {
@@ -134,6 +146,7 @@ const voiceAgentUIATemplate = `
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type -Namespace FlipWin -Name Native -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
 [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, System.IntPtr dwExtraInfo);
@@ -143,7 +156,7 @@ $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND
 if ($null -eq $root) { Write-Output 'found=0'; Write-Output 'result=no-window'; exit 0 }
 Write-Output 'found=1'
 
-function ClickElement($el) {
+function PointerClickElement($el) {
   try {
     $r = $el.Current.BoundingRectangle
     if ($r.Width -le 0 -or $r.Height -le 0) { return $false }
@@ -151,10 +164,34 @@ function ClickElement($el) {
     $cy = [int]($r.Y + $r.Height / 2)
     [FlipWin.Native]::SetForegroundWindow([System.IntPtr]__HWND__) | Out-Null
     [FlipWin.Native]::SetCursorPos($cx, $cy) | Out-Null
-    Start-Sleep -Milliseconds 60
+    Start-Sleep -Milliseconds 80
     [FlipWin.Native]::mouse_event(0x0002, 0, 0, 0, [System.IntPtr]::Zero)
-    Start-Sleep -Milliseconds 40
+    Start-Sleep -Milliseconds 60
     [FlipWin.Native]::mouse_event(0x0004, 0, 0, 0, [System.IntPtr]::Zero)
+    return $true
+  } catch { return $false }
+}
+
+function InvokeElement($el) {
+  try {
+    $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    return $true
+  } catch { return $false }
+}
+
+function LegacyElement($el) {
+  try {
+    $el.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
+    return $true
+  } catch { return $false }
+}
+
+function KeyboardElement($el) {
+  try {
+    [FlipWin.Native]::SetForegroundWindow([System.IntPtr]__HWND__) | Out-Null
+    $el.SetFocus()
+    Start-Sleep -Milliseconds 100
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
     return $true
   } catch { return $false }
 }
@@ -232,10 +269,12 @@ if ($active) { Write-Output 'active=1' } else { Write-Output 'active=0' }
 Write-Output ('start=' + $startName)
 Write-Output ('end=' + $endName)
 
-if ('__ACTION__' -eq 'state') { Write-Output 'result=read'; exit 0 }
+$action = '__ACTION__'
+if ($action -eq 'state') { Write-Output 'result=read'; exit 0 }
 
+$isStart = $action.StartsWith('start')
 $target = $null
-if ('__ACTION__' -eq 'start') {
+if ($isStart) {
   if ($active) { Write-Output 'result=already-active'; exit 0 }
   $target = $startEl
 } else {
@@ -244,13 +283,32 @@ if ('__ACTION__' -eq 'start') {
 }
 if ($null -eq $target) { Write-Output 'result=not-found'; exit 0 }
 
-$done = ClickElement $target
-if (-not $done) {
-  try { $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); $done = $true } catch {}
+if ($isStart) {
+  $done = $false
+  $result = 'invoke-failed'
+  if ($action -eq 'start' -or $action -eq 'start-invoke') {
+    $done = InvokeElement $target
+    if ($done) { $result = 'invoke-sent' }
+  } elseif ($action -eq 'start-keyboard') {
+    $done = KeyboardElement $target
+    if ($done) { $result = 'keyboard-sent' } else { $result = 'keyboard-failed' }
+  } elseif ($action -eq 'start-legacy') {
+    $done = LegacyElement $target
+    if ($done) { $result = 'legacy-sent' } else { $result = 'legacy-failed' }
+  } elseif ($action -eq 'start-pointer') {
+    $done = PointerClickElement $target
+    if ($done) { $result = 'pointer-sent' } else { $result = 'pointer-failed' }
+  }
+  Write-Output ('result=' + $result)
+  exit 0
 }
-if (-not $done) {
-  try { $target.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction(); $done = $true } catch {}
-}
+
+# Ending voice is less ambiguous than starting it, so one action may use the
+# normal UIA fallbacks. Start is intentionally one method per action because the
+# Go caller verifies that live Voice appeared before trying another method.
+$done = InvokeElement $target
+if (-not $done) { $done = LegacyElement $target }
+if (-not $done) { $done = PointerClickElement $target }
 if (-not $done) {
   try { $target.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle(); $done = $true } catch {}
 }
