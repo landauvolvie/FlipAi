@@ -74,14 +74,17 @@ public static class FlipAudioRoute
     private struct PropVariant { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
 
     // The per-app policy store. The interface layout is stable; its IID moved
-    // once, at Windows 11 21H2.
+    // once, at Windows 11 21H2. Set takes a native HSTRING handle, not a CLR
+    // string. Marshaling the fourth argument as a string looks plausible but
+    // changes the ABI and is exactly the kind of call Windows rejects with an
+    // HRESULT even though the factory itself was found successfully.
     [ComImport, Guid("ab3d4648-e242-459f-b02f-541c70306324"), InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
     private interface IAudioPolicyConfigFactory21H2
     {
         int a(); int b(); int c(); int d(); int e(); int f(); int g(); int h();
         int i(); int j(); int k(); int l(); int m(); int n(); int o(); int p();
         int q(); int r(); int s();
-        [PreserveSig] int SetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [MarshalAs(UnmanagedType.HString)] string deviceId);
+        [PreserveSig] int SetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, IntPtr deviceId);
         [PreserveSig] int GetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [MarshalAs(UnmanagedType.HString)] out string deviceId);
         [PreserveSig] int ClearAllPersistedApplicationDefaultEndpoints();
     }
@@ -92,13 +95,19 @@ public static class FlipAudioRoute
         int a(); int b(); int c(); int d(); int e(); int f(); int g(); int h();
         int i(); int j(); int k(); int l(); int m(); int n(); int o(); int p();
         int q(); int r(); int s();
-        [PreserveSig] int SetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [MarshalAs(UnmanagedType.HString)] string deviceId);
+        [PreserveSig] int SetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, IntPtr deviceId);
         [PreserveSig] int GetPersistedDefaultAudioEndpoint(uint processId, int flow, int role, [MarshalAs(UnmanagedType.HString)] out string deviceId);
         [PreserveSig] int ClearAllPersistedApplicationDefaultEndpoints();
     }
 
     [DllImport("combase.dll")]
     private static extern int RoInitialize(int initType);
+
+    [DllImport("combase.dll", CharSet = CharSet.Unicode)]
+    private static extern int WindowsCreateString(string sourceString, uint length, out IntPtr hstring);
+
+    [DllImport("combase.dll")]
+    private static extern int WindowsDeleteString(IntPtr hstring);
 
     [DllImport("combase.dll", PreserveSig = false)]
     private static extern void RoGetActivationFactory(
@@ -142,25 +151,42 @@ public static class FlipAudioRoute
         return "\\\\?\\SWD#MMDEVAPI#" + mmDeviceId + "#" + iface;
     }
 
-    private static int Persist(object factory, uint processId, int flow, string deviceId)
+    private static int SetOne(object factory, uint processId, int flow, int role, IntPtr hstring)
     {
         var f21 = factory as IAudioPolicyConfigFactory21H2;
-        int hr = 0;
-        foreach (var role in new[] { 0 /*Console*/, 1 /*Multimedia*/, 2 /*Communications*/ })
-        {
-            if (f21 != null) hr = f21.SetPersistedDefaultAudioEndpoint(processId, flow, role, deviceId);
-            else hr = ((IAudioPolicyConfigFactoryPre21H2)factory).SetPersistedDefaultAudioEndpoint(processId, flow, role, deviceId);
-            if (hr != 0) return hr;
-        }
-        return 0;
+        if (f21 != null) return f21.SetPersistedDefaultAudioEndpoint(processId, flow, role, hstring);
+        return ((IAudioPolicyConfigFactoryPre21H2)factory).SetPersistedDefaultAudioEndpoint(processId, flow, role, hstring);
     }
 
-    // Which string SetPersistedDefaultAudioEndpoint accepts as the device id
-    // differs across Windows builds: some take the raw MMDevice id that
-    // IMMDevice::GetId returns, others the SWD device-path wrapper around it.
-    // Guessing wrong is exactly the "Windows refused it" (a failing HRESULT)
-    // reported from the field, so both are tried and whichever the OS accepts
-    // wins. The last HRESULT is returned when neither does.
+    private static int Persist(object factory, uint processId, int flow, string deviceId)
+    {
+        IntPtr hstring = IntPtr.Zero;
+        int createHr = WindowsCreateString(deviceId, (uint)deviceId.Length, out hstring);
+        if (createHr != 0) return createHr;
+        try
+        {
+            // EarTrumpet/Windows use Multimedia and Console for the persisted
+            // per-app preference. Those two are required. Communications is
+            // useful for voice apps on builds that accept it, but it is best
+            // effort: rejecting that optional role must not turn two successful
+            // writes into the misleading "Windows refused it" failure.
+            foreach (var role in new[] { 1 /*Multimedia*/, 0 /*Console*/ })
+            {
+                int hr = SetOne(factory, processId, flow, role, hstring);
+                if (hr != 0) return hr;
+            }
+            SetOne(factory, processId, flow, 2 /*Communications*/, hstring);
+            return 0;
+        }
+        finally
+        {
+            if (hstring != IntPtr.Zero) WindowsDeleteString(hstring);
+        }
+    }
+
+    // Which device-id representation Windows accepts differs across builds.
+    // The SWD wrapper is what current EarTrumpet passes; the raw MMDevice id is
+    // retained as a compatibility fallback for older builds.
     private static int PersistEither(object factory, uint processId, int flow, string mmDeviceId)
     {
         int hr = Persist(factory, processId, flow, SwdId(flow, mmDeviceId));
