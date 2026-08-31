@@ -2,7 +2,7 @@ name: prepare-agent-connect-release
 
 on:
   push:
-    branches: [fix/agent-connect-first-run]
+    branches: [main]
     paths:
       - .github/workflows/bump-agent-connect-release.yml
 
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fix/agent-connect-first-run
+          ref: main
           fetch-depth: 0
 
       - name: Bump FlipAi to 0.46.1
@@ -69,4 +69,4 @@ The release workflow repeats the real-browser Google Voice call-flow harness, th
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add config.go VERSION docs/RELEASE-NOTES.md .github/workflows/bump-agent-connect-release.yml
           git commit -m "Prepare FlipAi v0.46.1 release"
-          git push origin HEAD:fix/agent-connect-first-run
+          git push origin HEAD:main
