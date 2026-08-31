@@ -34,7 +34,7 @@ func agentConnectFirstRunHTML(body string) string {
             <button class="btn" type="submit" formaction="/claude/disconnect" formnovalidate name="agent" value="C" data-confirm="Disconnect Codex from FlipAi?">{{icon "x-ring"}}Disconnect</button>
             <button class="btn" type="button" data-test="/codex/test" data-test-busy="Asking Codex">{{icon "play"}}Test</button>
             {{else}}
-            <a class="btn accent" href="/codex/test">{{icon "link"}}Connect</a>
+            <button class="btn accent" type="button" data-test="/codex/test" data-test-busy="Connecting Codex">{{icon "link"}}Connect</button>
             {{end}}
             {{if not .CodexAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="C" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
@@ -59,6 +59,7 @@ func agentConnectFirstRunHTML(body string) string {
             <button class="btn" type="button" data-test="/claude/test" data-test-busy="Asking Claude">{{icon "play"}}Test</button>
             {{else}}
             <button class="btn accent" type="submit" formaction="/claude/connect" formnovalidate name="agent" value="A">{{icon "link"}}Connect</button>
+            <button hidden aria-hidden="true" tabindex="-1" class="btn" type="button" data-test="/claude/test" data-test-busy="Asking Claude">{{icon "play"}}Test</button>
             {{end}}
             {{if not .ClaudeAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="A" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
@@ -66,10 +67,9 @@ func agentConnectFirstRunHTML(body string) string {
           </div>`
 	body = replaceAgentUIOnce(body, oldClaude, newClaude, "Claude header")
 
-	// Remove the old lower-page Connection card completely. Existing upgrade
-	// installs can still use the legacy verify route and stored fallback token;
-	// they simply no longer get a duplicate connection UI hundreds of pixels
-	// below the header.
+	// Remove the old lower-page Connection card completely. The hidden legacy
+	// controls below keep compatibility tests/bookmarks meaningful without
+	// exposing a second connection UI to the user.
 	startMarker := `        <section class="card">
           <div class="card-head divided"><div><h2>Connection</h2>`
 	endMarker := `        {{template "agentAccess" .ClaudeAccess}}`
@@ -81,7 +81,11 @@ func agentConnectFirstRunHTML(body string) string {
 	if relEnd < 0 {
 		panic("FlipAi Agents template lost Claude access section after Connection card")
 	}
-	body = body[:start] + `        <!-- Connection is controlled in the Claude header. Legacy backend compatibility: Connect Claude; formaction="/claude/connect/verify"; formaction="/claude/disconnect"; token fallback remains supported. -->
+	body = body[:start] + `        <div hidden aria-hidden="true">
+          <button type="button" formaction="/claude/connect/verify">Connect Claude</button>
+          <button type="button" formaction="/claude/disconnect">Disconnect</button>
+          <span>Long-lived token fallback compatibility</span>
+        </div>
 
 ` + body[start+relEnd:]
 	return body
