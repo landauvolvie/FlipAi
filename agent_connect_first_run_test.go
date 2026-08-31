@@ -20,13 +20,13 @@ func TestAgentsFirstRunShowsConnectBeforeVisibleTest(t *testing.T) {
 	if !strings.Contains(body, `data-test="/codex/test" data-test-busy="Connecting Codex"`) {
 		t.Fatal("fresh Codex pane does not offer the inline Connect action")
 	}
-	if strings.Contains(body, `name="agent" value="C"`) {
+	if strings.Contains(body, `data-confirm="Disconnect Codex from FlipAi?"`) {
 		t.Fatal("fresh Codex pane exposes Disconnect before it has been connected")
 	}
 	if !strings.Contains(body, `formaction="/claude/connect" formnovalidate name="agent" value="A"`) {
 		t.Fatal("fresh Claude pane does not offer Connect in its header")
 	}
-	if strings.Contains(body, `name="agent" value="A" data-confirm="Disconnect Claude`) {
+	if strings.Contains(body, `data-confirm="Disconnect Claude from FlipAi?"`) {
 		t.Fatal("fresh Claude pane exposes Disconnect before it has been connected")
 	}
 }
@@ -40,8 +40,8 @@ func TestAgentsConnectedStateShowsDisconnectAndTest(t *testing.T) {
 	for _, want := range []string{
 		`data-test="/codex/test"`,
 		`data-test="/claude/test"`,
-		`name="agent" value="C"`,
-		`name="agent" value="A"`,
+		`data-confirm="Disconnect Codex from FlipAi?"`,
+		`data-confirm="Disconnect Claude from FlipAi?"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("connected Agents page is missing %q", want)
