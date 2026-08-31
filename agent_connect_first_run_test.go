@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestAgentsFirstRunShowsConnectBeforeTest(t *testing.T) {
+func TestAgentsFirstRunShowsConnectBeforeVisibleTest(t *testing.T) {
 	a := newTestApp(t)
 	body := a.do(t, http.MethodGet, "/agents", nil).Body.String()
 
@@ -17,14 +17,17 @@ func TestAgentsFirstRunShowsConnectBeforeTest(t *testing.T) {
 	if strings.Contains(body, "Long-lived token — fallback only") {
 		t.Fatal("Claude still renders the lower fallback-token connection editor")
 	}
-	if !strings.Contains(body, `href="/codex/test"`) || !strings.Contains(body, `>Connect</a>`) {
-		t.Fatal("fresh Codex pane does not offer Connect in its header")
+	if !strings.Contains(body, `data-test="/codex/test" data-test-busy="Connecting Codex"`) {
+		t.Fatal("fresh Codex pane does not offer the inline Connect action")
 	}
-	if strings.Contains(body, `data-test="/codex/test"`) {
-		t.Fatal("fresh Codex pane exposes Test before it has been connected")
+	if strings.Contains(body, `name="agent" value="C"`) {
+		t.Fatal("fresh Codex pane exposes Disconnect before it has been connected")
 	}
-	if strings.Contains(body, `data-test="/claude/test"`) {
-		t.Fatal("fresh Claude pane exposes Test before it has been connected")
+	if !strings.Contains(body, `formaction="/claude/connect" formnovalidate name="agent" value="A"`) {
+		t.Fatal("fresh Claude pane does not offer Connect in its header")
+	}
+	if strings.Contains(body, `name="agent" value="A" data-confirm="Disconnect Claude`) {
+		t.Fatal("fresh Claude pane exposes Disconnect before it has been connected")
 	}
 }
 
