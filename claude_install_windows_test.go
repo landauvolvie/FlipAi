@@ -12,7 +12,7 @@ func TestClaudeInstallSignInUsesOfficialWindowsInstallerAndLogin(t *testing.T) {
 	for _, want := range []string{
 		"https://claude.ai/install.ps1",
 		"auth login",
-		`.local\\bin\\claude.exe`,
+		`.local\bin\claude.exe`,
 		"-NoExit",
 	} {
 		if !strings.Contains(got, want) {
