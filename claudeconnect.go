@@ -23,9 +23,9 @@ const (
 )
 
 type claudeConnection struct {
-	Kind       string
-	Label      string
-	Detail     string
+	Kind        string
+	Label       string
+	Detail      string
 	ChromeReady bool
 	NeedsSignIn bool
 }
@@ -60,14 +60,14 @@ func evaluateClaudeConnection(hasToken, probed, loginExists bool) claudeConnecti
 			Label:       "Stored token only",
 			NeedsSignIn: true,
 			Detail: "Claude can answer model requests with the saved token, but the Windows account is not signed in to Claude Code. " +
-				"Press Connect to complete the normal Claude Code browser sign-in.",
+				"Press Connect Claude to complete the normal Claude Code browser sign-in.",
 		}
 	default:
 		return claudeConnection{
 			Kind:        claudeConnNone,
 			Label:       "Not connected",
 			NeedsSignIn: true,
-			Detail:      "Claude Code is not signed in on this Windows account. Press Connect to set it up.",
+			Detail:      "Claude Code is not signed in on this Windows account. Press Connect Claude to set it up.",
 		}
 	}
 }
@@ -271,7 +271,10 @@ func (a *App) claudeDisconnect(w http.ResponseWriter, r *http.Request) {
 	if !had {
 		detail = "There was no stored token to remove."
 	}
-	detail += "\n\nClaude Code's own account sign-in on this Windows account was left alone. FlipAi will show Connect again until you connect Claude from the top of the Agents page."
+	conn := a.claudeConnectionNow(r.Context())
+	detail += "\n\nClaude Code's own account sign-in on this Windows account was left alone — that is yours, not FlipAi's.\n\n" +
+		"Current connection: " + conn.Label + ". " + conn.Detail +
+		"\n\nFlipAi will still show Connect at the top until you explicitly connect Claude again."
 	restart := a.claudeLiveNeedsRestart()
 	if restart {
 		detail += liveRestartNote
