@@ -543,7 +543,7 @@ func (b *Bridge) markProcessed(id string) {
 }
 func (b *Bridge) poll(ctx context.Context) {
 	b.mu.Lock()
-	if b.busy || b.paused {
+	if b.paused {
 		b.mu.Unlock()
 		return
 	}
