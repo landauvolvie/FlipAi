@@ -33,7 +33,7 @@ func TestChatGPTDirectAgentsPaneIsExplicitlyExperimental(t *testing.T) {
 	for _, want := range []string{
 		"ChatGPT Chat",
 		"Direct backend experiment",
-		`data-test="/chatgpt-direct/probe"`,
+		`data-test="/codex/test?chatgpt-direct=1"`,
 		"Visible UI automation",
 		"Disabled",
 		"SMS routing",
