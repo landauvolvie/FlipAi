@@ -62,10 +62,9 @@ type Config struct {
 	UI          UIConfig          `json:"ui"`
 }
 
-// UIConfig holds legacy desktop-window preferences. Settings intentionally no
-// longer exposes appearance, notification, or close-to-tray controls; loadConfig
-// normalizes them to the simple app defaults below so an old config cannot leave
-// a hidden preference active forever.
+// UIConfig is retained for compatibility with existing bridge.json files. The
+// normal Settings page no longer exposes appearance, notifications or
+// close-to-tray controls; fresh installs use the light/default presentation.
 type UIConfig struct {
 	Theme   string `json:"theme"`
 	Compact bool   `json:"compact"`
@@ -349,7 +348,7 @@ func defaultConfig(dataDir string) Config {
 		Codex:    CodexConfig{ApprovalPolicy: "never"},
 		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
 		Security: SecurityConfig{RequireCode: true},
-		UI:       UIConfig{Theme: ThemeLight, Compact: false, Alerts: false, AlertSound: false, CloseToTray: true},
+		UI:       UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
 	}
 }
 
@@ -545,15 +544,18 @@ func loadConfig(path, dataDir string) (Config, error) {
 			return cfg, err
 		}
 	}
-	// Appearance, notification and close behavior are no longer settings. Keep
-	// the desktop predictable across old and new installs: light, standard
-	// spacing, no in-window alert preference, and closing the window leaves the
-	// background bridge alive.
-	cfg.UI.Theme = ThemeLight
-	cfg.UI.Compact = false
-	cfg.UI.Alerts = false
-	cfg.UI.AlertSound = false
-	cfg.UI.CloseToTray = true
+	// Installs made before the desktop redesign have no ui block at all, and
+	// decoding leaves those booleans false — which would silently turn
+	// close-to-tray off. Probe for the block so an absent one keeps the
+	// defaults while an explicit old file remains readable even though the
+	// controls are no longer shown.
+	var probe struct {
+		UI *UIConfig `json:"ui"`
+	}
+	if json.Unmarshal(b, &probe) == nil && probe.UI == nil {
+		cfg.UI = defaultConfig(dataDir).UI
+	}
+	cfg.UI.Theme = normalizeTheme(cfg.UI.Theme)
 	syncAllowedNumbers(&cfg.GoogleVoice)
 	// Allowed numbers, security codes and reply behaviour now belong to the
 	// agent they reach. Move a pre-agent configuration onto the agents, then
