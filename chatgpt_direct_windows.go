@@ -46,10 +46,10 @@ foreach ($p in $procs) {
 [pscustomobject]@{
   supported=$true
   processCount=$pids.Count
-  processNames=$names
-  loopbackPorts=$listeners
+  processNames=@($names)
+  loopbackPorts=@($listeners)
   hintedDebugPorts=@($debugPorts | Sort-Object -Unique)
-  namedPipes=$pipes
+  namedPipes=@($pipes)
   debugPipe=$debugPipe
 } | ConvertTo-Json -Compress -Depth 5`
 
