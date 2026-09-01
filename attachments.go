@@ -249,7 +249,40 @@ func prepareInboundAttachments(in []MailAttachment) ([]InboundAttachment, func()
 	return out, cleanup, nil
 }
 
+func agentForSharedSMSCommand(raw string, cfg Config) string {
+	pick := func(text string) string {
+		text = strings.TrimSpace(text)
+		newSession := configuredNewSessionCommand(cfg)
+		if _, ok := stripAgentCommandPrefix(text, configuredCodexPrefix(cfg)); ok ||
+			isAgentNewSession(text, configuredCodexPrefix(cfg), newSession) {
+			return "C"
+		}
+		if _, ok := stripAgentCommandPrefix(text, configuredClaudePrefix(cfg)); ok ||
+			isAgentNewSession(text, configuredClaudePrefix(cfg), newSession) {
+			return "A"
+		}
+		return ""
+	}
+	if agent := pick(raw); agent != "" {
+		return agent
+	}
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) > 1 {
+		rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), fields[0]))
+		if agent := pick(rest); agent != "" {
+			return agent
+		}
+	}
+	if cfg.DefaultAgent == "A" {
+		return "A"
+	}
+	return "C"
+}
+
 func parseRemoteCommandForMessage(raw string, cfg Config, agent string, m GmailMessage) (remoteCommand, error) {
+	if agent == "B" {
+		agent = agentForSharedSMSCommand(raw, cfg)
+	}
 	if strings.TrimSpace(raw) != "" {
 		return parseRemoteCommand(raw, cfg, agent)
 	}

@@ -12,11 +12,10 @@ import (
 // Everything that belongs to one agent lives on that agent.
 //
 // FlipAi used to keep a single allowlist of phone numbers, one security code,
-// and one set of reply preferences, all shared, with an agent chosen per message
-// by a "C:" or "A:" prefix. That put the answer to "who may command this agent"
-// in a different place from the agent itself. Now a number belongs to exactly
-// one agent, carries what it is allowed to do, and each agent has its own code,
-// its own framing line, and its own reply behaviour.
+// and one set of reply preferences, all shared. Each agent now owns its own
+// allowlist, access kind, security code and reply behaviour. The same real phone
+// may deliberately appear on both agents; in that case C:/A: selects the SMS
+// destination and an unprefixed SMS uses the configured default agent.
 
 const (
 	// AccessAll lets a number both text the agent and call it.
@@ -66,7 +65,8 @@ func (p AgentPhone) AllowsVoice() bool   { return p.Access == AccessAll || p.Acc
 // for every agent. It is embedded, so the stored JSON stays flat and the keys
 // that already existed keep their meaning.
 type AgentSettings struct {
-	// Phones is this agent's allowlist. A number may appear on one agent only.
+	// Phones is this agent's allowlist. The same number may also be present on
+	// the other agent; each copy keeps its own SMS/voice access policy.
 	Phones []AgentPhone `json:"phones,omitempty"`
 
 	// CallerNames are the contact names Google Voice displays for callers who
@@ -115,27 +115,73 @@ func agentSettings(cfg Config, agent string) AgentSettings {
 }
 
 func agentDisplayName(agent string) string {
-	if agent == "A" {
+	switch agent {
+	case "A":
 		return "Claude"
+	case "B":
+		return "ChatGPT / Codex and Claude"
+	default:
+		return "ChatGPT / Codex"
 	}
-	return "ChatGPT / Codex"
 }
 
-// agentForSender answers the only question that matters when a text or a call
-// arrives: which agent, if any, does this number reach, and for what.
-func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok bool) {
+func agentPhoneForSender(cfg Config, agent, raw string) (AgentPhone, bool) {
 	number := normalizeUSPhone(raw)
 	if number == "" {
-		return "", AgentPhone{}, false
+		return AgentPhone{}, false
 	}
-	for _, candidate := range []string{"C", "A"} {
-		for _, p := range agentSettings(cfg, candidate).Phones {
-			if p.Number == number {
-				return candidate, p, true
-			}
+	for _, p := range agentSettings(cfg, agent).Phones {
+		if p.Number == number {
+			return p, true
 		}
 	}
-	return "", AgentPhone{}, false
+	return AgentPhone{}, false
+}
+
+// combinedAgentPhone is used only while admitting a message from a number that
+// exists on both agents. The actual per-agent permissions stay separate; this
+// synthetic value tells the transport whether either copy permits the transport.
+func combinedAgentPhone(a, b AgentPhone) AgentPhone {
+	p := a
+	sms := a.AllowsSMS() || b.AllowsSMS()
+	voice := a.AllowsVoice() || b.AllowsVoice()
+	switch {
+	case sms && voice:
+		p.Access = AccessAll
+	case sms:
+		p.Access = AccessSMS
+	default:
+		p.Access = AccessVoice
+	}
+	return p
+}
+
+// agentForSender resolves a unique number directly. "B" is an internal marker
+// meaning the number is allowed to text both agents, so the SMS shortcut must
+// choose the destination. If only one copy permits SMS, that agent remains the
+// only SMS destination even though the number may also call the other agent.
+func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok bool) {
+	c, cOK := agentPhoneForSender(cfg, "C", raw)
+	a, aOK := agentPhoneForSender(cfg, "A", raw)
+	switch {
+	case cOK && aOK:
+		switch {
+		case c.AllowsSMS() && a.AllowsSMS():
+			return "B", combinedAgentPhone(c, a), true
+		case c.AllowsSMS():
+			return "C", c, true
+		case a.AllowsSMS():
+			return "A", a, true
+		default:
+			return "B", combinedAgentPhone(c, a), true
+		}
+	case cOK:
+		return "C", c, true
+	case aOK:
+		return "A", a, true
+	default:
+		return "", AgentPhone{}, false
+	}
 }
 
 // allAgentPhones lists every allowed number across agents, newest agent order
@@ -165,19 +211,15 @@ func smsAllowedFrom(cfg Config) string {
 	return strings.Join(numbers, "\n")
 }
 
-// normalizeAgentPhones cleans one agent's list and rejects a number that is
-// already claimed by the other agent. Exclusivity is the point: a number reaches
-// one agent, so there is never a question of which one answered.
-func normalizeAgentPhones(list []AgentPhone, claimedElsewhere map[string]string) ([]AgentPhone, error) {
+// normalizeAgentPhones cleans one agent's list. Duplicates inside the same
+// list collapse, while the same number on the other agent is intentionally valid.
+func normalizeAgentPhones(list []AgentPhone, _ map[string]string) ([]AgentPhone, error) {
 	seen := map[string]bool{}
 	out := make([]AgentPhone, 0, len(list))
 	for _, p := range list {
 		number := normalizeUSPhone(p.Number)
 		if number == "" {
 			return nil, fmt.Errorf("%q is not a 10-digit US or Canada phone number", strings.TrimSpace(p.Number))
-		}
-		if other, taken := claimedElsewhere[number]; taken {
-			return nil, fmt.Errorf("%s is already allowed on %s; a number can reach one agent only", formatUSPhone(number), agentDisplayName(other))
 		}
 		if seen[number] {
 			continue
@@ -197,19 +239,16 @@ func normalizeAgentPhones(list []AgentPhone, claimedElsewhere map[string]string)
 	return out, nil
 }
 
-// normalizeAgents cleans both agents together, because exclusivity can only be
-// checked with both lists in hand.
+// normalizeAgents cleans each phone list independently. Caller names remain
+// exclusive because a phone call has no C:/A: shortcut with which to resolve the
+// same displayed contact name on two agents.
 func normalizeAgents(cfg *Config) error {
-	claimed := map[string]string{}
 	claimedNames := map[string]string{}
 	for _, agent := range []string{"C", "A"} {
 		settings := agentSettings(*cfg, agent)
-		cleaned, err := normalizeAgentPhones(settings.Phones, claimed)
+		cleaned, err := normalizeAgentPhones(settings.Phones, nil)
 		if err != nil {
 			return fmt.Errorf("%s numbers: %w", agentDisplayName(agent), err)
-		}
-		for _, p := range cleaned {
-			claimed[p.Number] = agent
 		}
 		names, err := normalizeAllowedCallerLabels(settings.CallerNames, true)
 		if err != nil {
@@ -382,22 +421,22 @@ func verifyAgentCode(s AgentSettings, code string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(s.CodeHash)) == 1
 }
 
-// salvageAgents keeps FlipAi startable when a stored configuration cannot
-// satisfy the rules -- a hand-edited file, or one written by a build that
-// allowed a number on both agents. Whatever does not fit is dropped rather than
-// refusing to load, and the first agent to claim a number keeps it.
+// salvageAgents keeps FlipAi startable when a stored configuration has bad
+// entries. A shared number is valid and is preserved on both agents; only invalid
+// or duplicate entries inside the same agent are dropped. Caller names remain
+// exclusive because calls have no SMS shortcut.
 func salvageAgents(cfg *Config) {
-	claimed := map[string]bool{}
 	claimedNames := map[string]bool{}
 	for _, agent := range []string{"C", "A"} {
 		s := agentSettings(*cfg, agent)
+		seenNumbers := map[string]bool{}
 		kept := make([]AgentPhone, 0, len(s.Phones))
 		for _, p := range s.Phones {
 			number := normalizeUSPhone(p.Number)
-			if number == "" || claimed[number] {
+			if number == "" || seenNumbers[number] {
 				continue
 			}
-			claimed[number] = true
+			seenNumbers[number] = true
 			p.Number = number
 			p.Access = normalizeAccess(p.Access)
 			kept = append(kept, p)

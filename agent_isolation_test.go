@@ -101,12 +101,16 @@ func TestACallerNameBelongsToOneAgent(t *testing.T) {
 		t.Errorf("the refusal did not explain itself: %v", err)
 	}
 
-	// And a number still may not be claimed twice either.
+	// A phone number may deliberately be shared. SMS routing is then explicit
+	// through C:/A: while each agent still keeps its own access policy.
 	dup := defaultConfig(t.TempDir())
 	dup.Codex.Phones = []AgentPhone{{Number: "8455551000", Access: AccessAll}}
 	dup.Claude.Phones = []AgentPhone{{Number: "(845) 555-1000", Access: AccessAll}}
-	if err := normalizeAgents(&dup); err == nil {
-		t.Fatal("the same number was accepted on both agents")
+	if err := normalizeAgents(&dup); err != nil {
+		t.Fatalf("the same phone should be allowed on both agents: %v", err)
+	}
+	if len(dup.Codex.Phones) != 1 || len(dup.Claude.Phones) != 1 {
+		t.Fatalf("shared phone was not preserved on both agents: C=%+v A=%+v", dup.Codex.Phones, dup.Claude.Phones)
 	}
 }
 
@@ -152,8 +156,8 @@ func TestALoadedConfigNeverLeavesACallerOnTwoAgents(t *testing.T) {
 
 	salvageAgents(&cfg)
 
-	if got := len(cfg.Claude.Phones); got != 0 {
-		t.Errorf("the duplicate number stayed on the second agent: %+v", cfg.Claude.Phones)
+	if got := len(cfg.Claude.Phones); got != 1 || cfg.Claude.Phones[0].Number != "8455551000" {
+		t.Errorf("the valid shared number was not preserved on the second agent: %+v", cfg.Claude.Phones)
 	}
 	if cfg.Claude.CallerNames != "" {
 		t.Errorf("the duplicate caller name stayed on the second agent: %q", cfg.Claude.CallerNames)

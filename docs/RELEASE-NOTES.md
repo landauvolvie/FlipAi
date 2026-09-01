@@ -1,25 +1,21 @@
-# FlipAi v0.46.1
+# FlipAi v0.46.2
 
-This release fixes first-run agent connection on a clean Windows PC. Codex and Claude now begin with a real **Connect** state instead of exposing Test or Disconnect before FlipAi has connected the agent.
+This release allows the same phone number to be authorized on both Codex and Claude.
 
-## Connect first, then Test
+## Shared phone numbers
 
-On a fresh install, the top of each agent pane shows **Connect**. After FlipAi has successfully verified that agent, the same top row changes to **Disconnect** and **Test**. Disconnecting one agent returns only that agent to Connect and does not sign the Windows account out of ChatGPT/Codex or Claude Code.
+A number can now appear in both agents' Allowed phone numbers lists. Each agent still keeps its own access setting (Texts and calls, Texts only, or Calls only), security code, workspace, conversation, and reply behavior.
 
-The duplicate Claude **Connection** card that was far down the Claude page has been removed. Claude connection is now controlled from the top of the Claude pane, so there is no second Connect / Check connection / Disconnect area to scroll to.
+When a shared number is allowed to text both agents, the configured SMS shortcuts choose the destination: `C:` routes to Codex and `A:` routes to Claude by default. If the message is unprefixed, FlipAi sends it to the configured default agent. A per-agent security code may still come first, for example `mycode A: check this`.
 
-## Fresh Claude Code setup
+Sharing a number does not widen permissions. If the number is Texts only on Codex and Calls only on Claude, an `A:` text remains blocked because Claude was not granted SMS access.
 
-If Claude Code is not installed and the Claude executable path is left on FlipAi's normal automatic setting, pressing **Connect** now opens a visible PowerShell window, runs Anthropic's official Windows Claude Code installer, and then starts `claude auth login`. Claude Code opens its normal browser authorization flow for the user to approve.
+Phone calls do not contain an SMS shortcut. If the same caller is allowed to call both agents, the configured default agent receives the call. If only one agent grants call access, that agent receives it.
 
-FlipAi watches that sign-in automatically. Once authorization succeeds, FlipAi records Claude as connected and rebuilds the background bridge so the newly installed Claude executable is available immediately. There is no separate **Check connection** step.
+## Fixed
 
-An explicitly configured custom Claude executable path is still respected. If that custom path is wrong, FlipAi reports it rather than silently installing a different copy.
-
-## Compatibility and safety
-
-The existing Claude token fallback and legacy verification route remain supported for upgraded installations, but they are no longer exposed as a duplicate connection panel. Existing Codex and Claude account sessions belong to the Windows user and are not logged out when the user disconnects an agent from FlipAi.
+The Agents page no longer rejects a number merely because it is already present on the other agent. Shared numbers also survive restart/config recovery instead of being silently removed from the second agent.
 
 ## Verified
 
-The release workflow repeats the real-browser Google Voice call-flow harness, the full Linux and Windows test suites, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, Microsoft Defender scan when available, installer build, real install/uninstall smoke test, and SHA-256 generation before publishing.
+The release workflow runs the real-browser Google Voice call-flow harness, full Linux and Windows test suites, `go vet`, race tests, Windows x64 build, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation before publishing.
