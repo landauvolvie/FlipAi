@@ -1,21 +1,23 @@
-# FlipAi v0.46.5
+# FlipAi v0.46.6
 
-This release starts the regular ChatGPT Chat integration using the direct-backend approach first, without accessibility automation and without a hidden browser.
+This release corrects the first ChatGPT Chat direct-backend diagnostic so it cannot report a successful ChatGPT connection merely because Codex pipes exist on the same PC.
 
-## ChatGPT Chat — direct backend experiment
+## ChatGPT Chat diagnostic fix
 
-- Adds a new **ChatGPT Chat** entry on the Agents page.
-- The first published step is a safe **Probe direct backend** diagnostic.
-- The probe looks for ChatGPT desktop processes, ChatGPT-owned loopback listeners, relevant local named pipes, and safe Chromium debugging metadata.
-- It does **not** move the mouse, focus the ChatGPT window, type into the UI, inspect the accessibility tree, or open a hidden ChatGPT browser.
-- It does **not** read or store ChatGPT cookies, bearer tokens, Local Storage, or full process command lines.
-- Results are written to Activity so the real machine can tell us which local transport to implement next.
-- ChatGPT Chat is intentionally **not an SMS destination yet**. The direct protocol must be proven on the installed desktop app before routing real messages through it.
+- Fixes the false-positive result seen on the real Windows test PC where `codex-browser-use-*`, `codex-computer-use-*`, and `codex-ipc` were incorrectly counted as ChatGPT Chat backend candidates.
+- Codex pipes are now listed separately and explicitly ignored for regular ChatGPT Chat connectivity.
+- A globally visible named-pipe name by itself no longer turns the diagnostic green because the pipe namespace does not prove which process owns that pipe.
+- The diagnostic only reports a proven candidate when Windows ties a loopback/Chromium transport to a ChatGPT process.
+- The Agents page now says **Not connected** and labels the button **Run backend diagnostic** so it cannot be mistaken for an Enable button.
+- The page explicitly states that the diagnostic does not enable ChatGPT and that SMS routing is unavailable until a usable direct backend is proven and tested.
+- Adds a regression test for the exact false-positive pipe set found on the user's PC.
 
-## Why this is staged
+## What this means
 
-Codex has a supported backend interface, while regular ChatGPT Chat does not currently expose the same documented CLI/app-server contract. Shipping the discovery probe first lets FlipAi identify a stable background path on the real Windows app without falling back to fragile UI clicking.
+The v0.46.5 green result did not prove that regular ChatGPT Chat was connected. The test machine showed the ChatGPT desktop app running, no ChatGPT-owned loopback listener, no ChatGPT-owned Chromium DevTools listener, and only Codex-named pipes. v0.46.6 reports that state accurately instead of presenting it as success.
+
+This release does not enable regular ChatGPT Chat as an SMS agent yet. It makes the diagnostic trustworthy so the next direct-backend work starts from verified ChatGPT-owned transport evidence rather than Codex IPC from the neighboring agent.
 
 ## Verified
 
-The release keeps the normal FlipAi CI coverage: Linux and Windows tests, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation.
+The normal FlipAi CI still covers Linux and Windows tests, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation.

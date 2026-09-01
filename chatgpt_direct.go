@@ -9,18 +9,19 @@ import (
 	"time"
 )
 
-// chatGPTDirectProbeResult is intentionally metadata-only. The first direct
-// ChatGPT experiment must discover a supported/local transport without copying
-// browser cookies, bearer tokens, or the desktop app's private credentials.
+// chatGPTDirectProbeResult is intentionally metadata-only. The direct ChatGPT
+// experiment must discover a clean local transport without copying browser
+// cookies, bearer tokens, or the desktop app's private credentials.
 type chatGPTDirectProbeResult struct {
-	Supported     bool     `json:"supported"`
-	ProcessCount  int      `json:"processCount"`
-	ProcessNames  []string `json:"processNames,omitempty"`
-	LoopbackPorts []int    `json:"loopbackPorts,omitempty"`
-	CDPPorts      []int    `json:"cdpPorts,omitempty"`
-	NamedPipes    []string `json:"namedPipes,omitempty"`
-	DebugPipe     bool     `json:"debugPipe,omitempty"`
-	Detail        string   `json:"detail,omitempty"`
+	Supported       bool     `json:"supported"`
+	ProcessCount    int      `json:"processCount"`
+	ProcessNames    []string `json:"processNames,omitempty"`
+	LoopbackPorts   []int    `json:"loopbackPorts,omitempty"`
+	CDPPorts        []int    `json:"cdpPorts,omitempty"`
+	NamedPipes      []string `json:"namedPipes,omitempty"`
+	IgnoredPipes    []string `json:"ignoredPipes,omitempty"`
+	DebugPipe       bool     `json:"debugPipe,omitempty"`
+	Detail          string   `json:"detail,omitempty"`
 }
 
 func uniqueSortedInts(in []int) []int {
@@ -63,6 +64,15 @@ func joinInts(in []int) string {
 	return strings.Join(parts, ", ")
 }
 
+// provenTransport is deliberately stricter than "we saw an interesting name".
+// A named pipe discovered from the global Windows pipe namespace has no owner
+// attached to it, so its name alone must never turn the probe green. A direct
+// candidate is proven only when Windows ties a loopback listener to a ChatGPT
+// process, or when a ChatGPT-owned Chromium debugging channel is identified.
+func (p chatGPTDirectProbeResult) provenTransport() bool {
+	return len(p.LoopbackPorts) > 0 || len(p.CDPPorts) > 0 || p.DebugPipe
+}
+
 func (p chatGPTDirectProbeResult) summary() string {
 	if !p.Supported {
 		if p.Detail != "" {
@@ -71,27 +81,30 @@ func (p chatGPTDirectProbeResult) summary() string {
 		return "Direct ChatGPT discovery is only available on Windows."
 	}
 	if p.ProcessCount == 0 {
-		return "ChatGPT desktop was not found running. Open the ChatGPT desktop app, sign in, then run the probe again."
+		return "ChatGPT desktop was not found running. Open the ChatGPT desktop app, sign in, then run the diagnostic again."
 	}
 	lines := []string{
 		fmt.Sprintf("ChatGPT desktop processes: %d", p.ProcessCount),
-		"Loopback listeners owned by ChatGPT: " + joinInts(p.LoopbackPorts),
-		"Chromium DevTools listeners: " + joinInts(p.CDPPorts),
+		"ChatGPT-owned loopback listeners: " + joinInts(p.LoopbackPorts),
+		"ChatGPT-owned Chromium DevTools listeners: " + joinInts(p.CDPPorts),
 	}
 	if p.DebugPipe {
-		lines = append(lines, "Chromium remote-debugging pipe: advertised")
+		lines = append(lines, "ChatGPT Chromium remote-debugging pipe: advertised")
 	} else {
-		lines = append(lines, "Chromium remote-debugging pipe: not advertised")
+		lines = append(lines, "ChatGPT Chromium remote-debugging pipe: not advertised")
 	}
 	if len(p.NamedPipes) > 0 {
-		lines = append(lines, "Relevant named pipes: "+strings.Join(p.NamedPipes, ", "))
+		lines = append(lines, "ChatGPT/OpenAI-named pipes (ownership not proven): "+strings.Join(p.NamedPipes, ", "))
 	} else {
-		lines = append(lines, "Relevant named pipes: none found")
+		lines = append(lines, "ChatGPT/OpenAI-named pipes: none found")
 	}
-	if len(p.CDPPorts) > 0 || p.DebugPipe || len(p.NamedPipes) > 0 || len(p.LoopbackPorts) > 0 {
-		lines = append(lines, "Result: FlipAi found at least one background transport candidate. The next step is protocol identification; SMS routing is intentionally not enabled yet.")
+	if len(p.IgnoredPipes) > 0 {
+		lines = append(lines, "Codex pipes ignored: "+strings.Join(p.IgnoredPipes, ", "))
+	}
+	if p.provenTransport() {
+		lines = append(lines, "Result: FlipAi proved at least one ChatGPT-owned background transport candidate. This is still only a diagnostic; ChatGPT SMS routing is not enabled yet.")
 	} else {
-		lines = append(lines, "Result: the desktop app is running, but it exposed no obvious local transport. The next diagnostic will inspect app IPC without using accessibility or stealing focus.")
+		lines = append(lines, "Result: diagnostic completed, but no ChatGPT-owned direct transport was proven. ChatGPT is NOT connected or enabled. Codex pipes do not count as ChatGPT Chat connectivity.")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -101,20 +114,27 @@ func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	probe, err := platformProbeChatGPTDirect(ctx)
 	if err != nil {
-		activityLogForStatePath(a.statePath).Add("error", "agent", "ChatGPT direct-backend probe failed: "+truncate(err.Error(), 220), "", "G", "")
-		renderResult(w, r, http.StatusInternalServerError, false, "ChatGPT direct probe failed", err.Error())
+		activityLogForStatePath(a.statePath).Add("error", "agent", "ChatGPT direct-backend diagnostic failed: "+truncate(err.Error(), 220), "", "G", "")
+		renderResult(w, r, http.StatusInternalServerError, false, "ChatGPT diagnostic failed", err.Error())
 		return
 	}
 	probe.LoopbackPorts = uniqueSortedInts(probe.LoopbackPorts)
 	probe.CDPPorts = uniqueSortedInts(probe.CDPPorts)
 	probe.ProcessNames = uniqueSortedStrings(probe.ProcessNames)
 	probe.NamedPipes = uniqueSortedStrings(probe.NamedPipes)
+	probe.IgnoredPipes = uniqueSortedStrings(probe.IgnoredPipes)
 	message := probe.summary()
 	level := "info"
-	if probe.ProcessCount == 0 {
+	if probe.ProcessCount == 0 || !probe.provenTransport() {
 		level = "warn"
 	}
-	activityLogForStatePath(a.statePath).Add(level, "agent", "ChatGPT direct-backend probe: "+truncate(strings.ReplaceAll(message, "\n", " · "), 500), "", "G", "")
-	ok := probe.ProcessCount > 0 && (len(probe.LoopbackPorts) > 0 || len(probe.NamedPipes) > 0 || probe.DebugPipe)
-	renderResult(w, r, http.StatusOK, ok, "ChatGPT direct backend probe", message)
+	activityLogForStatePath(a.statePath).Add(level, "agent", "ChatGPT direct-backend diagnostic: "+truncate(strings.ReplaceAll(message, "\n", " · "), 500), "", "G", "")
+	ok := probe.ProcessCount > 0 && probe.provenTransport()
+	title := "ChatGPT diagnostic complete"
+	if ok {
+		title = "ChatGPT transport candidate found"
+	} else if probe.ProcessCount > 0 {
+		title = "ChatGPT is not connected yet"
+	}
+	renderResult(w, r, http.StatusOK, ok, title, message)
 }
