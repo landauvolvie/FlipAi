@@ -78,7 +78,7 @@ func chatGPTDirectUI(body string) string {
     #agent-chatgpt:checked~.agents-shell #chatgpt-pane{display:block}
     </style>`
 
-	marker := "\n  </div>\n</div>\n{{end}}`"
+	marker := "\n  </div>\n</div>\n{{end}}"
 	idx := strings.LastIndex(body, marker)
 	if idx < 0 {
 		panic("FlipAi Agents template changed around ChatGPT direct pane insertion")
