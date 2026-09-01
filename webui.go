@@ -369,14 +369,10 @@ func (a *App) startBridge(ctx context.Context) {
 		log.Printf("Gmail not configured for %s; background host is alive and waiting for setup", gmailMethodLabel(cfg.Gmail.Method))
 		return
 	}
-	if cfg.Security.CodeHash == "" {
-		log.Printf("SMS security code not configured; waiting for setup")
-		return
-	}
-	if _, err := normalizeAllowedPhoneList(cfg.GoogleVoice.AllowedFrom); err != nil {
-		log.Printf("SMS phone allowlist invalid: %v; waiting for setup", err)
-		return
-	}
+	// Gmail monitoring is transport-level and must start as soon as the mailbox
+	// is connected. Phone allowlists and security codes belong to routing and are
+	// enforced when a message is read; they must never prevent the mailbox from
+	// being watched or leave "Last mailbox check" stuck at "Not checked yet".
 	tctx, cancelMail := context.WithTimeout(ctx, 35*time.Second)
 	if err := mc.Test(tctx); err != nil {
 		cancelMail()
@@ -416,16 +412,20 @@ func (a *App) startBridge(ctx context.Context) {
 	a.mu.Lock()
 	a.codex, a.claude, a.bridge = codex, claude, b
 	a.mu.Unlock()
-	// Live mode is attached after the bridge exists so its preflight can log
-	// through the same Activity log the user reads, and so a refusal leaves a
-	// working per-message bridge rather than no bridge at all.
-	a.startClaudeLive(ctx, cfg, b)
 	// A finished turn is what keeps the Agents tiles honest; without this they
 	// only ever showed the last time someone pressed a Test button.
 	b.SetAgentResultSink(func(agent string, ok bool, detail string) {
 		a.recordCheck(agent, ok, detail)
 	})
+	// Start the mailbox loop before any optional Claude live-session preflight.
+	// Bridge.Run performs an immediate first poll, then App Password mode enters
+	// IMAP IDLE so Gmail wakes FlipAi on EXISTS/RECENT instead of waiting for a
+	// polling interval. The 30-second poll remains only as a dropped-IDLE backup.
 	go b.Run(ctx)
+	// Live mode is attached after the bridge exists so its preflight can log
+	// through the same Activity log the user reads, and so a refusal leaves a
+	// working per-message bridge rather than no bridge at all.
+	a.startClaudeLive(ctx, cfg, b)
 	go a.runAgentHealthProbe(ctx)
 	// Establish which Claude credential this machine is on before the first text
 	// arrives, so the Agents page describes the real connection and a
