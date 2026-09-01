@@ -1,27 +1,25 @@
-# FlipAi v0.46.0
+# FlipAi v0.46.1
 
-This release fixes the two low-level Windows failures captured by the v0.45 field diagnostic: ChatGPT exposed the correct **Start voice chat** control but never entered live Voice, and Windows refused FlipAi's per-app cable route with `HRESULT 0x80070057`.
+This release fixes first-run agent connection on a clean Windows PC. Codex and Claude now begin with a real **Connect** state instead of exposing Test or Disconnect before FlipAi has connected the agent.
 
-## Verified live-Voice activation ladder
+## Connect first, then Test
 
-FlipAi no longer treats a successful Win32 mouse command as proof that ChatGPT handled the Voice button. It finds the same real live-Voice control, then tries distinct activation mechanisms in a controlled order: Windows UI Automation Invoke, focused keyboard Enter, legacy accessibility default action, and finally a real pointer press.
+On a fresh install, the top of each agent pane shows **Connect**. After FlipAi has successfully verified that agent, the same top row changes to **Disconnect** and **Test**. Disconnecting one agent returns only that agent to Connect and does not sign the Windows account out of ChatGPT/Codex or Claude Code.
 
-After every activation attempt, FlipAi reads ChatGPT's accessibility state again. It only succeeds when live Voice is actually active. If one method is accepted by Windows but ignored by Chromium, FlipAi advances to the next method instead of spending the whole call believing the button was clicked.
+The duplicate Claude **Connection** card that was far down the Claude page has been removed. Claude connection is now controlled from the top of the Claude pane, so there is no second Connect / Check connection / Disconnect area to scroll to.
 
-Dictation/microphone controls and conversation titles remain excluded from the live-Voice matcher.
+## Fresh Claude Code setup
 
-## Electron audio-session routing
+If Claude Code is not installed and the Claude executable path is left on FlipAi's normal automatic setting, pressing **Connect** now opens a visible PowerShell window, runs Anthropic's official Windows Claude Code installer, and then starts `claude auth login`. Claude Code opens its normal browser authorization flow for the user to approve.
 
-The v0.45 HSTRING/AudioPolicyConfig correction matched the current EarTrumpet interface, but the field test showed the remaining `0x80070057` failure on the ChatGPT window process. Electron applications can create their audio stream in a child/utility process rather than the PID that owns the top-level window.
+FlipAi watches that sign-in automatically. Once authorization succeeds, FlipAi records Claude as connected and rebuilds the background bridge so the newly installed Claude executable is available immediately. There is no separate **Check connection** step.
 
-v0.46 applies the persisted playback and recording endpoints across the live ChatGPT/Codex Electron process tree, while retaining the current Windows AudioPolicyConfig interface, native HSTRING ABI, SWD endpoint form and raw-MMDevice compatibility fallback.
+An explicitly configured custom Claude executable path is still respected. If that custom path is wrong, FlipAi reports it rather than silently installing a different copy.
 
-FlipAi routes once before live Voice starts and **routes again immediately after live Voice is confirmed active**, when Electron's audio process definitely exists. That second pass is specifically for the caller-to-agent virtual cable path.
+## Compatibility and safety
 
-## Call behavior
-
-The complete call path remains automatic: an authorized Google Voice call is answered, the selected desktop voice frontend is found or launched, the virtual audio route is applied, the real live-Voice control is activated and verified, and the session is torn down when the call ends. No manual Voice button press is part of the design.
+The existing Claude token fallback and legacy verification route remain supported for upgraded installations, but they are no longer exposed as a duplicate connection panel. Existing Codex and Claude account sessions belong to the Windows user and are not logged out when the user disconnects an agent from FlipAi.
 
 ## Verified
 
-Before the version bump, this code passed the real-browser Google Voice call-flow harness, full Linux suite, Windows tests, `go vet`, race tests, Windows x64 build, Google Voice receiver check, Microsoft Defender scan, installer build, installer install/uninstall smoke test and SHA-256 generation. The v0.46 release workflow repeats the release gates before publishing.
+The release workflow repeats the real-browser Google Voice call-flow harness, the full Linux and Windows test suites, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, Microsoft Defender scan when available, installer build, real install/uninstall smoke test, and SHA-256 generation before publishing.
