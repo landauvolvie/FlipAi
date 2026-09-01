@@ -56,14 +56,6 @@ const cleanSettingsHTML = `{{define "content"}}
 
 <script>
 (() => {
-  // Update checks are an app behavior now, not a user preference. The backend
-  // also normalizes these values on load; this request upgrades a currently
-  // running older config immediately without waiting for a restart.
-  try {
-    const p=new URLSearchParams(); p.set('autoUpdate','0'); p.set('updateCheckMinutes','50');
-    fetch('/settings/updates',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString(),redirect:'manual'}).catch(()=>{});
-  } catch (_) {}
-
   function organizeVoice(card){
     if(!card || card.classList.contains('voice-clean')) return;
     card.classList.add('voice-clean');
