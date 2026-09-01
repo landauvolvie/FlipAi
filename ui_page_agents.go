@@ -79,7 +79,7 @@ const agentsPageHTML = `
 {{define "agentAccess"}}
 <section class="card">
   <div class="card-head divided">
-    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}, by text or by call. This list belongs to {{.Name}} alone: a number on the other agent&#39;s list cannot reach {{.Name}}, and a number here cannot reach the other agent — not even by asking for it by name in a text.</p></div>
+    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}, by text or by call. The same phone can be allowed on both agents. For a shared number, start a text with <b>{{.Prefix}}:</b> to choose {{.Name}}; an unprefixed text uses the default agent. Calls have no SMS shortcut, so if both agents allow the same caller, the default agent answers.</p></div>
   </div>
   <div class="card-body">
     {{if .Phones}}
