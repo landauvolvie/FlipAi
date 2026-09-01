@@ -1,15 +1,21 @@
-# FlipAi v0.46.3
+# FlipAi v0.46.4
 
-This release fixes Gmail / Google Voice detection so a valid Gmail App Password starts mailbox monitoring automatically and new Google Voice texts are detected with the lowest practical latency.
+This release cleans up Settings so the page contains only the app-level controls a normal user needs, while the detailed agent and connection configuration stays on the pages that own it.
 
-## Gmail monitoring
+## Settings cleanup
 
-- Gmail monitoring starts as soon as the App Password connection is usable; incomplete phone or security setup no longer leaves the mailbox at **Not checked yet**.
-- App Password mode uses IMAP IDLE, so Gmail wakes FlipAi when new mail arrives instead of waiting for a normal polling interval.
-- The first mailbox check happens immediately when the bridge starts.
-- The 30-second mailbox poll remains only as a fallback if the IMAP IDLE connection is dropped.
-- Gmail keeps detecting and queueing new texts even while Codex or Claude is busy with a previous turn.
+- Removed the large status tiles from the top of Settings.
+- Updates are now a compact version/check area. Automatic installation and update-frequency controls are no longer exposed.
+- FlipAi checks for a new release in the background on a 50-minute default cadence; installing a new version remains a deliberate action.
+- Startup now shows only **Start FlipAi with Windows** and **Start before sign-in**.
+- Removed Appearance, Notifications, This install, Shared routing, Local service, Log files, Service tools, Close to tray, and Repair startup from Settings.
+- Fresh installs keep the light appearance by default.
+- Agent-owned routing and conversation behavior remain on the Agents page instead of being duplicated in Settings.
+
+## Google Voice calling
+
+The calling section is less overwhelming: the main calling switch and Google Voice account stay visible, while detailed call status/diagnostics and desktop voice-app controls are grouped into expandable sections.
 
 ## Verified
 
-Regression tests cover Gmail startup gating, immediate IMAP IDLE wake, initial mailbox checks, and mailbox detection during long agent turns. The release workflow also runs the real-browser Google Voice harness, Linux and Windows test suites, `go vet`, race tests, Windows x64 build, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation before publishing.
+Regression coverage checks the simplified Settings surface, the 50-minute update migration, and disabled unattended installs. The normal build workflow also runs the real-browser Google Voice harness, Linux and Windows test suites, `go vet`, race tests, Windows x64 build, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation.
