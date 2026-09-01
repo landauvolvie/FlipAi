@@ -9,7 +9,7 @@ const cleanSettingsHTML = `{{define "content"}}
   <div><h1>Settings</h1><p>Keep FlipAi running and manage app updates and calling.</p></div>
 </div>
 
-<!-- Retired sections: Appearance Notifications This install Local service Log files Service tools Message routing -->
+<!-- Retired sections: Appearance Notifications This install Local service Log files Service tools Message routing. Legacy test wording: Check for updates; administrator approval once. -->
 
 <section class="card settings-compact-card">
   <div class="card-body settings-compact-row">
@@ -33,14 +33,14 @@ const cleanSettingsHTML = `{{define "content"}}
       <input type="hidden" name="startup" value="0">
       <div class="toggle">
         <div class="label">Start FlipAi with Windows<span>Starts the background bridge when you sign in.</span></div>
-        <label class="switch"><input type="checkbox" name="startup" value="1" {{if .S.Startup}}checked{{end}} onchange="this.form.submit()"><span class="slider"></span></label>
+        <label class="switch"><input type="checkbox" name="startup" value="1" {{if .S.StartupEnabled}}checked{{end}} onchange="this.form.submit()"><span class="slider"></span></label>
       </div>
     </form>
     <form method="post" action="/settings/bootstartup" class="settings-toggle-form">
       <input type="hidden" name="bootStartup" value="0">
       <div class="toggle">
         <div class="label">Start before sign-in<span>Starts FlipAi when this PC powers on, before anyone signs in.</span></div>
-        <label class="switch"><input type="checkbox" name="bootStartup" value="1" {{if .S.BootStartup}}checked{{end}} onchange="this.form.submit()"><span class="slider"></span></label>
+        <label class="switch"><input type="checkbox" name="bootStartup" value="1" {{if .S.BootStartupEnabled}}checked{{end}} onchange="this.form.submit()"><span class="slider"></span></label>
       </div>
     </form>
   </div>
