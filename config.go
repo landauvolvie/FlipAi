@@ -62,19 +62,15 @@ type Config struct {
 	UI          UIConfig          `json:"ui"`
 }
 
-// UIConfig holds desktop-window preferences. Nothing here changes how SMS is
-// routed; these are only the app-window behaviours the Settings page offers.
+// UIConfig holds legacy desktop-window preferences. Settings intentionally no
+// longer exposes appearance, notification, or close-to-tray controls; loadConfig
+// normalizes them to the simple app defaults below so an old config cannot leave
+// a hidden preference active forever.
 type UIConfig struct {
-	Theme   string `json:"theme"`   // light, dark, or system
-	Compact bool   `json:"compact"` // tighter spacing in the desktop window
-
-	// Alerts shows an in-window banner when a new error reaches the activity
-	// log while FlipAi is open; AlertSound adds a short tone to that banner.
+	Theme   string `json:"theme"`
+	Compact bool   `json:"compact"`
 	Alerts     bool `json:"alerts"`
 	AlertSound bool `json:"alertSound"`
-
-	// CloseToTray keeps the background bridge alive when the desktop window is
-	// closed. Turning it off makes closing the window quit FlipAi completely.
 	CloseToTray bool `json:"closeToTray"`
 }
 
@@ -157,35 +153,20 @@ type ClaudeConfig struct {
 	SessionMode string `json:"sessionMode,omitempty"`
 }
 
-// UpdateConfig controls how FlipAi keeps itself current. The check runs in the
-// background host, so a new release is noticed without anyone opening Settings.
+// UpdateConfig is kept for compatibility with existing bridge.json files. The
+// Settings page no longer exposes an update cadence or unattended installs:
+// FlipAi checks in the background on the app default and installation remains a
+// deliberate user action.
 type UpdateConfig struct {
-	// CheckHours is the retired hours-only setting. It is still read so an
-	// existing install keeps the cadence its owner chose, and it is migrated to
-	// CheckMinutes on load; nothing writes it any more.
-	CheckHours int `json:"checkHours,omitempty"`
-
-	// CheckMinutes is how often the background check runs. Minutes rather than
-	// hours because an hour was the smallest cadence the old setting could
-	// express, which made a published fix take up to an hour to reach anyone.
-	// Clamped on load so a hand-edited config cannot poll GitHub in a tight
-	// loop.
-	CheckMinutes int `json:"checkMinutes,omitempty"`
-
-	// Automatic installs a verified update without waiting to be asked. FlipAi
-	// still refuses to run an installer whose checksum does not match, and it
-	// waits for the current SMS turn to finish before restarting anything.
-	Automatic bool `json:"automatic"`
+	CheckHours   int  `json:"checkHours,omitempty"`
+	CheckMinutes int  `json:"checkMinutes,omitempty"`
+	Automatic    bool `json:"automatic"`
 }
 
 const (
-	// Ten minutes is the default: frequent enough that a published fix reaches
-	// an unattended bridge the same morning, and far below what GitHub's
-	// unauthenticated release endpoint objects to. The floor is five minutes so
-	// a hand-edited config cannot turn the check into a hot loop.
 	updateCheckMinutesMin     = 5
 	updateCheckMinutesMax     = 7 * 24 * 60
-	updateCheckMinutesDefault = 10
+	updateCheckMinutesDefault = 50
 )
 
 // checkInterval is the validated background check period.
@@ -194,15 +175,14 @@ func (u UpdateConfig) checkInterval() time.Duration {
 	return time.Duration(m) * time.Minute
 }
 
-// normalizedCheckMinutes resolves the effective cadence, migrating an install
-// that still only has the retired hours value.
-//
-// The migration is deliberately one-way and lossy in one direction: an install
-// that never changed the old default of 6 hours is moved onto the new 10-minute
-// default rather than kept at 6 hours, because that default was a limitation
-// rather than a preference. A cadence the user actually chose is preserved.
+// normalizedCheckMinutes resolves the effective cadence. Ten minutes was the
+// old UI/default value; because that control has been retired, an install still
+// carrying 10 is migrated to the new 50-minute app default.
 func (u UpdateConfig) normalizedCheckMinutes() int {
 	m := u.CheckMinutes
+	if m == 10 {
+		m = updateCheckMinutesDefault
+	}
 	if m == 0 && u.CheckHours > 0 {
 		if u.CheckHours == retiredUpdateCheckHoursDefault {
 			m = updateCheckMinutesDefault
@@ -217,8 +197,7 @@ func (u UpdateConfig) normalizedCheckMinutes() int {
 }
 
 // retiredUpdateCheckHoursDefault is the value the hours-only setting shipped
-// with. It is kept only so the migration can tell "never changed it" apart from
-// "chose six hours".
+// with. It is kept only so old files migrate cleanly.
 const retiredUpdateCheckHoursDefault = 6
 
 type SecurityConfig struct {
@@ -366,16 +345,11 @@ func defaultConfig(dataDir string) Config {
 			ProgressUpdates:         true,
 			ProgressIntervalSeconds: 120,
 		},
-		// CheckMinutes is deliberately left unset. loadConfig seeds these
-		// defaults and then unmarshals the file over them, so a value here
-		// would look like an explicit choice and suppress the migration for an
-		// install whose file still only carries the retired checkHours.
-		// normalizedCheckMinutes supplies the default for an unset value.
-		Updates:  UpdateConfig{Automatic: true},
+		Updates:  UpdateConfig{Automatic: false},
 		Codex:    CodexConfig{ApprovalPolicy: "never"},
 		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
 		Security: SecurityConfig{RequireCode: true},
-		UI:       UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
+		UI:       UIConfig{Theme: ThemeLight, Compact: false, Alerts: false, AlertSound: false, CloseToTray: true},
 	}
 }
 
@@ -550,20 +524,12 @@ func loadConfig(path, dataDir string) (Config, error) {
 		cfg.Claude.PermissionMode = claudeFullAccess
 	}
 	cfg.Claude.PermissionMode = normalizeClaudePermissionMode(cfg.Claude.PermissionMode)
-	// Installs made before automatic updates existed have no updates block, so
-	// decoding leaves Automatic false. Probe for the block so an absent one
-	// takes the default and an explicit one keeps the user's choice.
-	var updProbe struct {
-		Updates *UpdateConfig `json:"updates"`
-	}
-	if json.Unmarshal(b, &updProbe) == nil && updProbe.Updates == nil {
-		cfg.Updates = defaultConfig(dataDir).Updates
-	}
-	// Resolve the cadence last, after the absent-block probe above may have
-	// replaced the whole Updates struct. Running it before that probe would
-	// have the default overwrite the migrated value.
+	// Keep reading the old updates block for file compatibility, but the user
+	// no longer has an automatic-install switch. Existing true values are
+	// disabled on upgrade, and the former 10-minute default migrates to 50.
 	cfg.Updates.CheckMinutes = cfg.Updates.normalizedCheckMinutes()
 	cfg.Updates.CheckHours = 0
+	cfg.Updates.Automatic = false
 	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
 		cfg.DefaultAgent = "C"
 	}
@@ -579,17 +545,15 @@ func loadConfig(path, dataDir string) (Config, error) {
 			return cfg, err
 		}
 	}
-	// Installs made before the desktop redesign have no ui block at all, and
-	// decoding leaves those booleans false — which would silently turn
-	// close-to-tray off. Probe for the block so an absent one keeps the
-	// defaults while an explicit one keeps the user's choices.
-	var probe struct {
-		UI *UIConfig `json:"ui"`
-	}
-	if json.Unmarshal(b, &probe) == nil && probe.UI == nil {
-		cfg.UI = defaultConfig(dataDir).UI
-	}
-	cfg.UI.Theme = normalizeTheme(cfg.UI.Theme)
+	// Appearance, notification and close behavior are no longer settings. Keep
+	// the desktop predictable across old and new installs: light, standard
+	// spacing, no in-window alert preference, and closing the window leaves the
+	// background bridge alive.
+	cfg.UI.Theme = ThemeLight
+	cfg.UI.Compact = false
+	cfg.UI.Alerts = false
+	cfg.UI.AlertSound = false
+	cfg.UI.CloseToTray = true
 	syncAllowedNumbers(&cfg.GoogleVoice)
 	// Allowed numbers, security codes and reply behaviour now belong to the
 	// agent they reach. Move a pre-agent configuration onto the agents, then
