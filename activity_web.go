@@ -25,6 +25,15 @@ func (a *App) activityClear(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) codexTestCorrected(w http.ResponseWriter, r *http.Request) {
+	// v0.46.5 starts regular ChatGPT Chat as an experimental direct-backend
+	// discovery mode. Reuse the already-authenticated read-only agent test route
+	// while the protocol is being proven so this experiment does not widen the
+	// local HTTP surface. It never starts Codex when this explicit flag is set.
+	if r.URL.Query().Get("chatgpt-direct") == "1" {
+		a.chatGPTDirectProbe(w, r)
+		return
+	}
+
 	a.mu.Lock()
 	cfg := a.cfg
 	a.mu.Unlock()
