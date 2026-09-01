@@ -1,21 +1,15 @@
-# FlipAi v0.46.2
+# FlipAi v0.46.3
 
-This release allows the same phone number to be authorized on both Codex and Claude.
+This release fixes Gmail / Google Voice detection so a valid Gmail App Password starts mailbox monitoring automatically and new Google Voice texts are detected with the lowest practical latency.
 
-## Shared phone numbers
+## Gmail monitoring
 
-A number can now appear in both agents' Allowed phone numbers lists. Each agent still keeps its own access setting (Texts and calls, Texts only, or Calls only), security code, workspace, conversation, and reply behavior.
-
-When a shared number is allowed to text both agents, the configured SMS shortcuts choose the destination: `C:` routes to Codex and `A:` routes to Claude by default. If the message is unprefixed, FlipAi sends it to the configured default agent. A per-agent security code may still come first, for example `mycode A: check this`.
-
-Sharing a number does not widen permissions. If the number is Texts only on Codex and Calls only on Claude, an `A:` text remains blocked because Claude was not granted SMS access.
-
-Phone calls do not contain an SMS shortcut. If the same caller is allowed to call both agents, the configured default agent receives the call. If only one agent grants call access, that agent receives it.
-
-## Fixed
-
-The Agents page no longer rejects a number merely because it is already present on the other agent. Shared numbers also survive restart/config recovery instead of being silently removed from the second agent.
+- Gmail monitoring starts as soon as the App Password connection is usable; incomplete phone or security setup no longer leaves the mailbox at **Not checked yet**.
+- App Password mode uses IMAP IDLE, so Gmail wakes FlipAi when new mail arrives instead of waiting for a normal polling interval.
+- The first mailbox check happens immediately when the bridge starts.
+- The 30-second mailbox poll remains only as a fallback if the IMAP IDLE connection is dropped.
+- Gmail keeps detecting and queueing new texts even while Codex or Claude is busy with a previous turn.
 
 ## Verified
 
-The release workflow runs the real-browser Google Voice call-flow harness, full Linux and Windows test suites, `go vet`, race tests, Windows x64 build, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation before publishing.
+Regression tests cover Gmail startup gating, immediate IMAP IDLE wake, initial mailbox checks, and mailbox detection during long agent turns. The release workflow also runs the real-browser Google Voice harness, Linux and Windows test suites, `go vet`, race tests, Windows x64 build, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation before publishing.
