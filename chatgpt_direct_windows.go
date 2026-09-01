@@ -15,7 +15,7 @@ import (
 
 func platformProbeChatGPTDirect(ctx context.Context) (chatGPTDirectProbeResult, error) {
 	// Do not inspect or return cookies, tokens, Local Storage, browser profiles,
-	// or process command lines. This probe only asks Windows which ChatGPT-owned
+	// or process command lines. This diagnostic only asks Windows which ChatGPT
 	// processes and local IPC/listeners exist so we can find a clean backend
 	// transport without ever touching the visible UI.
 	const script = `$ErrorActionPreference='Stop'
@@ -31,15 +31,24 @@ if ($pids.Count -gt 0) {
     ($pids -contains [int]$_.OwningProcess) -and ($_.LocalAddress -eq '127.0.0.1' -or $_.LocalAddress -eq '::1')
   } | ForEach-Object { [int]$_.LocalPort } | Sort-Object -Unique)
 }
-$pipes = @(Get-ChildItem '\\.\pipe\' -ErrorAction SilentlyContinue | Where-Object {
-  $_.Name -match '(?i)(chatgpt|openai|codex)'
-} | Select-Object -First 40 -ExpandProperty Name)
+$allPipes = @(Get-ChildItem '\\.\pipe\' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
+# Pipe names come from a machine-global namespace. A name is useful metadata,
+# but it does not prove ownership. In particular, the Codex view of the same
+# OpenAI desktop install creates codex-* pipes; those must never be treated as
+# regular ChatGPT Chat connectivity.
+$chatPipes = @($allPipes | Where-Object {
+  $_ -match '(?i)(chatgpt|openai)'
+} | Select-Object -First 40)
+$ignoredCodexPipes = @($allPipes | Where-Object {
+  $_ -match '(?i)^codex(?:-|$)'
+} | Select-Object -First 40)
 [pscustomobject]@{
   supported=$true
   processCount=$pids.Count
   processNames=@($names)
   loopbackPorts=@($listeners)
-  namedPipes=@($pipes)
+  namedPipes=@($chatPipes)
+  ignoredPipes=@($ignoredCodexPipes)
 } | ConvertTo-Json -Compress -Depth 5`
 
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
@@ -58,6 +67,7 @@ $pipes = @(Get-ChildItem '\\.\pipe\' -ErrorAction SilentlyContinue | Where-Objec
 		ProcessNames  []string `json:"processNames"`
 		LoopbackPorts []int    `json:"loopbackPorts"`
 		NamedPipes    []string `json:"namedPipes"`
+		IgnoredPipes  []string `json:"ignoredPipes"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return chatGPTDirectProbeResult{}, fmt.Errorf("decode Windows ChatGPT discovery: %w", err)
@@ -68,11 +78,12 @@ $pipes = @(Get-ChildItem '\\.\pipe\' -ErrorAction SilentlyContinue | Where-Objec
 		ProcessNames:  raw.ProcessNames,
 		LoopbackPorts: raw.LoopbackPorts,
 		NamedPipes:    raw.NamedPipes,
+		IgnoredPipes:  raw.IgnoredPipes,
 	}
 
 	// A local Chromium renderer can expose safe DevTools metadata on a listener
 	// it already owns. We do not ask the desktop app to open any port; we only
-	// classify listeners that already exist and belong to ChatGPT.
+	// classify listeners that already exist and belong to a ChatGPT process.
 	for _, port := range raw.LoopbackPorts {
 		if chatGPTDirectLooksLikeCDP(ctx, port) {
 			result.CDPPorts = append(result.CDPPorts, port)
