@@ -1,0 +1,51 @@
+name: patch-chatgpt-direct-v0465
+
+on:
+  push:
+    branches:
+      - feature/chatgpt-direct-probe-v0465
+    paths:
+      - .github/workflows/chatgpt-direct-v0465-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/chatgpt-direct-probe-v0465
+          fetch-depth: 0
+      - name: Wire route and release metadata
+        shell: python
+        run: |
+          from pathlib import Path
+
+          web = Path('webui.go')
+          text = web.read_text(encoding='utf-8')
+          needle = '\t\t"/gmail/test":         a.gmailTest,\n\t\t"/codex/test":         a.codexTestCorrected,'
+          repl = '\t\t"/gmail/test":          a.gmailTest,\n\t\t"/chatgpt-direct/probe": a.chatGPTDirectProbe,\n\t\t"/codex/test":          a.codexTestCorrected,'
+          if needle not in text:
+              raise SystemExit('webui.go route anchor changed')
+          web.write_text(text.replace(needle, repl, 1), encoding='utf-8')
+
+          cfg = Path('config.go')
+          text = cfg.read_text(encoding='utf-8')
+          old = 'const version = "0.46.4"'
+          if old not in text:
+              raise SystemExit('config.go version anchor changed')
+          cfg.write_text(text.replace(old, 'const version = "0.46.5"', 1), encoding='utf-8')
+
+          Path('VERSION').write_text('0.46.5\n', encoding='utf-8')
+          Path('docs/RELEASE-NOTES.md').write_text('''# FlipAi v0.46.5\n\nThis release starts the regular ChatGPT Chat integration using the direct-backend approach first, without accessibility automation and without a hidden browser.\n\n## ChatGPT Chat — direct backend experiment\n\n- Adds a new **ChatGPT Chat** entry on the Agents page.\n- The first published step is a safe **Probe direct backend** diagnostic.\n- The probe looks for ChatGPT desktop processes, ChatGPT-owned loopback listeners, relevant local named pipes, and safe Chromium debugging metadata.\n- It does **not** move the mouse, focus the ChatGPT window, type into the UI, inspect the accessibility tree, or open a hidden ChatGPT browser.\n- It does **not** read or store ChatGPT cookies, bearer tokens, Local Storage, or full process command lines.\n- Results are written to Activity so the real machine can tell us which local transport to implement next.\n- ChatGPT Chat is intentionally **not an SMS destination yet**. The direct protocol must be proven on the installed desktop app before routing real messages through it.\n\n## Why this is staged\n\nCodex has a supported backend interface, while regular ChatGPT Chat does not currently expose the same documented CLI/app-server contract. Shipping the discovery probe first lets FlipAi identify a stable background path on the real Windows app without falling back to fragile UI clicking.\n\n## Verified\n\nThe release keeps the normal FlipAi CI coverage: Linux and Windows tests, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation.\n''', encoding='utf-8')
+
+          Path('.github/workflows/chatgpt-direct-v0465-patch.yml').unlink()
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Wire ChatGPT direct probe and bump v0.46.5"
+          git push origin HEAD:feature/chatgpt-direct-probe-v0465
