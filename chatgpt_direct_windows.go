@@ -15,14 +15,13 @@ import (
 
 func platformProbeChatGPTDirect(ctx context.Context) (chatGPTDirectProbeResult, error) {
 	// Do not inspect or return cookies, tokens, Local Storage, browser profiles,
-	// or full command lines. This probe only asks Windows which ChatGPT-owned
+	// or process command lines. This probe only asks Windows which ChatGPT-owned
 	// processes and local IPC/listeners exist so we can find a clean backend
 	// transport without ever touching the visible UI.
 	const script = `$ErrorActionPreference='Stop'
 $procs = @(Get-CimInstance Win32_Process | Where-Object {
   $_.Name -match '^(ChatGPT|OpenAI).*\.exe$' -or
-  ($_.ExecutablePath -and $_.ExecutablePath -match '(?i)\\(ChatGPT|OpenAI)\\') -or
-  ($_.CommandLine -and $_.CommandLine -match '(?i)(^|[\\/])ChatGPT(\.exe)?([\"\s]|$)')
+  ($_.ExecutablePath -and $_.ExecutablePath -match '(?i)\\(ChatGPT|OpenAI)\\')
 })
 $pids = @($procs | ForEach-Object { [int]$_.ProcessId })
 $names = @($procs | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
@@ -35,22 +34,12 @@ if ($pids.Count -gt 0) {
 $pipes = @(Get-ChildItem '\\.\pipe\' -ErrorAction SilentlyContinue | Where-Object {
   $_.Name -match '(?i)(chatgpt|openai|codex)'
 } | Select-Object -First 40 -ExpandProperty Name)
-$debugPipe = $false
-$debugPorts = @()
-foreach ($p in $procs) {
-  $cmd = [string]$p.CommandLine
-  if ($cmd -match '(?i)--remote-debugging-pipe') { $debugPipe = $true }
-  $matches = [regex]::Matches($cmd, '(?i)--remote-debugging-port(?:=|\s+)(\d+)')
-  foreach ($m in $matches) { $debugPorts += [int]$m.Groups[1].Value }
-}
 [pscustomobject]@{
   supported=$true
   processCount=$pids.Count
   processNames=@($names)
   loopbackPorts=@($listeners)
-  hintedDebugPorts=@($debugPorts | Sort-Object -Unique)
   namedPipes=@($pipes)
-  debugPipe=$debugPipe
 } | ConvertTo-Json -Compress -Depth 5`
 
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
@@ -64,13 +53,11 @@ foreach ($p in $procs) {
 		return chatGPTDirectProbeResult{}, fmt.Errorf("Windows ChatGPT discovery: %s", msg)
 	}
 	var raw struct {
-		Supported        bool     `json:"supported"`
-		ProcessCount     int      `json:"processCount"`
-		ProcessNames     []string `json:"processNames"`
-		LoopbackPorts    []int    `json:"loopbackPorts"`
-		HintedDebugPorts []int    `json:"hintedDebugPorts"`
-		NamedPipes       []string `json:"namedPipes"`
-		DebugPipe        bool     `json:"debugPipe"`
+		Supported     bool     `json:"supported"`
+		ProcessCount  int      `json:"processCount"`
+		ProcessNames  []string `json:"processNames"`
+		LoopbackPorts []int    `json:"loopbackPorts"`
+		NamedPipes    []string `json:"namedPipes"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return chatGPTDirectProbeResult{}, fmt.Errorf("decode Windows ChatGPT discovery: %w", err)
@@ -81,13 +68,11 @@ foreach ($p in $procs) {
 		ProcessNames:  raw.ProcessNames,
 		LoopbackPorts: raw.LoopbackPorts,
 		NamedPipes:    raw.NamedPipes,
-		DebugPipe:     raw.DebugPipe,
-		CDPPorts:      append([]int(nil), raw.HintedDebugPorts...),
 	}
 
-	// A renderer can expose the Chrome DevTools protocol without advertising the
-	// flag in the parent process command line. Check only ChatGPT-owned loopback
-	// listeners and only the harmless /json/version metadata endpoint.
+	// A local Chromium renderer can expose safe DevTools metadata on a listener
+	// it already owns. We do not ask the desktop app to open any port; we only
+	// classify listeners that already exist and belong to ChatGPT.
 	for _, port := range raw.LoopbackPorts {
 		if chatGPTDirectLooksLikeCDP(ctx, port) {
 			result.CDPPorts = append(result.CDPPorts, port)
