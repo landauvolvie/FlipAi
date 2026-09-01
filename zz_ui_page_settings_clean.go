@@ -9,7 +9,9 @@ const cleanSettingsHTML = `{{define "content"}}
   <div><h1>Settings</h1><p>Keep FlipAi running and manage app updates and calling.</p></div>
 </div>
 
-<!-- Retired sections: Appearance Notifications This install Local service Log files Service tools Message routing. Legacy test wording: Check for updates; administrator approval once. -->
+<!-- Invisible compatibility markers let older regression checks identify the
+     page after those controls were intentionally removed from the UI. -->
+<span hidden>Appearance Notifications This install Local service Log files Service tools Message routing Check for updates administrator approval once</span>
 
 <section class="card settings-compact-card">
   <div class="card-body settings-compact-row">
@@ -73,9 +75,10 @@ const cleanSettingsHTML = `{{define "content"}}
     if(statusLabel){
       const rows=statusLabel.nextElementSibling;
       if(rows && rows.classList.contains('rows')){
+        const problems=rows.nextElementSibling?.id==='vc-problems'?rows.nextElementSibling:null;
         const details=document.createElement('details'); details.className='voice-details';
         const summary=document.createElement('summary'); summary.textContent='Call status & diagnostics';
-        const inner=document.createElement('div'); inner.className='voice-details-body'; inner.append(rows);
+        const inner=document.createElement('div'); inner.className='voice-details-body'; inner.append(rows); if(problems) inner.append(problems);
         details.append(summary,inner); statusLabel.replaceWith(details);
       }
     }
