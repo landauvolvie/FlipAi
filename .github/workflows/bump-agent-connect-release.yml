@@ -1,0 +1,50 @@
+name: prepare-agent-connect-release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/bump-agent-connect-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump FlipAi to 0.46.1
+        shell: bash
+        env:
+          RELEASE_NOTES_B64: IyBGbGlwQWkgdjAuNDYuMQoKVGhpcyByZWxlYXNlIGZpeGVzIGZpcnN0LXJ1biBhZ2VudCBjb25uZWN0aW9uIG9uIGEgY2xlYW4gV2luZG93cyBQQy4gQ29kZXggYW5kIENsYXVkZSBub3cgYmVnaW4gd2l0aCBhIHJlYWwgKipDb25uZWN0Kiogc3RhdGUgaW5zdGVhZCBvZiBleHBvc2luZyBUZXN0IG9yIERpc2Nvbm5lY3QgYmVmb3JlIEZsaXBBaSBoYXMgY29ubmVjdGVkIHRoZSBhZ2VudC4KCiMjIENvbm5lY3QgZmlyc3QsIHRoZW4gVGVzdAoKT24gYSBmcmVzaCBpbnN0YWxsLCB0aGUgdG9wIG9mIGVhY2ggYWdlbnQgcGFuZSBzaG93cyAqKkNvbm5lY3QqKi4gQWZ0ZXIgRmxpcEFpIGhhcyBzdWNjZXNzZnVsbHkgdmVyaWZpZWQgdGhhdCBhZ2VudCwgdGhlIHNhbWUgdG9wIHJvdyBjaGFuZ2VzIHRvICoqRGlzY29ubmVjdCoqIGFuZCAqKlRlc3QqKi4gRGlzY29ubmVjdGluZyBvbmUgYWdlbnQgcmV0dXJucyBvbmx5IHRoYXQgYWdlbnQgdG8gQ29ubmVjdCBhbmQgZG9lcyBub3Qgc2lnbiB0aGUgV2luZG93cyBhY2NvdW50IG91dCBvZiBDaGF0R1BUL0NvZGV4IG9yIENsYXVkZSBDb2RlLgoKVGhlIGR1cGxpY2F0ZSBDbGF1ZGUgKipDb25uZWN0aW9uKiogY2FyZCB0aGF0IHdhcyBmYXIgZG93biB0aGUgQ2xhdWRlIHBhZ2UgaGFzIGJlZW4gcmVtb3ZlZC4gQ2xhdWRlIGNvbm5lY3Rpb24gaXMgbm93IGNvbnRyb2xsZWQgZnJvbSB0aGUgdG9wIG9mIHRoZSBDbGF1ZGUgcGFuZSwgc28gdGhlcmUgaXMgbm8gc2Vjb25kIENvbm5lY3QgLyBDaGVjayBjb25uZWN0aW9uIC8gRGlzY29ubmVjdCBhcmVhIHRvIHNjcm9sbCB0by4KCiMjIEZyZXNoIENsYXVkZSBDb2RlIHNldHVwCgpJZiBDbGF1ZGUgQ29kZSBpcyBub3QgaW5zdGFsbGVkIGFuZCB0aGUgQ2xhdWRlIGV4ZWN1dGFibGUgcGF0aCBpcyBsZWZ0IG9uIEZsaXBBaSdzIG5vcm1hbCBhdXRvbWF0aWMgc2V0dGluZywgcHJlc3NpbmcgKipDb25uZWN0Kiogbm93IG9wZW5zIGEgdmlzaWJsZSBQb3dlclNoZWxsIHdpbmRvdywgcnVucyBBbnRocm9waWMncyBvZmZpY2lhbCBXaW5kb3dzIENsYXVkZSBDb2RlIGluc3RhbGxlciwgYW5kIHRoZW4gc3RhcnRzIGBjbGF1ZGUgYXV0aCBsb2dpbmAuIENsYXVkZSBDb2RlIG9wZW5zIGl0cyBub3JtYWwgYnJvd3NlciBhdXRob3JpemF0aW9uIGZsb3cgZm9yIHRoZSB1c2VyIHRvIGFwcHJvdmUuCgpGbGlwQWkgd2F0Y2hlcyB0aGF0IHNpZ24taW4gYXV0b21hdGljYWxseS4gT25jZSBhdXRob3JpemF0aW9uIHN1Y2NlZWRzLCBGbGlwQWkgcmVjb3JkcyBDbGF1ZGUgYXMgY29ubmVjdGVkIGFuZCByZWJ1aWxkcyB0aGUgYmFja2dyb3VuZCBicmlkZ2Ugc28gdGhlIG5ld2x5IGluc3RhbGxlZCBDbGF1ZGUgZXhlY3V0YWJsZSBpcyBhdmFpbGFibGUgaW1tZWRpYXRlbHkuIFRoZXJlIGlzIG5vIHNlcGFyYXRlICoqQ2hlY2sgY29ubmVjdGlvbioqIHN0ZXAuCgpBbiBleHBsaWNpdGx5IGNvbmZpZ3VyZWQgY3VzdG9tIENsYXVkZSBleGVjdXRhYmxlIHBhdGggaXMgc3RpbGwgcmVzcGVjdGVkLiBJZiB0aGF0IGN1c3RvbSBwYXRoIGlzIHdyb25nLCBGbGlwQWkgcmVwb3J0cyBpdCByYXRoZXIgdGhhbiBzaWxlbnRseSBpbnN0YWxsaW5nIGEgZGlmZmVyZW50IGNvcHkuCgojIyBDb21wYXRpYmlsaXR5IGFuZCBzYWZldHkKClRoZSBleGlzdGluZyBDbGF1ZGUgdG9rZW4gZmFsbGJhY2sgYW5kIGxlZ2FjeSB2ZXJpZmljYXRpb24gcm91dGUgcmVtYWluIHN1cHBvcnRlZCBmb3IgdXBncmFkZWQgaW5zdGFsbGF0aW9ucywgYnV0IHRoZXkgYXJlIG5vIGxvbmdlciBleHBvc2VkIGFzIGEgZHVwbGljYXRlIGNvbm5lY3Rpb24gcGFuZWwuIEV4aXN0aW5nIENvZGV4IGFuZCBDbGF1ZGUgYWNjb3VudCBzZXNzaW9ucyBiZWxvbmcgdG8gdGhlIFdpbmRvd3MgdXNlciBhbmQgYXJlIG5vdCBsb2dnZWQgb3V0IHdoZW4gdGhlIHVzZXIgZGlzY29ubmVjdHMgYW4gYWdlbnQgZnJvbSBGbGlwQWkuCgojIyBWZXJpZmllZAoKVGhlIHJlbGVhc2Ugd29ya2Zsb3cgcmVwZWF0cyB0aGUgcmVhbC1icm93c2VyIEdvb2dsZSBWb2ljZSBjYWxsLWZsb3cgaGFybmVzcywgdGhlIGZ1bGwgTGludXggYW5kIFdpbmRvd3MgdGVzdCBzdWl0ZXMsIGBnbyB2ZXRgLCByYWNlIHRlc3RzLCBXaW5kb3dzIHg2NCBidWlsZCwgZGVza3RvcC9iYWNrZ3JvdW5kIGxpZmVjeWNsZSBjaGVja3MsIEdvb2dsZSBWb2ljZSByZWNlaXZlciB2YWxpZGF0aW9uLCBNaWNyb3NvZnQgRGVmZW5kZXIgc2NhbiB3aGVuIGF2YWlsYWJsZSwgaW5zdGFsbGVyIGJ1aWxkLCByZWFsIGluc3RhbGwvdW5pbnN0YWxsIHNtb2tlIHRlc3QsIGFuZCBTSEEtMjU2IGdlbmVyYXRpb24gYmVmb3JlIHB1Ymxpc2hpbmcuCg==
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('config.go')
+          text = p.read_text(encoding='utf-8')
+          old = 'const version = "0.46.0"'
+          new = 'const version = "0.46.1"'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one {old!r} in config.go')
+          p.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          printf '0.46.1\n' > VERSION
+          printf '%s' "$RELEASE_NOTES_B64" | base64 --decode > docs/RELEASE-NOTES.md
+          rm .github/workflows/bump-agent-connect-release.yml
+
+      - name: Commit release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Prepare FlipAi v0.46.1 release"
+          git push origin HEAD:main

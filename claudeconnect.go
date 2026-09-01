@@ -11,52 +11,25 @@ import (
 // Connecting Claude to FlipAi has always had two possible credentials, and only
 // one of them can do everything.
 //
-//   - A `claude /login` session is the browser sign-in Claude Code itself uses.
-//     It is what the Claude in Chrome extension can authenticate against, and
-//     what Remote Control needs to open the conversation at claude.ai/code.
-//   - A `claude setup-token` value can only make model requests. Claude Code
-//     turns Chrome off for a token session even when --chrome is passed, and
-//     Remote Control refuses it.
-//
-// FlipAi used to let an install end up token-only by accident: the token is the
-// thing a user is asked to paste, nothing ever asked for the login, and the
-// consequence only showed up as Claude texting back that it could not reach the
-// browser. The connect flow below makes the login the thing FlipAi actually
-// connects, and demotes the token to what it is — the fallback that keeps an
-// unattended bridge answering when that sign-in lapses.
+//   - A Claude Code account sign-in is the browser sign-in Claude Code itself
+//     uses. It is what the Claude in Chrome extension and Remote Control use.
+//   - A `claude setup-token` value can make model requests, but cannot provide
+//     the browser-connected account session.
 const (
-	// claudeConnLogin is the good state: a real sign-in exists on this Windows
-	// account, so Chrome and Remote Control both work. A token may also be
-	// stored; it is simply not used while the sign-in is valid.
-	claudeConnLogin = "login"
-	// claudeConnToken is the state this flow exists to end: a token and nothing
-	// else, which answers texts but cannot touch the browser.
-	claudeConnToken = "token"
-	// claudeConnNone means Claude cannot run at all yet.
-	claudeConnNone = "none"
-	// claudeConnUnknown means nothing has probed the machine yet.
+	claudeConnLogin   = "login"
+	claudeConnToken   = "token"
+	claudeConnNone    = "none"
 	claudeConnUnknown = "unknown"
 )
 
-// claudeConnection is how the Agents page describes the Claude connection, and
-// what every handler here returns to the user.
 type claudeConnection struct {
-	Kind   string
-	Label  string
-	Detail string
-
-	// ChromeReady reports whether the credential in use can drive Chrome and
-	// open Remote Control. Both need the same thing — a real sign-in — so they
-	// are one flag rather than two.
+	Kind        string
+	Label       string
+	Detail      string
 	ChromeReady bool
-
-	// NeedsSignIn marks the states Connect Claude fixes.
 	NeedsSignIn bool
 }
 
-// evaluateClaudeConnection turns the two facts FlipAi can establish about a
-// machine into the connection it actually has. It is pure so every state can be
-// asserted in a test rather than only on a machine that happens to be in it.
 func evaluateClaudeConnection(hasToken, probed, loginExists bool) claudeConnection {
 	if !probed {
 		return claudeConnection{
@@ -71,57 +44,40 @@ func evaluateClaudeConnection(hasToken, probed, loginExists bool) claudeConnecti
 			Kind:        claudeConnLogin,
 			Label:       "Claude Code sign-in (token kept as fallback)",
 			ChromeReady: true,
-			Detail: "Connected the right way: FlipAi runs SMS turns on this account's `claude /login` session, " +
-				"so Chrome control and the claude.ai/code view both work. The stored token is held back as the " +
-				"fallback and used only if that sign-in ever lapses.",
+			Detail: "Connected the right way: FlipAi runs Claude on this Windows account's Claude Code sign-in. " +
+				"The stored token is kept only as a fallback.",
 		}
 	case loginExists:
 		return claudeConnection{
 			Kind:        claudeConnLogin,
 			Label:       "Claude Code sign-in",
 			ChromeReady: true,
-			Detail: "Connected the right way: FlipAi runs SMS turns on this account's `claude /login` session, " +
-				"so Chrome control and the claude.ai/code view both work.",
+			Detail:      "Connected the right way: FlipAi runs Claude on this Windows account's Claude Code sign-in.",
 		}
 	case hasToken:
 		return claudeConnection{
 			Kind:        claudeConnToken,
 			Label:       "Stored token only",
 			NeedsSignIn: true,
-			Detail: "Claude will answer texts, but it cannot control Chrome and cannot appear at claude.ai/code: " +
-				"a `claude setup-token` value can only make model requests, and Claude Code turns the browser off " +
-				"for it. Press Connect Claude to sign in with `claude /login` on this Windows account — the token " +
-				"stays as the fallback.",
+			Detail: "Claude can answer model requests with the saved token, but the Windows account is not signed in to Claude Code. " +
+				"Press Connect Claude to complete the normal Claude Code browser sign-in.",
 		}
 	default:
 		return claudeConnection{
 			Kind:        claudeConnNone,
 			Label:       "Not connected",
 			NeedsSignIn: true,
-			Detail: "Claude Code is not signed in on this Windows account, so FlipAi cannot run a Claude turn at all. " +
-				"Press Connect Claude to sign in.",
+			Detail:      "Claude Code is not signed in on this Windows account. Press Connect Claude to set it up.",
 		}
 	}
 }
 
-// claudeSignInArgs builds the console command that completes the sign-in.
-//
-// FlipAi cannot do this itself: `/login` is an interactive browser flow, and
-// Claude Code stores the result under whichever Windows account ran it — which
-// is exactly the account whose credential the Chrome extension has to match.
-// So FlipAi opens a real console window on the user's desktop and lets Claude
-// Code run its own flow there.
-//
-// /k rather than /c: the window stays open after the flow finishes, so the user
-// can read the outcome, and can retry in place if Claude Code asks for
-// anything else.
+// The existing interactive flow is retained for machines that already have the
+// CLI. The console stays open so the user can see Claude's result.
 func claudeSignInArgs(exe string) string {
 	return fmt.Sprintf(`/k "%s" /login`, strings.TrimSpace(exe))
 }
 
-// claudeConnectClient returns the client whose cached probe the SMS turns
-// actually read, so an invalidation here is one the bridge sees. Before the
-// bridge is up there is nothing to share and a fresh client is equivalent.
 func (a *App) claudeConnectClient() *ClaudeClient {
 	a.mu.Lock()
 	c, cfg := a.claude, a.cfg
@@ -132,28 +88,41 @@ func (a *App) claudeConnectClient() *ClaudeClient {
 	return a.newClaudeClient(cfg)
 }
 
-// claudeConnectionNow probes the machine and reports the connection it has.
+// A default/blank path is managed discovery, so on a clean machine Connect may
+// install the official Claude Code CLI. An explicit custom path is never
+// overwritten or silently replaced.
+func claudePathUsesManagedInstall(configured string) bool {
+	v := strings.TrimSpace(configured)
+	return v == "" || strings.EqualFold(v, "claude") || strings.EqualFold(v, "claude.exe")
+}
+
+// claudeConnectionNow deliberately builds a fresh client. A fresh Windows
+// install can add %USERPROFILE%\.local\bin\claude.exe while FlipAi is already
+// running; the client created at startup cannot discover a binary that did not
+// exist yet. Re-resolving here lets the Connect watcher notice the installation
+// immediately, without making the user restart or browse for an executable.
 func (a *App) claudeConnectionNow(ctx context.Context) claudeConnection {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
 	pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	exists := a.claudeConnectClient().RefreshLogin(pctx)
+	fresh := NewClaudeClient(cfg.ClaudePath, cfg.claudeWorkingDir(), cfg.Claude)
+	exists := fresh.RefreshLogin(pctx)
 	return evaluateClaudeConnection(hasClaudeToken(claudeTokenPath(a.dataDir)), true, exists)
 }
 
-// cachedClaudeConnection is the render-safe form: it reports whatever the last
-// probe found and never starts a subprocess from a page render.
 func (a *App) cachedClaudeConnection() claudeConnection {
 	a.mu.Lock()
 	c := a.claude
 	a.mu.Unlock()
+	if c == nil {
+		return evaluateClaudeConnection(hasClaudeToken(claudeTokenPath(a.dataDir)), false, false)
+	}
 	checked, exists := c.CachedLogin()
 	return evaluateClaudeConnection(hasClaudeToken(claudeTokenPath(a.dataDir)), checked, exists)
 }
 
-// warmClaudeConnection establishes the connection state once at bridge start,
-// so the Agents page describes the machine before anyone sends a text, and so a
-// bridge that can only answer without the browser says so in the Activity log
-// rather than leaving Claude to report it over SMS.
 func (a *App) warmClaudeConnection(ctx context.Context, cfg Config, b *Bridge, c *ClaudeClient) {
 	pctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -164,43 +133,85 @@ func (a *App) warmClaudeConnection(ctx context.Context, cfg Config, b *Bridge, c
 	}
 	if cfg.Claude.UseChrome || normalizeClaudeSessionMode(cfg.Claude.SessionMode) == claudeSessionModeLive {
 		b.event("warn", "agent", "Claude is connected as \""+conn.Label+
-			"\", which cannot control Chrome or reach claude.ai/code. Press Connect Claude on the Agents page.", "", "A", "")
+			"\", which cannot control Chrome or reach claude.ai/code. Press Connect on the Agents page.", "", "A", "")
 	}
 }
 
-// claudeConnect opens the sign-in window. It deliberately does not wait for the
-// flow to finish: the user completes it at the console, then presses Check
-// connection, which is the step that decides what FlipAi actually has.
+// claudeConnect is the complete first-run action. If Claude Code is already
+// installed it opens the normal interactive sign-in. If it is missing and the
+// user left the path on automatic discovery, FlipAi opens PowerShell, runs
+// Anthropic's official Windows installer, then starts `claude auth login`.
+// Either way a watcher verifies the browser authorization automatically.
 func (a *App) claudeConnect(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	cfg := a.cfg
 	a.mu.Unlock()
 
 	exe := resolveClaudeExecutable(cfg.ClaudePath)
-	if !executableExists(exe) {
+	installing := !executableExists(exe)
+	if installing && !claudePathUsesManagedInstall(cfg.ClaudePath) {
 		renderResult(w, r, 400, false, "Claude Code was not found",
 			"FlipAi could not find the Claude Code CLI at "+exe+
-				". Set the executable path under Workspace & paths, then press Connect Claude again.")
+				". Fix the executable path under Routing & workspace, then press Connect again.")
 		return
 	}
-	if err := startClaudeSignIn(exe, cfg.claudeWorkingDir()); err != nil {
-		renderResult(w, r, 500, false, "Could not open the Claude sign-in window",
-			"FlipAi could not start a console for the sign-in: "+err.Error()+
-				"\n\nOpen PowerShell on this Windows account, run `"+exe+"` and complete /login there, then press Check connection.")
+
+	var err error
+	if installing {
+		err = startClaudeInstallAndSignIn(cfg.claudeWorkingDir())
+	} else {
+		err = startClaudeSignIn(exe, cfg.claudeWorkingDir())
+	}
+	if err != nil {
+		renderResult(w, r, 500, false, "Could not start Claude setup", err.Error())
 		return
 	}
-	// Whatever the probe last found is about to stop being true.
+
+	// From the moment Connect is pressed, the top row remains in Connect state
+	// until the watcher proves the account is usable. That prevents a stale
+	// previous test result from showing Disconnect/Test during an unfinished
+	// browser authorization.
+	_ = a.clearAgentCheck("claude")
 	a.claudeConnectClient().invalidateLoginCache()
-	activityLogForStatePath(a.statePath).Add("info", "agent", "Claude sign-in window opened from the Agents page", "", "A", "")
-	renderResult(w, r, 200, true, "Finish the Claude sign-in in the window that opened",
-		"A console window is running the Claude Code sign-in. Complete it in the browser it opens, "+
-			"then come back here and press Check connection.\n\n"+
-			"This is the sign-in the Claude in Chrome extension authenticates against, so it is what lets a text "+
-			"drive your browser. Any long-lived token you have saved stays in place as the fallback.")
+	activityLogForStatePath(a.statePath).Add("info", "agent", "Claude connection setup opened from the Agents page", "", "A", "")
+	go a.watchClaudeSignIn()
+
+	if installing {
+		renderResult(w, r, 200, true, "Claude setup started",
+			"PowerShell is installing Claude Code from Anthropic, then it will open the Claude browser sign-in. " +
+				"Complete the authorization in the browser. FlipAi will detect it automatically; you do not need to press another connection button.")
+		return
+	}
+	renderResult(w, r, 200, true, "Finish connecting Claude",
+		"The Claude Code sign-in window is open. Complete the browser authorization it starts. " +
+			"FlipAi will detect the completed sign-in automatically.")
 }
 
-// claudeConnectVerify is the step that makes the new sign-in real for FlipAi:
-// it re-probes, and rebuilds anything that was built against the old credential.
+// watchClaudeSignIn removes the old manual "Check connection" step. It also
+// restarts the bridge once after a successful first install/sign-in so any
+// long-lived Claude client is rebuilt with the newly discovered executable.
+func (a *App) watchClaudeSignIn() {
+	deadline := time.Now().Add(10 * time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		conn := a.claudeConnectionNow(ctx)
+		cancel()
+		if !conn.NeedsSignIn {
+			a.recordCheck("claude", true, "Claude Code sign-in verified automatically")
+			activityLogForStatePath(a.statePath).Add("success", "agent", "Claude connected and verified automatically", "", "A", "")
+			go a.restartSoon()
+			return
+		}
+		<-ticker.C
+	}
+	activityLogForStatePath(a.statePath).Add("warn", "agent", "Claude connection setup was not completed within 10 minutes", "", "A", "")
+}
+
+// Kept for old bookmarks/builds that still post this route. The current Agents
+// page no longer exposes a separate Check connection button.
 func (a *App) claudeConnectVerify(w http.ResponseWriter, r *http.Request) {
 	conn := a.claudeConnectionNow(r.Context())
 
@@ -214,28 +225,42 @@ func (a *App) claudeConnectVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.recordCheck("claude", true, "Claude Code sign-in verified")
-	activityLogForStatePath(a.statePath).Add("success", "agent", "Claude connected with a `claude /login` session; Chrome and Remote Control are available", "", "A", "")
+	activityLogForStatePath(a.statePath).Add("success", "agent", "Claude connected with a Claude Code account sign-in", "", "A", "")
 	detail := conn.Detail
 	if !useChrome {
-		detail += "\n\nLet Claude control Chrome is currently switched off under Access & tools; turn it on if you want texts to use the browser."
+		detail += "\n\nLet Claude control Chrome is currently switched off under Access & tools."
 	}
 	restart := a.claudeLiveNeedsRestart()
 	if restart {
 		detail += liveRestartNote
 	}
-	renderResult(w, r, 200, true, "Claude is connected the right way", detail)
+	renderResult(w, r, 200, true, "Claude is connected", detail)
 	if restart {
 		go a.restartSoon()
 	}
 }
 
-// claudeDisconnect clears what FlipAi stores for Claude so the next Connect
-// starts clean. It removes FlipAi's own copy of the long-lived token and every
-// cached answer about the sign-in; it never runs `claude logout`, because the
-// CLI sign-in belongs to the Windows account rather than to FlipAi.
+// One POST endpoint handles both top-row Disconnect buttons so no extra route
+// is needed. Disconnecting means FlipAi returns that agent to the explicit
+// Connect state; it does not log the Windows account out of Codex or Claude.
 func (a *App) claudeDisconnect(w http.ResponseWriter, r *http.Request) {
+	if strings.EqualFold(strings.TrimSpace(r.FormValue("agent")), "C") {
+		if err := a.clearAgentCheck("codex"); err != nil {
+			renderResult(w, r, 500, false, "Could not disconnect Codex", err.Error())
+			return
+		}
+		activityLogForStatePath(a.statePath).Add("info", "agent", "Codex disconnected from FlipAi", "", "C", "")
+		renderResult(w, r, 200, true, "Codex disconnected",
+			"FlipAi will show Connect for Codex again. Your ChatGPT/Codex account sign-in on this Windows account was left alone.")
+		return
+	}
+
 	had := hasClaudeToken(claudeTokenPath(a.dataDir))
 	if err := clearClaudeToken(claudeTokenPath(a.dataDir)); err != nil {
+		renderResult(w, r, 500, false, "Could not disconnect Claude", err.Error())
+		return
+	}
+	if err := a.clearAgentCheck("claude"); err != nil {
 		renderResult(w, r, 500, false, "Could not disconnect Claude", err.Error())
 		return
 	}
@@ -247,8 +272,9 @@ func (a *App) claudeDisconnect(w http.ResponseWriter, r *http.Request) {
 		detail = "There was no stored token to remove."
 	}
 	conn := a.claudeConnectionNow(r.Context())
-	detail += "\n\nClaude Code's own sign-in on this Windows account was left alone — that is yours, not FlipAi's.\n\n" +
-		"Current connection: " + conn.Label + ". " + conn.Detail
+	detail += "\n\nClaude Code's own account sign-in on this Windows account was left alone — that is yours, not FlipAi's.\n\n" +
+		"Current connection: " + conn.Label + ". " + conn.Detail +
+		"\n\nFlipAi will still show Connect at the top until you explicitly connect Claude again."
 	restart := a.claudeLiveNeedsRestart()
 	if restart {
 		detail += liveRestartNote
@@ -259,20 +285,11 @@ func (a *App) claudeDisconnect(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// claudeLiveNeedsRestart reports whether a supervised session is running
-// against the credential that has just changed.
-//
-// Print mode needs nothing: it reads the refreshed probe on its next turn. A
-// live session is a process that was started with whichever credential was
-// current at the time, so it has to come back to pick the new one up — and the
-// bridge restart every settings save already uses is the tested way to do that.
 func (a *App) claudeLiveNeedsRestart() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.bridge != nil && normalizeClaudeSessionMode(a.cfg.Claude.SessionMode) == claudeSessionModeLive
 }
 
-// liveRestartNote is appended to whatever a connect handler reports, so a
-// restart the user is about to see is one they were told about.
 const liveRestartNote = "\n\nLive session mode is on, so the background bridge is restarting to bring the Claude session " +
 	"up on this connection."
