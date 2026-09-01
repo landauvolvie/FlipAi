@@ -240,20 +240,37 @@ func TestAgentNumberLifecycle(t *testing.T) {
 		t.Fatal("the Agents page does not list the new number with its label")
 	}
 
-	// A number reaches one agent. Claiming it for the other has to be refused,
-	// or the allowlist would not answer "who may command this agent".
+	// The same real number may be explicitly authorized on Claude too. Because
+	// both copies allow SMS, the incoming sender becomes shared and C:/A: selects
+	// the destination rather than one list silently overriding the other.
 	rr = a.do(t, http.MethodPost, "/agents/numbers/add", url.Values{
 		"agent": {"A"}, "newNumber": {"2125550147"}, "newAccess": {"all"},
 	})
-	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "one agent only") {
-		t.Fatalf("claiming a number for a second agent returned %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("adding the same number to Claude returned %d: %s", rr.Code, rr.Body.String())
+	}
+	cfg = a.reloadConfig(t)
+	agent, phone, ok = agentForSender(cfg, "2125550147")
+	if !ok || agent != "B" || !phone.AllowsSMS() {
+		t.Fatalf("shared number did not become an SMS-selectable sender: agent=%q phone=%+v ok=%v", agent, phone, ok)
+	}
+	rc, err := parseRemoteCommandForMessage("A: hello Claude", cfg, agent, GmailMessage{})
+	if err != nil || rc.Agent != "A" || rc.Text != "hello Claude" {
+		t.Fatalf("shared number did not route A: to Claude: rc=%+v err=%v", rc, err)
 	}
 
+	// Removing the Codex copy must leave the independently granted Claude copy.
 	if rr := a.do(t, http.MethodPost, "/agents/numbers/remove", url.Values{"number": {"C:2125550147"}}); rr.Code != http.StatusSeeOther {
-		t.Fatalf("remove returned %d: %s", rr.Code, rr.Body.String())
+		t.Fatalf("remove Codex copy returned %d: %s", rr.Code, rr.Body.String())
+	}
+	if agent, _, ok := agentForSender(a.reloadConfig(t), "2125550147"); !ok || agent != "A" {
+		t.Fatalf("removing Codex copy also removed Claude permission: agent=%q ok=%v", agent, ok)
+	}
+	if rr := a.do(t, http.MethodPost, "/agents/numbers/remove", url.Values{"number": {"A:2125550147"}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("remove Claude copy returned %d: %s", rr.Code, rr.Body.String())
 	}
 	if _, _, ok := agentForSender(a.reloadConfig(t), "2125550147"); ok {
-		t.Fatal("the number was not removed")
+		t.Fatal("the number remained after both agent copies were removed")
 	}
 
 	if rr := a.do(t, http.MethodPost, "/agents/numbers/add", url.Values{"agent": {"C"}, "newNumber": {"nonsense"}}); rr.Code != http.StatusBadRequest {
