@@ -47,7 +47,7 @@ func chatGPTDirectUI(body string) string {
           </div>
         </div>
         <div class="agent-head-actions">
-          <button class="btn accent" type="button" data-test="/chatgpt-direct/probe" data-test-busy="Probing ChatGPT desktop">{{icon "link"}}Probe direct backend</button>
+          <button class="btn accent" type="button" data-test="/codex/test?chatgpt-direct=1" data-test-busy="Probing ChatGPT desktop">{{icon "link"}}Probe direct backend</button>
         </div>
       </div>
 
