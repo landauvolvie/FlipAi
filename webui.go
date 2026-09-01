@@ -326,8 +326,9 @@ func (a *App) handler() http.Handler {
 
 	// Links that read state or open a local window.
 	for path, action := range map[string]http.HandlerFunc{
-		"/gmail/test":         a.gmailTest,
-		"/codex/test":         a.codexTestCorrected,
+		"/gmail/test":          a.gmailTest,
+		"/chatgpt-direct/probe": a.chatGPTDirectProbe,
+		"/codex/test":          a.codexTestCorrected,
 		"/claude/test":        a.claudeTestCorrected,
 		"/logs/export":        a.exportLogs,
 		"/open/folder":        a.openLocalFolder,
