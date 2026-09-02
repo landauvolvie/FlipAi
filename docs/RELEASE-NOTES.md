@@ -8,6 +8,8 @@ FlipAi could mistake a busy ChatGPT WebView for a dead one because its 500 ms li
 
 v0.46.17 separates cheap process liveness from ChatGPT page readiness. The supervisor now probes the local worker without touching the renderer, and Windows enforces a hard single-instance mutex for the hidden ChatGPT worker so a second WebView cannot be created even if state becomes confused. The hidden worker also watches FlipAi's quit flag and exits during Quit, update, or uninstall so it is not left orphaned.
 
+The v0.46.17 installer also force-cleans any leftover `FlipAi.exe` process trees after the normal graceful shutdown. That removes detached ChatGPT WebView workers left by older builds without terminating Edge/WebView2 processes that belong to other applications.
+
 ## Complete ChatGPT replies
 
 Long ChatGPT answers are delivered as one logical Google Voice reply instead of numbered `1/2`, `2/2` fragments. FlipAi reassembles the response before handing it to the Google Voice email gateway, so the full answer survives instead of only the first line of each fragment.
