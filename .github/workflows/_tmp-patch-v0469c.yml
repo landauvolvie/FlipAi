@@ -24,3 +24,4 @@ jobs:
           git add -A
           git commit -m "Integrate ChatGPT app.asar deep diagnostic v0.46.9"
           git push origin HEAD:feature/chatgpt-asar-deep-scan-v0469
+# one-shot workflow; patch script removes this file after success
