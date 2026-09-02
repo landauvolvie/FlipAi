@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -95,9 +94,8 @@ type chatGPTTurnResult struct {
 }
 
 func platformStartChatGPTLogin(dataDir string) error {
-	// Do not let a hidden worker hold the same WebView2 profile open while the
-	// user is trying to sign in interactively.
 	_ = platformStopChatGPTWorker(dataDir)
+	waitForChatGPTStopped(dataDir, 4*time.Second)
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -133,7 +131,6 @@ func platformStopChatGPTWorker(dataDir string) error {
 	defer cancel()
 	_, _, err := chatGPTControlRequest(ctx, s, http.MethodPost, "/stop", strings.NewReader(`{}`))
 	if err != nil {
-		// A stale runtime file is harmless; the next start will replace it.
 		mutateChatGPTRuntime(dataDir, func(v *ChatGPTWebRuntime) { v.Running = false; v.ControlPort = 0; v.ControlToken = "" })
 	}
 	return nil
@@ -211,7 +208,8 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 	}
 	token, err := secureRandomToken(24)
 	if err != nil {
-		_ = ln.Close(); return 0, nil
+		_ = ln.Close()
+		return 0, nil
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) { s.ControlToken = token; s.ControlPort = port })
@@ -226,9 +224,9 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool) {
 		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
 		if newChat {
-			var ignored any
+			var ignored bool
 			_ = voiceEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored)
-			time.Sleep(1200*time.Millisecond)
+			time.Sleep(900*time.Millisecond)
 		}
 		var signed bool
 		if err := voiceEval(dev, chatGPTSignedInJS, true, &signed); err != nil || !signed {
@@ -236,11 +234,11 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT is not signed in inside FlipAi. Press Connect ChatGPT and complete sign-in first."})
 			return
 		}
-		expr := fmt.Sprintf(chatGPTTurnJS, jsString(prompt))
+		expr := fmt.Sprintf(chatGPTTurnJS, chatGPTJSString(prompt))
 		var got chatGPTTurnResult
 		if err := voiceEval(dev, expr, true, &got); err != nil {
 			rw.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the ChatGPT page driver: " + err.Error()})
 			return
 		}
 		cid := chatGPTConversationID(got.Href)
@@ -275,14 +273,6 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 	return port, server
 }
 
-func chatGPTConversationID(href string) string {
-	i := strings.Index(href, "/c/")
-	if i < 0 { return "" }
-	v := href[i+3:]
-	if j := strings.IndexAny(v, "?#/"); j >= 0 { v = v[:j] }
-	return strings.TrimSpace(v)
-}
-
 func recordChatGPTWorkerError(dataDir string, err error) {
 	if err == nil { return }
 	mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) { s.Running = false; s.LastEvent = "browser-error"; s.LastError = err.Error() })
@@ -293,8 +283,4 @@ func chatGPTWorkerMain(dataDir string, visible bool) {
 	if err := runChatGPTWebView(dataDir, visible); err != nil {
 		recordChatGPTWorkerError(dataDir, err)
 	}
-}
-
-func init() {
-	_ = filepath.Separator // keep filepath imported in Windows-only compile paths that trim helpers in tests
 }
