@@ -21,11 +21,18 @@ const (
 	chatGPTAgentName      = "ChatGPT Chat"
 )
 
-// ChatGPTWebRuntime is metadata only. The browser profile itself stays in its
-// dedicated WebView2 data directory and is never copied into FlipAi state.
+// ChatGPTWebRuntime contains metadata only. Connected means the user completed
+// sign-in at least once and FlipAi should keep restoring that dedicated profile
+// invisibly. SignedIn means the currently running WebView has actually verified
+// the session on its current page. Keeping those two states separate is what
+// lets a saved session survive the short signed-out/loading phase after a
+// browser or PC restart.
 type ChatGPTWebRuntime struct {
 	Running        bool      `json:"running"`
+	Starting       bool      `json:"starting,omitempty"`
 	Visible        bool      `json:"visible"`
+	LoginActive    bool      `json:"loginActive,omitempty"`
+	Connected      bool      `json:"connected,omitempty"`
 	SignedIn       bool      `json:"signedIn"`
 	ControlPort    int       `json:"controlPort,omitempty"`
 	ControlToken   string    `json:"controlToken,omitempty"`
@@ -41,6 +48,15 @@ var chatGPTRuntimeMu sync.Mutex
 func chatGPTRuntimePath(dataDir string) string { return filepath.Join(dataDir, chatGPTRuntimeFile) }
 func chatGPTProfilePath(dataDir string) string { return filepath.Join(dataDir, chatGPTProfileDirName) }
 
+// migrateChatGPTRuntime preserves v0.46.12 connections on upgrade. That build
+// only had SignedIn; if it was true, the dedicated profile was already proven
+// and must become a durable Connected state before a new worker starts loading.
+func migrateChatGPTRuntime(s *ChatGPTWebRuntime) {
+	if s.SignedIn && !s.Connected {
+		s.Connected = true
+	}
+}
+
 func loadChatGPTRuntime(dataDir string) ChatGPTWebRuntime {
 	chatGPTRuntimeMu.Lock()
 	defer chatGPTRuntimeMu.Unlock()
@@ -48,6 +64,7 @@ func loadChatGPTRuntime(dataDir string) ChatGPTWebRuntime {
 	if b, err := os.ReadFile(chatGPTRuntimePath(dataDir)); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
+	migrateChatGPTRuntime(&s)
 	return s
 }
 
@@ -58,6 +75,7 @@ func mutateChatGPTRuntime(dataDir string, fn func(*ChatGPTWebRuntime)) {
 	if b, err := os.ReadFile(chatGPTRuntimePath(dataDir)); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
+	migrateChatGPTRuntime(&s)
 	fn(&s)
 	s.UpdatedAt = time.Now()
 	b, err := json.MarshalIndent(s, "", "  ")
@@ -108,10 +126,63 @@ func waitForChatGPTControl(ctx context.Context, dataDir string) (ChatGPTWebRunti
 	}
 }
 
+// waitForChatGPTReady fixes the important difference between "the WebView
+// process exists" and "the saved ChatGPT login has finished restoring". A new
+// WebView often exposes its private control endpoint hundreds of milliseconds
+// before chatgpt.com has loaded its persisted auth session. Sending during that
+// gap produced the v0.46.12 false "not signed in" error.
+func waitForChatGPTReady(ctx context.Context, dataDir string) (ChatGPTWebRuntime, error) {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for {
+		s := loadChatGPTRuntime(dataDir)
+		if s.Running && s.ControlPort > 0 && s.ControlToken != "" {
+			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			b, code, err := chatGPTControlRequest(probeCtx, s, http.MethodGet, "/health", nil)
+			cancel()
+			if err == nil && code == http.StatusOK {
+				var health struct {
+					SignedIn bool `json:"signedIn"`
+				}
+				if json.Unmarshal(b, &health) == nil && health.SignedIn {
+					mutateChatGPTRuntime(dataDir, func(v *ChatGPTWebRuntime) {
+						v.Connected = true
+						v.SignedIn = true
+						v.Starting = false
+						v.LastError = ""
+					})
+					return loadChatGPTRuntime(dataDir), nil
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			s = loadChatGPTRuntime(dataDir)
+			if s.LastError != "" {
+				return s, errors.New(s.LastError)
+			}
+			if s.Connected {
+				return s, errors.New("the saved ChatGPT session did not become signed in in time; FlipAi kept the saved profile, so retry once, and use Connect ChatGPT only if ChatGPT has actually expired the account session")
+			}
+			return s, errors.New("ChatGPT is not signed in inside FlipAi; press Connect ChatGPT once and complete sign-in")
+		case <-t.C:
+		}
+	}
+}
+
+func ensureChatGPTReady(ctx context.Context, dataDir string) (ChatGPTWebRuntime, error) {
+	if err := platformEnsureChatGPTWorker(dataDir); err != nil {
+		return ChatGPTWebRuntime{}, err
+	}
+	return waitForChatGPTReady(ctx, dataDir)
+}
+
 func waitForChatGPTStopped(dataDir string, d time.Duration) {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if !loadChatGPTRuntime(dataDir).Running {
+		s := loadChatGPTRuntime(dataDir)
+		if !s.Running && !s.Starting {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -139,6 +210,42 @@ func chatGPTControlRequest(ctx context.Context, s ChatGPTWebRuntime, method, pat
 	return b, resp.StatusCode, err
 }
 
+// runChatGPTBackgroundSupervisor is owned by the tray process because that is
+// the FlipAi process guaranteed to live in the signed-in Windows desktop
+// session. Once Connected is true, it silently restores the WebView whenever it
+// is missing: after the one-time sign-in window closes, after FlipAi restarts,
+// and after Windows restarts. It never opens a login window on its own.
+func runChatGPTBackgroundSupervisor(ctx context.Context, dataDir string) {
+	ticker := time.NewTicker(1500 * time.Millisecond)
+	defer ticker.Stop()
+	var lastAttempt time.Time
+	var announced bool
+	for {
+		s := loadChatGPTRuntime(dataDir)
+		want := s.Connected && !s.LoginActive
+		if !want {
+			announced = false
+		} else if !s.Running && !s.Starting && time.Since(lastAttempt) >= 5*time.Second {
+			lastAttempt = time.Now()
+			if !announced {
+				chatGPTActivity(dataDir, "info", "chatgpt-session", "Restoring the saved ChatGPT session invisibly in the background.", 0)
+				announced = true
+			}
+			if err := platformEnsureChatGPTWorker(dataDir); err != nil {
+				chatGPTActivity(dataDir, "error", "chatgpt-session", "Could not restore the saved ChatGPT background session: "+err.Error(), 0)
+			}
+		} else if s.Running && s.SignedIn {
+			announced = false
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 func (a *App) chatGPTConnect(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	if err := platformStartChatGPTLogin(a.dataDir); err != nil {
@@ -146,26 +253,22 @@ func (a *App) chatGPTConnect(w http.ResponseWriter, r *http.Request) {
 		renderResult(w, r, 500, false, "Could not open ChatGPT sign-in", err.Error())
 		return
 	}
-	chatGPTActivity(a.dataDir, "info", "chatgpt-connect", "Opened the dedicated ChatGPT sign-in window. FlipAi is waiting for a signed-in ChatGPT page.", time.Since(started))
-	renderResult(w, r, 200, true, "ChatGPT sign-in opened", "Sign in to ChatGPT in the window FlipAi opened. This uses FlipAi's own persistent browser profile, separate from your normal ChatGPT desktop app. You can leave that window open while testing, or close it after sign-in; FlipAi will reuse the same private profile in the background.")
+	chatGPTActivity(a.dataDir, "info", "chatgpt-connect", "Opened the one-time ChatGPT sign-in window. FlipAi is waiting for a signed-in ChatGPT page.", time.Since(started))
+	renderResult(w, r, 200, true, "ChatGPT sign-in opened", "Sign in to ChatGPT in the window FlipAi opened. Once sign-in is verified, you can close that window. FlipAi saves this dedicated browser profile and automatically runs it invisibly after that, including after FlipAi or Windows restarts.")
 }
 
 func (a *App) chatGPTTest(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	chatGPTActivity(a.dataDir, "info", "chatgpt-test", "Starting an end-to-end ChatGPT test turn in the dedicated browser session.", 0)
-	if err := platformEnsureChatGPTWorker(a.dataDir); err != nil {
-		chatGPTActivity(a.dataDir, "error", "chatgpt-test", "Could not start the ChatGPT background browser: "+err.Error(), time.Since(started))
-		renderResult(w, r, 500, false, "ChatGPT background session could not start", err.Error())
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-	s, err := waitForChatGPTControl(ctx, a.dataDir)
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	s, err := ensureChatGPTReady(ctx, a.dataDir)
 	cancel()
 	if err != nil {
-		chatGPTActivity(a.dataDir, "error", "chatgpt-test", "ChatGPT background browser did not become ready: "+err.Error(), time.Since(started))
-		renderResult(w, r, 500, false, "ChatGPT browser did not become ready", err.Error())
+		chatGPTActivity(a.dataDir, "error", "chatgpt-test", "ChatGPT background session did not become signed in and ready: "+err.Error(), time.Since(started))
+		renderResult(w, r, 500, false, "ChatGPT background session is not ready", err.Error())
 		return
 	}
+	chatGPTActivity(a.dataDir, "info", "chatgpt-session", "ChatGPT background session is signed in and ready for the test turn.", time.Since(started))
 	ctx, cancel = context.WithTimeout(r.Context(), 100*time.Second)
 	b, code, err := chatGPTControlRequest(ctx, s, http.MethodPost, "/test", strings.NewReader(`{}`))
 	cancel()
@@ -211,19 +314,15 @@ func (a *App) chatGPTChat(w http.ResponseWriter, r *http.Request) {
 	}
 	started := time.Now()
 	chatGPTActivity(a.dataDir, "info", "chatgpt-turn", "Starting a ChatGPT browser-session turn.", 0)
-	if err := platformEnsureChatGPTWorker(a.dataDir); err != nil {
-		chatGPTActivity(a.dataDir, "error", "chatgpt-turn", "Could not start the ChatGPT background browser: "+err.Error(), time.Since(started))
-		renderResult(w, r, 500, false, "ChatGPT background session could not start", err.Error())
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-	s, err := waitForChatGPTControl(ctx, a.dataDir)
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	s, err := ensureChatGPTReady(ctx, a.dataDir)
 	cancel()
 	if err != nil {
-		chatGPTActivity(a.dataDir, "error", "chatgpt-turn", "ChatGPT background browser did not become ready: "+err.Error(), time.Since(started))
-		renderResult(w, r, 500, false, "ChatGPT browser did not become ready", err.Error())
+		chatGPTActivity(a.dataDir, "error", "chatgpt-turn", "ChatGPT background session did not become signed in and ready: "+err.Error(), time.Since(started))
+		renderResult(w, r, 500, false, "ChatGPT background session is not ready", err.Error())
 		return
 	}
+	chatGPTActivity(a.dataDir, "info", "chatgpt-session", "ChatGPT background session is signed in and ready for a turn.", time.Since(started))
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": r.FormValue("new") == "1"})
 	ctx, cancel = context.WithTimeout(r.Context(), 100*time.Second)
 	b, code, err := chatGPTControlRequest(ctx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
@@ -251,6 +350,12 @@ func (a *App) chatGPTChat(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) chatGPTDisconnect(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
+	// Clear the durable desire first so the tray supervisor cannot restart the
+	// worker while Disconnect is removing the dedicated profile.
+	mutateChatGPTRuntime(a.dataDir, func(s *ChatGPTWebRuntime) {
+		s.Connected = false
+		s.LoginActive = false
+	})
 	_ = platformStopChatGPTWorker(a.dataDir)
 	waitForChatGPTStopped(a.dataDir, 5*time.Second)
 	if err := os.RemoveAll(chatGPTProfilePath(a.dataDir)); err != nil {
