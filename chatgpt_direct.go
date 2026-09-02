@@ -13,15 +13,19 @@ import (
 // experiment must discover a clean local transport without copying browser
 // cookies, bearer tokens, or the desktop app's private credentials.
 type chatGPTDirectProbeResult struct {
-	Supported       bool     `json:"supported"`
-	ProcessCount    int      `json:"processCount"`
-	ProcessNames    []string `json:"processNames,omitempty"`
-	LoopbackPorts   []int    `json:"loopbackPorts,omitempty"`
-	CDPPorts        []int    `json:"cdpPorts,omitempty"`
-	NamedPipes      []string `json:"namedPipes,omitempty"`
-	IgnoredPipes    []string `json:"ignoredPipes,omitempty"`
-	DebugPipe       bool     `json:"debugPipe,omitempty"`
-	Detail          string   `json:"detail,omitempty"`
+	Supported           bool     `json:"supported"`
+	ProcessCount        int      `json:"processCount"`
+	ProcessNames        []string `json:"processNames,omitempty"`
+	LoopbackPorts       []int    `json:"loopbackPorts,omitempty"`
+	CDPPorts            []int    `json:"cdpPorts,omitempty"`
+	NamedPipes          []string `json:"namedPipes,omitempty"`
+	IgnoredPipes        []string `json:"ignoredPipes,omitempty"`
+	DebugPipe           bool     `json:"debugPipe,omitempty"`
+	StaticFilesScanned  int      `json:"staticFilesScanned,omitempty"`
+	StaticResourceFiles []string `json:"staticResourceFiles,omitempty"`
+	ProtocolMarkers     []string `json:"protocolMarkers,omitempty"`
+	StaticInspectDetail string   `json:"staticInspectDetail,omitempty"`
+	Detail              string   `json:"detail,omitempty"`
 }
 
 func uniqueSortedInts(in []int) []int {
@@ -101,16 +105,32 @@ func (p chatGPTDirectProbeResult) summary() string {
 	if len(p.IgnoredPipes) > 0 {
 		lines = append(lines, "Codex pipes ignored: "+strings.Join(p.IgnoredPipes, ", "))
 	}
+
+	lines = append(lines, fmt.Sprintf("Static ChatGPT app resource files scanned: %d", p.StaticFilesScanned))
+	if len(p.StaticResourceFiles) > 0 {
+		lines = append(lines, "Static resource files inspected: "+strings.Join(p.StaticResourceFiles, ", "))
+	}
+	if len(p.ProtocolMarkers) > 0 {
+		lines = append(lines, "Static protocol markers found: "+strings.Join(p.ProtocolMarkers, " | "))
+	} else {
+		lines = append(lines, "Static protocol markers found: none")
+	}
+	if strings.TrimSpace(p.StaticInspectDetail) != "" {
+		lines = append(lines, "Static inspection note: "+strings.TrimSpace(p.StaticInspectDetail))
+	}
+
 	if p.provenTransport() {
 		lines = append(lines, "Result: FlipAi proved at least one ChatGPT-owned background transport candidate. This is still only a diagnostic; ChatGPT SMS routing is not enabled yet.")
+	} else if len(p.ProtocolMarkers) > 0 {
+		lines = append(lines, "Result: no live ChatGPT-owned local transport is exposed, but FlipAi found protocol clues in the installed desktop app package. ChatGPT is still NOT connected; the next step is to identify the request/IPC shape from these static clues without touching the visible UI or credentials.")
 	} else {
-		lines = append(lines, "Result: diagnostic completed, but no ChatGPT-owned direct transport was proven. ChatGPT is NOT connected or enabled. Codex pipes do not count as ChatGPT Chat connectivity.")
+		lines = append(lines, "Result: diagnostic completed, but no ChatGPT-owned direct transport was proven and no useful static protocol marker was found. ChatGPT is NOT connected or enabled. Codex pipes do not count as ChatGPT Chat connectivity.")
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 	probe, err := platformProbeChatGPTDirect(ctx)
 	if err != nil {
@@ -123,16 +143,20 @@ func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
 	probe.ProcessNames = uniqueSortedStrings(probe.ProcessNames)
 	probe.NamedPipes = uniqueSortedStrings(probe.NamedPipes)
 	probe.IgnoredPipes = uniqueSortedStrings(probe.IgnoredPipes)
+	probe.StaticResourceFiles = uniqueSortedStrings(probe.StaticResourceFiles)
+	probe.ProtocolMarkers = uniqueSortedStrings(probe.ProtocolMarkers)
 	message := probe.summary()
 	level := "info"
-	if probe.ProcessCount == 0 || !probe.provenTransport() {
+	if probe.ProcessCount == 0 || (!probe.provenTransport() && len(probe.ProtocolMarkers) == 0) {
 		level = "warn"
 	}
-	activityLogForStatePath(a.statePath).Add(level, "agent", "ChatGPT direct-backend diagnostic: "+truncate(strings.ReplaceAll(message, "\n", " · "), 500), "", "G", "")
+	activityLogForStatePath(a.statePath).Add(level, "agent", "ChatGPT direct-backend diagnostic: "+truncate(strings.ReplaceAll(message, "\n", " · "), 900), "", "G", "")
 	ok := probe.ProcessCount > 0 && probe.provenTransport()
 	title := "ChatGPT diagnostic complete"
 	if ok {
 		title = "ChatGPT transport candidate found"
+	} else if len(probe.ProtocolMarkers) > 0 {
+		title = "ChatGPT protocol clues found"
 	} else if probe.ProcessCount > 0 {
 		title = "ChatGPT is not connected yet"
 	}

@@ -7,17 +7,20 @@ import (
 
 func TestChatGPTDirectProbeSummaryDoesNotExposeCredentials(t *testing.T) {
 	p := chatGPTDirectProbeResult{
-		Supported:     true,
-		ProcessCount:  3,
-		ProcessNames:  []string{"ChatGPT.exe"},
-		LoopbackPorts: []int{9222, 9222, 41123},
-		CDPPorts:      []int{9222},
-		NamedPipes:    []string{"openai-chat-ipc"},
-		IgnoredPipes:  []string{"codex-ipc"},
-		DebugPipe:     true,
+		Supported:           true,
+		ProcessCount:        3,
+		ProcessNames:        []string{"ChatGPT.exe"},
+		LoopbackPorts:       []int{9222, 9222, 41123},
+		CDPPorts:            []int{9222},
+		NamedPipes:          []string{"openai-chat-ipc"},
+		IgnoredPipes:        []string{"codex-ipc"},
+		DebugPipe:           true,
+		StaticFilesScanned:  2,
+		StaticResourceFiles: []string{"resources/app.asar", "resources/preload.js"},
+		ProtocolMarkers:     []string{"/backend-api/conversation", "https://chatgpt.com"},
 	}
 	got := p.summary()
-	for _, want := range []string{"ChatGPT desktop processes: 3", "9222", "openai-chat-ipc", "Codex pipes ignored", "background transport candidate"} {
+	for _, want := range []string{"ChatGPT desktop processes: 3", "9222", "openai-chat-ipc", "Codex pipes ignored", "Static ChatGPT app resource files scanned: 2", "/backend-api/conversation", "background transport candidate"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("summary missing %q: %s", want, got)
 		}
@@ -47,18 +50,59 @@ func TestChatGPTDirectProbeDoesNotTreatPipeNamesAsOwnership(t *testing.T) {
 	}
 }
 
+func TestChatGPTStaticProtocolMarkersAreUsefulAndScrubbed(t *testing.T) {
+	data := []byte(`
+const endpoint = "https://chatgpt.com/backend-api/conversation?token=super-secret";
+const socket = "wss://chatgpt.com/ws?access_token=also-secret";
+const relative = "/backend-api/conversation";
+const id = "conversationId";
+const auth = "Authorization: Bearer do-not-return";
+`)
+	got := strings.Join(extractChatGPTProtocolMarkers(data), "\n")
+	for _, want := range []string{"https://chatgpt.com/backend-api/conversation", "wss://chatgpt.com/ws", "/backend-api/conversation", "marker: conversationId"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("static protocol scan missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"super-secret", "also-secret", "bearer do-not-return", "access_token="} {
+		if strings.Contains(strings.ToLower(got), strings.ToLower(forbidden)) {
+			t.Fatalf("static protocol scan leaked secret material %q: %s", forbidden, got)
+		}
+	}
+}
+
+func TestChatGPTStaticMarkersDoNotClaimConnection(t *testing.T) {
+	p := chatGPTDirectProbeResult{
+		Supported:          true,
+		ProcessCount:       13,
+		StaticFilesScanned: 1,
+		ProtocolMarkers:    []string{"/backend-api/conversation"},
+	}
+	if p.provenTransport() {
+		t.Fatal("static protocol strings must not count as a live ChatGPT connection")
+	}
+	got := p.summary()
+	for _, want := range []string{"protocol clues", "ChatGPT is still NOT connected"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("static-only summary missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestChatGPTDirectAgentsPaneCannotBeMistakenForEnablement(t *testing.T) {
 	body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
 	for _, want := range []string{
 		"ChatGPT Chat",
 		"Not connected",
 		`data-test="/chatgpt-direct/probe"`,
-		"Run backend diagnostic",
-		"This button does not enable ChatGPT",
+		"Run deep backend diagnostic",
+		"This still does not enable ChatGPT",
+		"Static package inspection",
+		"user-data folders are skipped",
 		"Not used",
 		"SMS routing",
 		"Unavailable in this build",
-		"If it finds only Codex pipes, those are ignored",
+		"Codex pipes remain ignored",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("ChatGPT direct pane missing %q", want)

@@ -1,23 +1,24 @@
-# FlipAi v0.46.6
+# FlipAi v0.46.7
 
-This release corrects the first ChatGPT Chat direct-backend diagnostic so it cannot report a successful ChatGPT connection merely because Codex pipes exist on the same PC.
+This release moves the regular ChatGPT Chat experiment to the next backend-discovery step after v0.46.6 proved that the running desktop app exposes no obvious ChatGPT-owned loopback or Chromium debugging transport on the test PC.
 
-## ChatGPT Chat diagnostic fix
+## Deeper ChatGPT backend diagnostic
 
-- Fixes the false-positive result seen on the real Windows test PC where `codex-browser-use-*`, `codex-computer-use-*`, and `codex-ipc` were incorrectly counted as ChatGPT Chat backend candidates.
-- Codex pipes are now listed separately and explicitly ignored for regular ChatGPT Chat connectivity.
-- A globally visible named-pipe name by itself no longer turns the diagnostic green because the pipe namespace does not prove which process owns that pipe.
-- The diagnostic only reports a proven candidate when Windows ties a loopback/Chromium transport to a ChatGPT process.
-- The Agents page now says **Not connected** and labels the button **Run backend diagnostic** so it cannot be mistaken for an Enable button.
-- The page explicitly states that the diagnostic does not enable ChatGPT and that SMS routing is unavailable until a usable direct backend is proven and tested.
-- Adds a regression test for the exact false-positive pipe set found on the user's PC.
+- Renames the action to **Run deep backend diagnostic** so the next test is clearly separate from an Enable action.
+- Keeps ignoring neighboring `codex-*` pipes; they never count as regular ChatGPT Chat connectivity.
+- Still checks for a ChatGPT-owned loopback listener or Chromium debugging channel first.
+- When no live local transport is exposed, FlipAi now inspects only the installed ChatGPT application package/static resources for protocol clues such as conversation routes, websocket paths, custom protocols, preload IPC names, and renderer/main-process bridge markers.
+- The static scan prioritizes `app.asar`, preload/renderer/main JavaScript, and other program resources.
+- ChatGPT user-data/profile locations are explicitly skipped. The diagnostic does not read cookies, tokens, Local Storage, IndexedDB, session storage, process memory, or full process command lines.
+- URL query strings and fragments are removed before any endpoint is reported, and credential-like marker text is discarded.
+- Static protocol clues never turn the agent into a connected state. They only tell the next build which background request or IPC shape is worth testing.
 
-## What this means
+## Why this step exists
 
-The v0.46.5 green result did not prove that regular ChatGPT Chat was connected. The test machine showed the ChatGPT desktop app running, no ChatGPT-owned loopback listener, no ChatGPT-owned Chromium DevTools listener, and only Codex-named pipes. v0.46.6 reports that state accurately instead of presenting it as success.
+The corrected v0.46.6 diagnostic found 13 ChatGPT desktop processes but no ChatGPT-owned local listener or DevTools connection. That means the next useful evidence has to come from how the installed desktop application's own code describes its Chat/IPC/network paths, without falling back to accessibility automation or a hidden browser.
 
-This release does not enable regular ChatGPT Chat as an SMS agent yet. It makes the diagnostic trustworthy so the next direct-backend work starts from verified ChatGPT-owned transport evidence rather than Codex IPC from the neighboring agent.
+This release still does not route SMS to regular ChatGPT Chat. Its purpose is to identify the backend protocol safely enough that a later build can attempt a harmless background Chat message and verify whether it appears in normal ChatGPT history.
 
 ## Verified
 
-The normal FlipAi CI still covers Linux and Windows tests, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation.
+The normal FlipAi CI covers Linux and Windows tests, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation.
