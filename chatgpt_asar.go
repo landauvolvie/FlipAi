@@ -243,6 +243,7 @@ func scanOneChatGPTASAR(ctx context.Context, archivePath, display string) (chatG
 				ipcSeen[ch] = true
 				result.IPCCandidates = append(result.IPCCandidates, entry.Path+" -> "+ch)
 			}
+		}
 	}
 
 	sort.Strings(result.CodeEntries)
