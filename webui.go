@@ -295,6 +295,7 @@ func (a *App) handler() http.Handler {
 	m.HandleFunc("/status.json", a.requireAuth(a.statusJSON))
 	m.HandleFunc("/activity.json", a.requireAuth(a.activityJSON))
 	m.HandleFunc("/folders.json", a.requireAuth(a.foldersJSON))
+	m.HandleFunc("/chatgpt/status.json", a.requireAuth(a.chatGPTStatusJSON))
 
 	// Actions.
 	for path, action := range map[string]http.HandlerFunc{
@@ -308,6 +309,10 @@ func (a *App) handler() http.Handler {
 		"/claude/connect":        a.claudeConnect,
 		"/claude/connect/verify": a.claudeConnectVerify,
 		"/claude/disconnect":     a.claudeDisconnect,
+		"/chatgpt/connect":       a.chatGPTConnect,
+		"/chatgpt/test":          a.chatGPTTest,
+		"/chatgpt/chat":          a.chatGPTChat,
+		"/chatgpt/disconnect":    a.chatGPTDisconnect,
 		"/agents/numbers/add":    a.addAgentNumber,
 		"/agents/numbers/remove": a.removeAgentNumber,
 		"/settings/save":         a.saveSettings,

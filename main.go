@@ -133,7 +133,7 @@ func waitForShutdown(dataDir, cfgPath string, d time.Duration) {
 	}
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() {
+		if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() && !chatGPTBrowserStillOpen(dataDir) {
 			// WebView2 keeps helper processes and open handles inside the data
 			// folder for a moment after its window goes; Setup deletes that
 			// folder next, so give them time to let go.
