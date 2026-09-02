@@ -1,0 +1,1 @@
+Publish v0.46.9 only after the final branch and pull-request checks pass.
