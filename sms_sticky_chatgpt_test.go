@@ -12,9 +12,9 @@ func stickyRoutingConfig(t *testing.T) Config {
 	cfg := defaultConfig(t.TempDir())
 	cfg.Codex.RequireCode = false
 	cfg.Claude.RequireCode = false
-	cfg.Codex.Phones = []AgentPhone{{Number: "18455550123", Access: AccessSMS}}
-	cfg.Claude.Phones = []AgentPhone{{Number: "18455550123", Access: AccessSMS}}
-	cfg.ChatGPT.Phones = []AgentPhone{{Number: "18455550123", Access: AccessSMS}}
+	cfg.Codex.Phones = []AgentPhone{{Number: "8455550123", Access: AccessSMS}}
+	cfg.Claude.Phones = []AgentPhone{{Number: "8455550123", Access: AccessSMS}}
+	cfg.ChatGPT.Phones = []AgentPhone{{Number: "8455550123", Access: AccessSMS}}
 	return cfg
 }
 
