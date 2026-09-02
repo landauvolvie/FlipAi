@@ -8,16 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 )
 
 // chatGPTCloudMapScan is the final static-protocol pass before FlipAi attempts
 // any independently authenticated ChatGPT cloud connection. It reads only the
-// installed application package. Public protocol constants may be reported
-// (for example an OAuth client id or redirect URI), but credential/session
-// values are never read from user-data storage and token/cookie values are
-// never returned.
+// installed app package. Public protocol constants may be reported; session,
+// token, cookie and credential values are never read or returned.
 type chatGPTCloudMapScan struct {
 	OAuthEndpoints        []string
 	PublicClientIDs       []string
@@ -35,50 +32,37 @@ type chatGPTCloudMapScan struct {
 }
 
 var (
-	chatGPTCloudAuthURLRegex = regexp.MustCompile(`(?i)https://(?:auth|api)\.openai\.com/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,240}`)
-	chatGPTCloudConversationRegex = regexp.MustCompile(`(?i)(?:https://chatgpt\.com)?/(?:backend-api/)?conversation(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,220})?`)
-	chatGPTCloudClientIDRegex = regexp.MustCompile(`(?i)(?:["'\x60]?(?:client_id|clientId)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{3,220})`)
-	chatGPTCloudRedirectRegex = regexp.MustCompile(`(?i)(?:["'\x60]?(?:redirect_uri|redirectUri)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{3,320})`)
-	chatGPTCloudScopeRegex = regexp.MustCompile(`(?i)(?:["'\x60]?(?:scope|scopes)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{2,360})`)
+	chatGPTCloudAuthURLRegex = regexp.MustCompile(`(?i)https://(?:auth|api)\.openai\.com/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]{0,300}`)
+	chatGPTCloudConversationRegex = regexp.MustCompile(`(?i)(?:https://chatgpt\.com)?/(?:backend-api/)?conversation(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]{0,260})?`)
+	chatGPTCloudClientRegexes = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:["'\x60]?(?:client_id|clientId)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{3,220})`),
+		regexp.MustCompile(`(?i)(?:set|append)\s*\(\s*["'\x60](?:client_id|clientId)["'\x60]\s*,\s*["'\x60]([^"'\x60\r\n]{3,220})`),
+	}
+	chatGPTCloudRedirectRegexes = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:["'\x60]?(?:redirect_uri|redirectUri)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{3,320})`),
+		regexp.MustCompile(`(?i)(?:set|append)\s*\(\s*["'\x60](?:redirect_uri|redirectUri)["'\x60]\s*,\s*["'\x60]([^"'\x60\r\n]{3,320})`),
+	}
+	chatGPTCloudScopeRegexes = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:["'\x60]?(?:scope|scopes)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{2,360})`),
+		regexp.MustCompile(`(?i)(?:set|append)\s*\(\s*["'\x60](?:scope|scopes)["'\x60]\s*,\s*["'\x60]([^"'\x60\r\n]{2,360})`),
+	}
 	chatGPTCloudHeaderRegex = regexp.MustCompile(`(?i)["'\x60]((?:authorization|content-type|accept|cookie|origin|referer|user-agent|oai-[a-z0-9-]+|openai-[a-z0-9-]+|x-[a-z0-9-]+))["'\x60]\s*(?::|,)`)
 	chatGPTCloudActionRegex = regexp.MustCompile(`(?i)(?:["'\x60]?action["'\x60]?)\s*:\s*["'\x60]([A-Za-z0-9_-]{1,50})["'\x60]`)
 	chatGPTCloudNullConversationRegex = regexp.MustCompile(`(?i)(?:conversation_id|conversationId)\s*:\s*(?:null|undefined)`)
-	chatGPTCloudMechanicLiteralRegex = regexp.MustCompile(`(?i)["'\x60](code_challenge_method|code_challenge|code_verifier|response_type|grant_type)["'\x60]`)
 )
 
 var chatGPTCloudRequestKeys = map[string]bool{
-	"action": true,
-	"messages": true,
-	"message": true,
-	"author": true,
-	"role": true,
-	"content": true,
-	"content_type": true,
-	"parts": true,
-	"model": true,
-	"conversation_id": true,
-	"conversationId": true,
-	"parent_message_id": true,
-	"parentMessageId": true,
-	"message_id": true,
-	"messageId": true,
-	"timezone_offset_min": true,
-	"history_and_training_disabled": true,
-	"websocket_request_id": true,
-	"websocketRequestId": true,
-	"conversation_mode": true,
-	"conversationMode": true,
-	"force_paragen": true,
-	"force_rate_limit": true,
-	"suggestions": true,
-	"supported_encodings": true,
-	"system_hints": true,
-	"metadata": true,
-	"recipient": true,
-	"status": true,
-	"end_turn": true,
-	"parent_id": true,
-	"parentId": true,
+	"action": true, "messages": true, "message": true, "author": true,
+	"role": true, "content": true, "content_type": true, "parts": true,
+	"model": true, "conversation_id": true, "conversationId": true,
+	"parent_message_id": true, "parentMessageId": true, "message_id": true,
+	"messageId": true, "timezone_offset_min": true,
+	"history_and_training_disabled": true, "websocket_request_id": true,
+	"websocketRequestId": true, "conversation_mode": true,
+	"conversationMode": true, "force_paragen": true, "force_rate_limit": true,
+	"suggestions": true, "supported_encodings": true, "system_hints": true,
+	"metadata": true, "recipient": true, "status": true, "end_turn": true,
+	"parent_id": true, "parentId": true,
 }
 
 func chatGPTCloudStripURL(v string) string {
@@ -98,8 +82,8 @@ func chatGPTSafePublicClientID(v string) bool {
 		return false
 	}
 	low := strings.ToLower(v)
-	for _, forbidden := range []string{"secret", "token", "bearer", "cookie", "password", "session"} {
-		if strings.Contains(low, forbidden) {
+	for _, bad := range []string{"secret", "token", "bearer", "cookie", "password", "session"} {
+		if strings.Contains(low, bad) {
 			return false
 		}
 	}
@@ -112,36 +96,22 @@ func chatGPTSafePublicClientID(v string) bool {
 }
 
 func chatGPTSafeRedirectURI(v string) (string, bool) {
-	v = strings.TrimSpace(v)
-	if len(v) < 4 || len(v) > 320 {
+	u, err := url.Parse(strings.TrimSpace(v))
+	if err != nil || u.Scheme == "" {
 		return "", false
 	}
-	u, err := url.Parse(v)
-	if err != nil || strings.TrimSpace(u.Scheme) == "" {
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" && !strings.Contains(scheme, "openai") && !strings.Contains(scheme, "chatgpt") && !strings.Contains(scheme, "codex") {
 		return "", false
 	}
-	lowScheme := strings.ToLower(u.Scheme)
-	if lowScheme != "http" && lowScheme != "https" && lowScheme != "codex" && lowScheme != "chatgpt" && lowScheme != "openai" && !strings.Contains(lowScheme, "openai") && !strings.Contains(lowScheme, "chatgpt") && !strings.Contains(lowScheme, "codex") {
-		return "", false
-	}
-	// Query parameters may contain transient state. The diagnostic needs only
-	// the callback target, so strip query and fragment even though this is
-	// static package text.
 	u.RawQuery = ""
 	u.Fragment = ""
 	out := u.String()
-	if out == "" || len(out) > 320 {
-		return "", false
-	}
-	return out, true
+	return out, out != "" && len(out) <= 320
 }
 
 func chatGPTSafeOAuthScope(v string) (string, bool) {
-	v = strings.TrimSpace(v)
-	if v == "" || len(v) > 360 {
-		return "", false
-	}
-	parts := strings.Fields(v)
+	parts := strings.Fields(strings.TrimSpace(v))
 	if len(parts) == 0 || len(parts) > 24 {
 		return "", false
 	}
@@ -158,53 +128,41 @@ func chatGPTSafeOAuthScope(v string) (string, bool) {
 	return strings.Join(parts, " "), true
 }
 
-func chatGPTCloudRelevantWindows(text string) []string {
-	idxs := []int{}
-	for _, re := range []*regexp.Regexp{chatGPTCloudAuthURLRegex, chatGPTCloudConversationRegex} {
-		for _, loc := range re.FindAllStringIndex(text, 80) {
-			if len(loc) == 2 {
-				idxs = append(idxs, loc[0])
-			}
-	}
-	for _, needle := range []string{"client_id", "code_challenge", "code_verifier", "redirect_uri", "auth.openai.com", "backend-api", "conversationId", "conversation_id"} {
+// chatGPTCloudRelevantText limits generic marker searches to code close to a
+// Chat/auth anchor. This keeps a generic cookie helper elsewhere in a large
+// bundle from falsely proving that the conversation request needs cookies.
+func chatGPTCloudRelevantText(text string) string {
+	low := strings.ToLower(text)
+	anchors := []string{"auth.openai.com", "client_id", "code_challenge", "code_verifier", "redirect_uri", "backend-api", "/conversation", "conversationid", "conversation_id"}
+	pieces := []string{}
+	seen := map[int]bool{}
+	for _, anchor := range anchors {
 		from := 0
-		for len(idxs) < 180 {
-			i := strings.Index(strings.ToLower(text[from:]), strings.ToLower(needle))
+		for len(pieces) < 48 && from < len(low) {
+			i := strings.Index(low[from:], anchor)
 			if i < 0 {
 				break
 			}
 			i += from
-			idxs = append(idxs, i)
-			from = i + len(needle)
-			if from >= len(text) {
-				break
+			bucket := i / 4000
+			if !seen[bucket] {
+				seen[bucket] = true
+				start, end := i-7000, i+7000
+				if start < 0 { start = 0 }
+				if end > len(text) { end = len(text) }
+				pieces = append(pieces, text[start:end])
 			}
+			from = i + len(anchor)
 		}
 	}
-	if len(idxs) == 0 {
-		return nil
-	}
-	sort.Ints(idxs)
-	windows := []string{}
-	lastCenter := -100000
-	for _, center := range idxs {
-		if center-lastCenter < 4000 {
-			continue
-		}
-		lastCenter = center
-		windows = append(windows, chatGPTCodeWindow(text, center, 14000))
-		if len(windows) >= 36 {
-			break
-		}
-	}
-	return windows
+	return strings.Join(pieces, "\n")
 }
 
 func extractChatGPTCloudMap(path string, data []byte) chatGPTCloudMapScan {
 	var out chatGPTCloudMapScan
 	text := string(data)
-	windows := chatGPTCloudRelevantWindows(text)
-	if len(windows) == 0 {
+	relevant := chatGPTCloudRelevantText(text)
+	if relevant == "" {
 		return out
 	}
 
@@ -216,120 +174,111 @@ func extractChatGPTCloudMap(path string, data []byte) chatGPTCloudMapScan {
 		}
 	}
 	for _, raw := range chatGPTCloudConversationRegex.FindAllString(text, 100) {
-		v := chatGPTCloudStripURL(raw)
-		if v != "" {
+		if v := chatGPTCloudStripURL(raw); v != "" {
 			out.ConversationEndpoints = append(out.ConversationEndpoints, path+" -> "+v)
 		}
 	}
-
-	for _, window := range windows {
-		for _, m := range chatGPTCloudClientIDRegex.FindAllStringSubmatch(window, 40) {
+	for _, re := range chatGPTCloudClientRegexes {
+		for _, m := range re.FindAllStringSubmatch(relevant, 60) {
 			if len(m) >= 2 && chatGPTSafePublicClientID(m[1]) {
 				out.PublicClientIDs = append(out.PublicClientIDs, path+" -> "+strings.TrimSpace(m[1]))
 			}
 		}
-		for _, m := range chatGPTCloudRedirectRegex.FindAllStringSubmatch(window, 40) {
+	}
+	for _, re := range chatGPTCloudRedirectRegexes {
+		for _, m := range re.FindAllStringSubmatch(relevant, 60) {
 			if len(m) >= 2 {
 				if v, ok := chatGPTSafeRedirectURI(m[1]); ok {
 					out.RedirectURIs = append(out.RedirectURIs, path+" -> "+v)
 				}
 			}
 		}
-		for _, m := range chatGPTCloudScopeRegex.FindAllStringSubmatch(window, 40) {
+	}
+	for _, re := range chatGPTCloudScopeRegexes {
+		for _, m := range re.FindAllStringSubmatch(relevant, 60) {
 			if len(m) >= 2 {
 				if v, ok := chatGPTSafeOAuthScope(m[1]); ok {
 					out.OAuthScopes = append(out.OAuthScopes, path+" -> "+v)
 				}
 			}
 		}
-		for _, m := range chatGPTCloudMechanicLiteralRegex.FindAllStringSubmatch(window, 80) {
-			if len(m) >= 2 {
-				out.OAuthMechanics = append(out.OAuthMechanics, path+" -> "+strings.ToLower(m[1]))
-			}
-		}
-		low := strings.ToLower(window)
-		for needle, label := range map[string]string{
-			"code_challenge_method": "PKCE code_challenge_method",
-			"code_challenge":        "PKCE code_challenge",
-			"code_verifier":         "PKCE code_verifier",
-			"response_type":         "OAuth response_type",
-			"grant_type":            "OAuth grant_type",
-			"offline_access":        "OAuth offline_access scope marker",
-		} {
-			if strings.Contains(low, needle) {
-				out.OAuthMechanics = append(out.OAuthMechanics, path+" -> "+label)
-			}
-		}
+	}
 
-		for _, m := range chatGPTCloudHeaderRegex.FindAllStringSubmatch(window, 120) {
-			if len(m) < 2 {
-				continue
-			}
-			name := strings.TrimSpace(m[1])
-			if name == "" || len(name) > 100 {
-				continue
-			}
-			out.HeaderNames = append(out.HeaderNames, path+" -> "+name)
+	low := strings.ToLower(relevant)
+	for needle, label := range map[string]string{
+		"code_challenge_method": "PKCE code_challenge_method",
+		"code_challenge": "PKCE code_challenge",
+		"code_verifier": "PKCE code_verifier",
+		"response_type": "OAuth response_type",
+		"grant_type": "OAuth grant_type",
+		"offline_access": "OAuth offline_access scope marker",
+	} {
+		if strings.Contains(low, needle) {
+			out.OAuthMechanics = append(out.OAuthMechanics, path+" -> "+label)
 		}
+	}
+	for _, m := range chatGPTCloudHeaderRegex.FindAllStringSubmatch(relevant, 160) {
+		if len(m) >= 2 {
+			out.HeaderNames = append(out.HeaderNames, path+" -> "+strings.TrimSpace(m[1]))
+		}
+	}
+	for _, m := range chatGPTStringKeyRegex.FindAllStringSubmatch(relevant, 900) {
+		if len(m) >= 2 && chatGPTCloudRequestKeys[m[1]] {
+			out.RequestFields = append(out.RequestFields, path+" -> "+m[1])
+		}
+	}
+	for _, m := range chatGPTObjectKeyRegex.FindAllStringSubmatch(relevant, 900) {
+		if len(m) >= 2 && chatGPTCloudRequestKeys[m[1]] {
+			out.RequestFields = append(out.RequestFields, path+" -> "+m[1])
+		}
+	}
+	for _, m := range chatGPTCloudActionRegex.FindAllStringSubmatch(relevant, 60) {
+		if len(m) >= 2 {
+			out.ConversationState = append(out.ConversationState, path+" -> action="+m[1])
+		}
+	}
+	if chatGPTCloudNullConversationRegex.MatchString(relevant) {
+		out.ConversationState = append(out.ConversationState, path+" -> new-chat signal: conversation_id null/undefined")
+	}
+	for _, key := range []string{"conversation_id", "conversationId", "parent_message_id", "parentMessageId", "message_id", "messageId", "websocket_request_id", "websocketRequestId"} {
+		if strings.Contains(relevant, key) {
+			out.ConversationState = append(out.ConversationState, path+" -> state key "+key)
+		}
+	}
 
-		for _, m := range chatGPTStringKeyRegex.FindAllStringSubmatch(window, 600) {
-			if len(m) >= 2 && chatGPTCloudRequestKeys[m[1]] {
-				out.RequestFields = append(out.RequestFields, path+" -> "+m[1])
-			}
+	for needle, label := range map[string]string{
+		"text/event-stream": "SSE content type text/event-stream",
+		"eventsource": "EventSource/SSE",
+		"websocket": "WebSocket",
+		"wss://chatgpt.com": "ChatGPT WSS endpoint",
+		"wss://ws.chatgpt.com": "ChatGPT ws.chatgpt.com endpoint",
+		"[done]": "SSE [DONE] terminator marker",
+		"messageevent": "MessageEvent",
+		"event.data": "event.data parser",
+	} {
+		if strings.Contains(low, needle) {
+			out.StreamFormats = append(out.StreamFormats, path+" -> "+label)
 		}
-		for _, m := range chatGPTObjectKeyRegex.FindAllStringSubmatch(window, 600) {
-			if len(m) >= 2 && chatGPTCloudRequestKeys[m[1]] {
-				out.RequestFields = append(out.RequestFields, path+" -> "+m[1])
-			}
-		}
-		for _, m := range chatGPTCloudActionRegex.FindAllStringSubmatch(window, 40) {
-			if len(m) >= 2 {
-				out.ConversationState = append(out.ConversationState, path+" -> action="+m[1])
-			}
-		}
-		if chatGPTCloudNullConversationRegex.MatchString(window) {
-			out.ConversationState = append(out.ConversationState, path+" -> new-chat signal: conversation_id null/undefined")
-		}
-		for _, key := range []string{"conversation_id", "conversationId", "parent_message_id", "parentMessageId", "message_id", "messageId", "websocket_request_id", "websocketRequestId"} {
-			if strings.Contains(window, key) {
-				out.ConversationState = append(out.ConversationState, path+" -> state key "+key)
-			}
-		}
-
-		for needle, label := range map[string]string{
-			"text/event-stream": "SSE content type text/event-stream",
-			"eventsource":       "EventSource/SSE",
-			"websocket":         "WebSocket",
-			"wss://chatgpt.com": "ChatGPT WSS endpoint",
-			"wss://ws.chatgpt.com": "ChatGPT ws.chatgpt.com endpoint",
-			"[done]":            "SSE [DONE] terminator marker",
-			"messageevent":      "MessageEvent",
-			"event.data":        "event.data parser",
-		} {
-			if strings.Contains(low, needle) {
-				out.StreamFormats = append(out.StreamFormats, path+" -> "+label)
-			}
-		}
-
-		for needle, label := range map[string]string{
-			"credentials:\"include\"":                  "fetch credentials=include",
-			"credentials:'include'":                    "fetch credentials=include",
-			"withcredentials":                          "withCredentials/browser session context",
-			"oai-device-id":                            "OAI device-id header/state",
-			"openai-sentinel-chat-requirements-token":  "Sentinel chat-requirements token header",
-			"chat-requirements":                        "chat requirements challenge",
-			"requirements_token":                       "requirements token field",
-			"arkose":                                   "Arkose challenge marker",
-			"turnstile":                                "Turnstile challenge marker",
-			"cf_clearance":                             "Cloudflare clearance cookie marker",
-			"csrf":                                     "CSRF marker",
-			"proof_token":                              "proof token field",
-			"device_id":                                "device_id field",
-			"cookie":                                   "cookie/session marker near Chat/auth code",
-		} {
-			if strings.Contains(low, needle) {
-				out.SessionDependencies = append(out.SessionDependencies, path+" -> "+label)
-			}
+	}
+	for needle, label := range map[string]string{
+		"credentials:\"include\"": "fetch credentials=include",
+		"credentials:'include'": "fetch credentials=include",
+		"withcredentials": "withCredentials/browser session context",
+		"oai-device-id": "OAI device-id header/state",
+		"openai-sentinel-chat-requirements-token": "Sentinel chat-requirements token header",
+		"chat-requirements": "chat requirements challenge",
+		"requirements_token": "requirements token field",
+		"arkose": "Arkose challenge marker",
+		"turnstile": "Turnstile challenge marker",
+		"cf_clearance": "Cloudflare clearance cookie marker",
+		"csrf": "CSRF marker",
+		"proof_token": "proof token field",
+		"device_id": "device_id field",
+		"\"cookie\"": "cookie/session marker near Chat/auth code",
+		"'cookie'": "cookie/session marker near Chat/auth code",
+	} {
+		if strings.Contains(low, needle) {
+			out.SessionDependencies = append(out.SessionDependencies, path+" -> "+label)
 		}
 	}
 
@@ -362,19 +311,19 @@ func mergeChatGPTCloudMap(dst *chatGPTCloudMapScan, src chatGPTCloudMapScan) {
 }
 
 func assessChatGPTCloudMap(s chatGPTCloudMapScan) string {
-	joinedEndpoints := strings.ToLower(strings.Join(s.OAuthEndpoints, " "))
-	joinedMechanics := strings.ToLower(strings.Join(s.OAuthMechanics, " "))
-	joinedDeps := strings.ToLower(strings.Join(s.SessionDependencies, " "))
-	hasAuthorize := strings.Contains(joinedEndpoints, "authorize") || strings.Contains(joinedEndpoints, "oauth")
-	hasTokenEndpoint := strings.Contains(joinedEndpoints, "/token")
-	hasPKCE := strings.Contains(joinedMechanics, "code_challenge") && strings.Contains(joinedMechanics, "code_verifier")
+	endpoints := strings.ToLower(strings.Join(s.OAuthEndpoints, " "))
+	mechanics := strings.ToLower(strings.Join(s.OAuthMechanics, " "))
+	deps := strings.ToLower(strings.Join(s.SessionDependencies, " "))
+	hasAuthorize := strings.Contains(endpoints, "authorize") || strings.Contains(endpoints, "oauth")
+	hasTokenEndpoint := strings.Contains(endpoints, "/token")
+	hasPKCE := strings.Contains(mechanics, "code_challenge") && strings.Contains(mechanics, "code_verifier")
 	hasPublicClient := len(s.PublicClientIDs) > 0
 	hasRedirect := len(s.RedirectURIs) > 0
 	hasConversation := len(s.ConversationEndpoints) > 0
 	hasRequest := len(s.RequestFields) > 0
 	hasStreaming := len(s.StreamFormats) > 0
-	hasBrowserState := strings.Contains(joinedDeps, "credentials=include") || strings.Contains(joinedDeps, "withcredentials") || strings.Contains(joinedDeps, "clearance cookie") || strings.Contains(joinedDeps, "cookie/session")
-	hasChallenges := strings.Contains(joinedDeps, "arkose") || strings.Contains(joinedDeps, "turnstile") || strings.Contains(joinedDeps, "sentinel") || strings.Contains(joinedDeps, "chat requirements")
+	hasBrowserState := strings.Contains(deps, "credentials=include") || strings.Contains(deps, "withcredentials") || strings.Contains(deps, "clearance cookie") || strings.Contains(deps, "cookie/session")
+	hasChallenges := strings.Contains(deps, "arkose") || strings.Contains(deps, "turnstile") || strings.Contains(deps, "sentinel") || strings.Contains(deps, "chat requirements")
 
 	switch {
 	case hasPublicClient && hasRedirect && hasAuthorize && hasPKCE && hasConversation && hasRequest && !hasBrowserState:
@@ -405,47 +354,30 @@ func assessChatGPTCloudMap(s chatGPTCloudMapScan) string {
 func scanOneChatGPTCloudMap(ctx context.Context, archivePath string) (chatGPTCloudMapScan, error) {
 	var out chatGPTCloudMapScan
 	_, entries, err := readChatGPTASARIndex(archivePath)
-	if err != nil {
-		return out, err
-	}
+	if err != nil { return out, err }
 	f, err := os.Open(archivePath)
-	if err != nil {
-		return out, err
-	}
+	if err != nil { return out, err }
 	defer f.Close()
 
 	var total int64
-	inspected := 0
-	matched := 0
+	inspected, matched := 0, 0
 	const totalLimit = int64(256 << 20)
 	const fileLimit = int64(32 << 20)
 	for _, entry := range entries {
-		if ctx.Err() != nil || total >= totalLimit {
-			break
-		}
-		if entry.Unpacked || entry.Size <= 0 || entry.Size > fileLimit || !chatGPTASARCodePath(entry.Path) {
-			continue
-		}
+		if ctx.Err() != nil || total >= totalLimit { break }
+		if entry.Unpacked || entry.Size <= 0 || entry.Size > fileLimit || !chatGPTASARCodePath(entry.Path) { continue }
 		lowPath := strings.ToLower(entry.Path)
-		if !(strings.Contains(lowPath, ".vite/build/") || strings.Contains(lowPath, "preload") || strings.Contains(lowPath, "main") || strings.Contains(lowPath, "worker") || strings.Contains(lowPath, "webview/") || strings.Contains(lowPath, "renderer")) {
-			continue
-		}
+		if !(strings.Contains(lowPath, ".vite/build/") || strings.Contains(lowPath, "preload") || strings.Contains(lowPath, "main") || strings.Contains(lowPath, "worker") || strings.Contains(lowPath, "webview/") || strings.Contains(lowPath, "renderer")) { continue }
 		limit := entry.Size
-		if remain := totalLimit - total; remain < limit {
-			limit = remain
-		}
+		if remain := totalLimit-total; remain < limit { limit = remain }
 		b := make([]byte, int(limit))
 		n, readErr := f.ReadAt(b, entry.Offset)
-		if readErr != nil && readErr != io.EOF {
-			continue
-		}
+		if readErr != nil && readErr != io.EOF { continue }
 		b = b[:n]
 		total += int64(n)
 		inspected++
 		one := extractChatGPTCloudMap(entry.Path, b)
-		if len(one.OAuthEndpoints)+len(one.PublicClientIDs)+len(one.ConversationEndpoints)+len(one.RequestFields) > 0 {
-			matched++
-		}
+		if len(one.OAuthEndpoints)+len(one.PublicClientIDs)+len(one.ConversationEndpoints)+len(one.RequestFields) > 0 { matched++ }
 		mergeChatGPTCloudMap(&out, one)
 	}
 
@@ -470,42 +402,28 @@ func scanChatGPTCloudMaps(ctx context.Context, roots []string) chatGPTCloudMapSc
 	seen := map[string]bool{}
 	for _, root := range roots {
 		root = filepath.Clean(strings.TrimSpace(root))
-		if root == "" || root == "." || ctx.Err() != nil {
-			continue
-		}
+		if root == "" || root == "." || ctx.Err() != nil { continue }
 		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil || ctx.Err() != nil {
-				return nil
-			}
+			if err != nil || ctx.Err() != nil { return nil }
 			low := strings.ToLower(filepath.Clean(path))
 			for _, privatePart := range []string{"\\user data\\", "\\local storage\\", "\\indexeddb\\", "\\session storage\\", "\\network\\", "\\cache\\", "\\gpucache\\"} {
 				if strings.Contains(low, privatePart) {
-					if d.IsDir() {
-						return filepath.SkipDir
-					}
+					if d.IsDir() { return filepath.SkipDir }
 					return nil
 				}
 			}
-			if d.IsDir() || !strings.EqualFold(d.Name(), "app.asar") {
-				return nil
-			}
+			if d.IsDir() || !strings.EqualFold(d.Name(), "app.asar") { return nil }
 			key := strings.ToLower(filepath.Clean(path))
-			if seen[key] {
-				return nil
-			}
+			if seen[key] { return nil }
 			seen[key] = true
 			one, e := scanOneChatGPTCloudMap(ctx, path)
 			if e != nil {
-				if out.Detail == "" {
-					out.Detail = "cloud-auth ASAR parse failed: " + e.Error()
-				}
+				if out.Detail == "" { out.Detail = "cloud-auth ASAR parse failed: "+e.Error() }
 				return nil
 			}
 			mergeChatGPTCloudMap(&out, one)
 			if one.Detail != "" {
-				if out.Detail != "" {
-					out.Detail += " | "
-				}
+				if out.Detail != "" { out.Detail += " | " }
 				out.Detail += one.Detail
 			}
 			return nil
