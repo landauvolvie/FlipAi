@@ -1,0 +1,64 @@
+name: fix-v04614-stale-tests
+on:
+  push:
+    branches:
+      - feature/chatgpt-g-sticky-routing-v04614
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[v04614-tests-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update stale v0.46.14 regression expectations
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('sms_sticky_chatgpt_test.go')
+          s = p.read_text(encoding='utf-8')
+          old = 'if got := st.LastAgentBySender["18455550123"]; got != "G" {'
+          new = 'if got := st.LastAgentBySender["8455550123"]; got != "G" {'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one stale sticky phone assertion, got {s.count(old)}')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+
+          p = Path('ui_test.go')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('\n\t\t"defaultAgent":   {"A"},', '')
+          old = 'if cfg.DefaultAgent != "A" || cfg.TurnTimeoutMinutes != 45 || cfg.Claude.PermissionMode != "plan" {'
+          new = 'if cfg.TurnTimeoutMinutes != 45 || cfg.Claude.PermissionMode != "plan" {'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one stale default-agent assertion, got {s.count(old)}')
+          s = s.replace(old, new)
+          old_block = '''\tif rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"defaultAgent": {"A"}}); rr.Code != http.StatusSeeOther {
+\t\tt.Fatalf("partial save returned %d", rr.Code)
+\t}
+\tcfg := a.reloadConfig(t)
+\tif cfg.DefaultAgent != "A" {
+\t\tt.Fatal("the submitted field was not applied")
+\t}'''
+          new_block = '''\tif rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"turnTimeout": {"45"}}); rr.Code != http.StatusSeeOther {
+\t\tt.Fatalf("partial save returned %d", rr.Code)
+\t}
+\tcfg := a.reloadConfig(t)
+\tif cfg.TurnTimeoutMinutes != 45 {
+\t\tt.Fatal("the submitted field was not applied")
+\t}'''
+          if s.count(old_block) != 1:
+              raise SystemExit(f'expected one stale partial-form default-agent block, got {s.count(old_block)}')
+          s = s.replace(old_block, new_block)
+          p.write_text(s, encoding='utf-8')
+
+          Path('.github/workflows/fix-v04614-stale-tests.yml').unlink()
+          PY
+      - name: Commit corrected regression tests
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix stale v0.46.14 regression expectations [v04614-tests-fixed]"
+          git push
