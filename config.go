@@ -15,12 +15,12 @@ import (
 	"time"
 )
 
-const version = "0.46.15"
+const version = "0.46.17"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
 // where to send anything — only that its answer travels as a text message.
-const defaultReplyStyleHint = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."
+const defaultReplyStyleHint = "Reply for SMS. Keep it brief and plain text."
 
 // replyStyleHintMaxChars caps a hand-written instruction. FlipAi is a transport
 // between a phone and the agent the user already trusts, so this line is meant
@@ -45,6 +45,7 @@ type Config struct {
 	DefaultAgent       string `json:"defaultAgent"`
 	CodexPrefix        string `json:"codexPrefix,omitempty"`
 	ClaudePrefix       string `json:"claudePrefix,omitempty"`
+	ChatGPTPrefix      string `json:"chatgptPrefix,omitempty"`
 	NewSessionCommand  string `json:"newSessionCommand,omitempty"`
 
 	// Paused stops the bridge from picking up new texts without shutting the
@@ -58,6 +59,7 @@ type Config struct {
 	GoogleVoice GoogleVoiceConfig `json:"googleVoice"`
 	Codex       CodexConfig       `json:"codex"`
 	Claude      ClaudeConfig      `json:"claude"`
+	ChatGPT     ChatGPTConfig     `json:"chatgpt"`
 	Security    SecurityConfig    `json:"security"`
 	UI          UIConfig          `json:"ui"`
 }
@@ -123,6 +125,13 @@ type CodexConfig struct {
 	AgentSettings
 
 	ApprovalPolicy string `json:"approvalPolicy"`
+}
+
+// ChatGPTConfig gives regular ChatGPT Chat the same SMS-facing shape as the
+// CLI agents. Its browser connection remains separate because the underlying
+// connection mechanism is different.
+type ChatGPTConfig struct {
+	AgentSettings
 }
 
 type ClaudeConfig struct {
@@ -209,7 +218,8 @@ type SecurityConfig struct {
 	// AgentsMigrated records that the shared allowlist and code have already
 	// been moved onto the agents, so a later change on one agent is never
 	// undone by migrating the old fields again.
-	AgentsMigrated bool `json:"agentsMigrated,omitempty"`
+	AgentsMigrated       bool `json:"agentsMigrated,omitempty"`
+	ChatGPTAgentMigrated bool `json:"chatgptAgentMigrated,omitempty"`
 
 	// MachineScopeSecrets records that stored credentials are protected for
 	// this PC rather than for the signed-in account. Starting before sign-in
@@ -337,7 +347,7 @@ func defaultConfig(dataDir string) Config {
 	return Config{
 		CodexPath: "codex", ClaudePath: "claude", Cwd: home,
 		Listen: "127.0.0.1:8765", LocalToken: tok, TurnTimeoutMinutes: 90,
-		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, NewSessionCommand: defaultNewSessionCommand,
+		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, ChatGPTPrefix: defaultChatGPTPrefix, NewSessionCommand: defaultNewSessionCommand,
 		Gmail: GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
 		GoogleVoice: GoogleVoiceConfig{
 			RequiredSubjectPhrase:   "new text message from",
@@ -348,10 +358,13 @@ func defaultConfig(dataDir string) Config {
 			ProgressUpdates:         true,
 			ProgressIntervalSeconds: 120,
 		},
-		Updates:  UpdateConfig{Automatic: false},
-		Codex:    CodexConfig{ApprovalPolicy: "never"},
-		Claude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
-		Security: SecurityConfig{RequireCode: true},
+		Updates: UpdateConfig{Automatic: false},
+		Codex:   CodexConfig{ApprovalPolicy: "never"},
+		Claude:  ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
+		ChatGPT: ChatGPTConfig{AgentSettings: AgentSettings{
+			ReplyAck: boolPtr(true), ProgressUpdates: boolPtr(true), ProgressIntervalSeconds: 120, AckDelaySeconds: 30,
+		}},
+		Security: SecurityConfig{RequireCode: false},
 		UI:       UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
 	}
 }
@@ -380,16 +393,9 @@ func (c Config) codexWorkingDir() string {
 // The same 30-second floor the shared setting has applies to an override, so a
 // per-agent value cannot turn a long turn into a stream of texts.
 func (c Config) progressIntervalFor(agent string) time.Duration {
-	seconds := c.GoogleVoice.ProgressIntervalSeconds
-	switch agent {
-	case "A":
-		if v := c.Claude.ProgressIntervalSeconds; v > 0 {
-			seconds = v
-		}
-	case "C":
-		if v := c.Codex.ProgressIntervalSeconds; v > 0 {
-			seconds = v
-		}
+	seconds := agentSettings(c, agent).ProgressIntervalSeconds
+	if seconds <= 0 {
+		seconds = c.GoogleVoice.ProgressIntervalSeconds
 	}
 	if seconds < 30 {
 		seconds = 120
@@ -402,16 +408,10 @@ func (c Config) progressIntervalFor(agent string) time.Duration {
 // otherwise the shared default. An install that never opens the new editors
 // keeps behaving exactly as it did, because both overrides start empty.
 func (c Config) replyStyleHintFor(agent string) string {
-	var own string
-	switch agent {
-	case "A":
-		own = strings.TrimSpace(c.Claude.Instruction)
-	case "C":
-		own = strings.TrimSpace(c.Codex.Instruction)
-	}
-	if own != "" {
-		return own
-	}
+	// One instruction applies to every agent. The agent argument remains so the
+	// call sites stay explicit about what they are composing, but it no longer
+	// selects different prompt text.
+	_ = agent
 	if shared := strings.TrimSpace(c.GoogleVoice.ReplyStyleHint); shared != "" {
 		return shared
 	}
@@ -538,9 +538,10 @@ func loadConfig(path, dataDir string) (Config, error) {
 	}
 	cfg.CodexPrefix = normalizeCommandToken(cfg.CodexPrefix, defaultCodexPrefix)
 	cfg.ClaudePrefix = normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)
+	cfg.ChatGPTPrefix = normalizeCommandToken(cfg.ChatGPTPrefix, defaultChatGPTPrefix)
 	cfg.NewSessionCommand = normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)
-	if strings.EqualFold(cfg.CodexPrefix, cfg.ClaudePrefix) {
-		cfg.CodexPrefix, cfg.ClaudePrefix = defaultCodexPrefix, defaultClaudePrefix
+	if strings.EqualFold(cfg.CodexPrefix, cfg.ClaudePrefix) || strings.EqualFold(cfg.CodexPrefix, cfg.ChatGPTPrefix) || strings.EqualFold(cfg.ClaudePrefix, cfg.ChatGPTPrefix) {
+		cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix
 	}
 	if cfg.LocalToken == "" {
 		cfg.LocalToken, err = secureRandomToken(24)

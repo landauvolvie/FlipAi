@@ -25,12 +25,12 @@ type agentsView struct {
 	// One SMS instruction editor per agent. There is no shared editor any more:
 	// the instruction is part of what makes an agent behave the way it does, so
 	// it belongs to the agent.
-	CodexPrompt  promptEditorView
-	ClaudePrompt promptEditorView
+	SharedPrompt promptEditorView
 
 	// Who may reach each agent, and how it answers them.
-	CodexAccess  agentAccessView
-	ClaudeAccess agentAccessView
+	CodexAccess   agentAccessView
+	ClaudeAccess  agentAccessView
+	ChatGPTAccess agentAccessView
 }
 
 // agentAccessView is everything about who may reach one agent and how it
@@ -47,6 +47,8 @@ type agentAccessView struct {
 	Ack         bool
 	Progress    bool
 	Interval    int
+	AckDelay    int
+	SMSOnly     bool
 	IsDefault   bool
 	Voice       bool
 }
@@ -56,10 +58,14 @@ func (v agentAccessView) Field(name string) string { return agentFieldName(v.Age
 // agentFieldName keeps every per-agent form field distinct without repeating
 // the agent letter at each use.
 func agentFieldName(agent, name string) string {
-	if agent == "A" {
-		return "claude" + strings.ToUpper(name[:1]) + name[1:]
+	prefix := "codex"
+	switch agent {
+	case "A":
+		prefix = "claude"
+	case "G":
+		prefix = "chatgpt"
 	}
-	return "codex" + strings.ToUpper(name[:1]) + name[1:]
+	return prefix + strings.ToUpper(name[:1]) + name[1:]
 }
 
 // promptEditorView is one SMS instruction editor. Fallback is the wording that
@@ -79,7 +85,7 @@ const agentsPageHTML = `
 {{define "agentAccess"}}
 <section class="card">
   <div class="card-head divided">
-    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}, by text or by call. The same phone can be allowed on both agents. For a shared number, <b>C:</b> or <b>A:</b> switches the active SMS agent and unprefixed follow-ups stay with the most recently selected agent. <b>G:</b> switches to ChatGPT Chat. Calls keep their existing Codex/Claude routing.</p></div>
+    <div><h2>Allowed phone numbers</h2><p>{{if .SMSOnly}}Only these numbers can text {{.Name}}.{{else}}Only these numbers can reach {{.Name}} by text or call.{{end}} The same phone may be allowed on several agents; the shortcut selects one and unprefixed follow-ups stay there until you switch.</p></div>
   </div>
   <div class="card-body">
     {{if .Phones}}
@@ -88,11 +94,12 @@ const agentsPageHTML = `
       <div class="row">
         <div class="label">{{.Display}}{{if .Label}}<span>{{.Label}}</span>{{end}}</div>
         <div class="value">
+          {{if $.SMSOnly}}<input type="hidden" name="access-{{$.Agent}}-{{.Number}}" value="sms"><span class="pill">Texts only</span>{{else}}
           <select name="access-{{$.Agent}}-{{.Number}}" aria-label="What {{.Display}} may do">
             <option value="all"{{if eq .Access "all"}} selected{{end}}>Texts and calls</option>
             <option value="sms"{{if eq .Access "sms"}} selected{{end}}>Texts only</option>
             <option value="voice"{{if eq .Access "voice"}} selected{{end}}>Calls only</option>
-          </select>
+          </select>{{end}}
           <button class="btn small danger" type="submit" formaction="/agents/numbers/remove" formnovalidate name="number" value="{{$.Agent}}:{{.Number}}" data-confirm="Remove {{.Display}} from {{$.Name}}?">{{icon "x-ring"}}Remove</button>
         </div>
       </div>
@@ -116,11 +123,11 @@ const agentsPageHTML = `
     <div class="grid-2">
       <div class="field">
         <label for="{{.Agent}}-newAccess">What it may do</label>
-        <select id="{{.Agent}}-newAccess" name="newAccess">
+        {{if .SMSOnly}}<input type="hidden" name="newAccess" value="sms"><div class="input-static">Texts only</div>{{else}}<select id="{{.Agent}}-newAccess" name="newAccess">
           <option value="all">Texts and calls</option>
           <option value="sms">Texts only</option>
           <option value="voice">Calls only</option>
-        </select>
+        </select>{{end}}
       </div>
       <div class="field">
         <label>&nbsp;</label>
@@ -128,11 +135,13 @@ const agentsPageHTML = `
       </div>
     </div>
 
+{{if not .SMSOnly}}
     <div class="field">
       <label for="{{.Field "callerNames"}}">Allowed caller names</label>
       <textarea id="{{.Field "callerNames"}}" name="{{.Field "callerNames"}}" rows="2" placeholder="Jane Appleseed">{{.CallerNames}}</textarea>
       <p class="hint">Only for calls. Google Voice shows a contact name instead of a number when the caller is in your Google Contacts, and there is no number to match. Type the name exactly as it appears, one per line. Like a number, a caller name belongs to one agent: adding it here takes it off the other.</p>
     </div>
+{{end}}
   </div>
 </section>
 
@@ -143,7 +152,7 @@ const agentsPageHTML = `
   <div class="card-body">
     <div class="toggle">
       <div class="label">Require a code for {{.Name}}<span>{{if .HasCode}}A code is set.{{else}}Set one below first.{{end}}</span></div>
-      <label class="switch"><input type="checkbox" name="{{.Field "requireCode"}}" value="1"{{if .RequireCode}} checked{{end}}><span class="slider"></span></label>
+      <label class="switch"><input type="hidden" name="{{.Field "requireCode"}}" value="0"><input type="checkbox" name="{{.Field "requireCode"}}" value="1"{{if .RequireCode}} checked{{end}}><span class="slider"></span></label>
     </div>
     <div class="field">
       <label for="{{.Field "code"}}">{{if .HasCode}}Replace the code{{else}}Set a code{{end}}</label>
@@ -159,12 +168,23 @@ const agentsPageHTML = `
   </div>
   <div class="card-body">
     <div class="toggle">
-      <div class="label">Confirm receipt<span>Texts "working on it" the moment a command is accepted.</span></div>
-      <label class="switch"><input type="checkbox" name="{{.Field "ack"}}" value="1"{{if .Ack}} checked{{end}}><span class="slider"></span></label>
+      <div class="label">Confirm receipt<span>Sends “working on it” only if the turn is still running after the delay below.</span></div>
+      <label class="switch"><input type="hidden" name="{{.Field "ack"}}" value="0"><input type="checkbox" name="{{.Field "ack"}}" value="1"{{if .Ack}} checked{{end}}><span class="slider"></span></label>
+    </div>
+    <div class="field">
+      <label for="{{.Field "ackDelay"}}">Receipt delay</label>
+      <select id="{{.Field "ackDelay"}}" name="{{.Field "ackDelay"}}">
+        <option value="0"{{if eq .AckDelay 0}} selected{{end}}>Immediately</option>
+        <option value="15"{{if eq .AckDelay 15}} selected{{end}}>After 15 seconds</option>
+        <option value="30"{{if eq .AckDelay 30}} selected{{end}}>After 30 seconds</option>
+        <option value="60"{{if eq .AckDelay 60}} selected{{end}}>After 1 minute</option>
+        <option value="120"{{if eq .AckDelay 120}} selected{{end}}>After 2 minutes</option>
+      </select>
+      <p class="hint">Codex and Claude default to immediate. ChatGPT Chat defaults to 30 seconds, so fast answers arrive without a redundant receipt.</p>
     </div>
     <div class="toggle">
       <div class="label">Progress texts<span>Sends a short "still working" line during a long turn.</span></div>
-      <label class="switch"><input type="checkbox" name="{{.Field "progress"}}" value="1"{{if .Progress}} checked{{end}}><span class="slider"></span></label>
+      <label class="switch"><input type="hidden" name="{{.Field "progress"}}" value="0"><input type="checkbox" name="{{.Field "progress"}}" value="1"{{if .Progress}} checked{{end}}><span class="slider"></span></label>
     </div>
     <div class="field">
       <label for="{{.Field "progressInterval"}}">How often</label>
@@ -243,7 +263,12 @@ const agentsPageHTML = `
               <div class="field">
                 <label for="codexPrefix">SMS shortcut</label>
                 <input id="codexPrefix" type="text" name="codexPrefix" value="{{.S.CodexPrefix}}" maxlength="24" required>
-                <p class="hint">Text <b>{{.S.CodexPrefix}}: check the latest build</b> to reach Codex. Must differ from the Claude shortcut and reserved G: ChatGPT shortcut.</p>
+                <p class="hint">Text <b>{{.S.CodexPrefix}}: check the latest build</b> once to select Codex. It must differ from the Claude and ChatGPT shortcuts.</p>
+              </div>
+              <div class="field">
+                <label for="codexNewSessionCommand">New conversation word</label>
+                <input id="codexNewSessionCommand" type="text" name="newSessionCommand" value="{{.S.NewSessionCommand}}" maxlength="24" required>
+                <p class="hint">Shared by all agents. Example: <b>{{.S.CodexPrefix}}: {{.S.NewSessionCommand}}</b>.</p>
               </div>
               <div class="field">
                 <label for="codexCwd">Working folder</label>
@@ -270,9 +295,9 @@ const agentsPageHTML = `
 
         <section class="card">
           <div class="card-head divided">
-            <div><h2>SMS instruction</h2><p>The one line FlipAi adds after your text, so Codex shapes its answer for a phone instead of a terminal.</p></div>
+            <div><h2>SMS instruction</h2><p>One shared instruction for Codex, Claude, and ChatGPT Chat. Edit it here and it changes everywhere.</p></div>
           </div>
-          <div class="card-body">{{template "promptEditor" .CodexPrompt}}</div>
+          <div class="card-body">{{template "promptEditor" .SharedPrompt}}</div>
         </section>
 
         <section class="card">
@@ -357,7 +382,12 @@ const agentsPageHTML = `
               <div class="field">
                 <label for="claudePrefix">SMS shortcut</label>
                 <input id="claudePrefix" type="text" name="claudePrefix" value="{{.S.ClaudePrefix}}" maxlength="24" required>
-                <p class="hint">Text <b>{{.S.ClaudePrefix}}: review this issue</b> to reach Claude. Must differ from the Codex shortcut and reserved G: ChatGPT shortcut.</p>
+                <p class="hint">Text <b>{{.S.ClaudePrefix}}: review this issue</b> once to select Claude. It must differ from the Codex and ChatGPT shortcuts.</p>
+              </div>
+              <div class="field">
+                <label for="claudeNewSessionCommand">New conversation word</label>
+                <input id="claudeNewSessionCommand" type="text" name="newSessionCommand" value="{{.S.NewSessionCommand}}" maxlength="24" required>
+                <p class="hint">Shared by all agents. Example: <b>{{.S.ClaudePrefix}}: {{.S.NewSessionCommand}}</b>.</p>
               </div>
               <div class="field">
                 <label for="claudeCwd">Working folder</label>
@@ -384,9 +414,9 @@ const agentsPageHTML = `
 
         <section class="card">
           <div class="card-head divided">
-            <div><h2>SMS instruction</h2><p>The one line FlipAi adds after your text, so Claude shapes its answer for a phone instead of a terminal.</p></div>
+            <div><h2>SMS instruction</h2><p>One shared instruction for Codex, Claude, and ChatGPT Chat. Edit it here and it changes everywhere.</p></div>
           </div>
-          <div class="card-body">{{template "promptEditor" .ClaudePrompt}}</div>
+          <div class="card-body">{{template "promptEditor" .SharedPrompt}}</div>
         </section>
 
         <section class="card">
@@ -511,29 +541,22 @@ const agentsPageHTML = `
 func (a *App) agentsPage(w http.ResponseWriter, r *http.Request) {
 	s := a.status()
 	view := agentsView{pageView: pageView{Shell: a.shell(r, "agents", "Agents"), S: s}}
-	view.CodexPrompt = promptEditorView{
-		Name: "codexReplyStyle", Title: "What Codex is told about SMS",
-		Value: s.CodexReplyStyle, Fallback: s.DefaultReplyStyle, Custom: s.CodexReplyStyleCustom,
-		Hint: "Leave empty to use the wording FlipAi ships with.", Max: s.ReplyStyleMaxChars,
-	}
-	view.ClaudePrompt = promptEditorView{
-		Name: "claudeReplyStyle", Title: "What Claude is told about SMS",
-		Value: s.ClaudeReplyStyle, Fallback: s.DefaultReplyStyle, Custom: s.ClaudeReplyStyleCustom,
-		Hint: "Leave empty to use the wording FlipAi ships with.", Max: s.ReplyStyleMaxChars,
+	view.SharedPrompt = promptEditorView{
+		Name: "sharedReplyStyle", Title: "SMS instruction for every agent",
+		Value: s.SharedReplyStyle, Fallback: s.DefaultReplyStyle, Custom: s.SharedReplyStyle != s.DefaultReplyStyle,
+		Hint: "Edit once. Codex, Claude, and ChatGPT Chat all receive this same line.", Max: s.ReplyStyleMaxChars,
 	}
 
 	cfg := a.snapshotConfig()
-	view.CodexAccess = newAgentAccessView(cfg, "C", s.CodexPrefix)
-	view.ClaudeAccess = newAgentAccessView(cfg, "A", s.ClaudePrefix)
+	view.CodexAccess = newAgentAccessView(cfg, "C", configuredCodexPrefix(cfg))
+	view.ClaudeAccess = newAgentAccessView(cfg, "A", configuredClaudePrefix(cfg))
+	view.ChatGPTAccess = newAgentAccessView(cfg, "G", configuredChatGPTPrefix(cfg))
 	a.render(w, "agents", view)
 }
 
 func newAgentAccessView(cfg Config, agent, prefix string) agentAccessView {
 	settings := agentSettings(cfg, agent)
-	name := "Codex"
-	if agent == "A" {
-		name = "Claude"
-	}
+	name := agentDisplayName(agent)
 	interval := settings.ProgressIntervalSeconds
 	if interval <= 0 {
 		interval = 120
@@ -543,7 +566,8 @@ func newAgentAccessView(cfg Config, agent, prefix string) agentAccessView {
 		Phones: settings.Phones, CallerNames: settings.CallerNames,
 		RequireCode: settings.RequireCode, HasCode: settings.CodeHash != "",
 		Ack: settings.ackEnabled(), Progress: settings.progressEnabled(),
-		Interval: interval, IsDefault: cfg.DefaultAgent == agent,
+		Interval: interval, AckDelay: settings.AckDelaySeconds, SMSOnly: agent == "G",
+		IsDefault: false,
 	}
 }
 

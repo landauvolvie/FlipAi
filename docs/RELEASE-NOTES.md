@@ -1,15 +1,33 @@
-# FlipAi v0.46.15
+# FlipAi v0.46.17
 
-This hotfix fixes ChatGPT `G:` SMS turns that were falsely reported as failed whenever the ChatGPT answer took longer than about eight seconds.
+This release combines the pending full Google Voice reply fix with a streamlined three-agent SMS setup and a critical ChatGPT WebView memory fix.
 
-## ChatGPT answers can finish normally
+## Critical ChatGPT memory fix
 
-FlipAi uses the same private in-process WebView2 DevTools channel for Google Voice and its dedicated ChatGPT browser. Google Voice intentionally has an 8-second timeout so a stuck page cannot stall call monitoring. In v0.46.14 the ChatGPT turn driver accidentally inherited that same limit even though its page script can wait up to 90 seconds for ChatGPT to finish.
+FlipAi could mistake a busy ChatGPT WebView for a dead one because its 500 ms liveness check also ran JavaScript inside the ChatGPT renderer. When that page check was slow, the supervisor cleared the worker state and launched another hidden WebView while the original was still alive. Repeated false failures could leave many OpenAI/Chromium/WebView2 process trees and consume most of the PC's RAM.
 
-That produced the misleading `Runtime.evaluate` failure after roughly eight seconds while ChatGPT continued working in the WebView and eventually displayed the correct answer.
+v0.46.17 separates cheap process liveness from ChatGPT page readiness. The supervisor now probes the local worker without touching the renderer, and Windows enforces a hard single-instance mutex for the hidden ChatGPT worker so a second WebView cannot be created even if state becomes confused. The hidden worker also watches FlipAi's quit flag and exits during Quit, update, or uninstall so it is not left orphaned.
 
-v0.46.15 keeps the short Google Voice timeout unchanged and gives only the awaited ChatGPT turn operation a 95-second DevTools allowance. Ordinary ChatGPT health/sign-in probes remain short, so the hotfix does not make a wedged browser block normal monitoring.
+The v0.46.17 installer also force-cleans any leftover `FlipAi.exe` process trees after the normal graceful shutdown. That removes detached ChatGPT WebView workers left by older builds without terminating Edge/WebView2 processes that belong to other applications.
 
-## Diagnostics and verification
+## Complete ChatGPT replies
 
-The shared WebView error text is now generic instead of incorrectly calling the ChatGPT page a Google Voice page. Regression coverage verifies that the long timeout is selected only for the ChatGPT awaited turn while ordinary Runtime.evaluate and Google Voice calls retain the 8-second deadline. The app, VERSION file, and installer metadata are aligned on v0.46.15 before the final build and browser test suite runs.
+Long ChatGPT answers are delivered as one logical Google Voice reply instead of numbered `1/2`, `2/2` fragments. FlipAi reassembles the response before handing it to the Google Voice email gateway, so the full answer survives instead of only the first line of each fragment.
+
+## Smarter ChatGPT acknowledgement
+
+Codex and Claude still acknowledge immediately because their turns commonly run for minutes. ChatGPT Chat now waits 30 seconds by default. If ChatGPT answers before then, the phone receives only the answer. If it is still working after 30 seconds, FlipAi sends the normal `ChatGPT Chat working on it` receipt and continues waiting for the final answer.
+
+The receipt delay is configurable per agent. Codex and Claude default to immediate; ChatGPT defaults to 30 seconds.
+
+## One familiar agent setup
+
+Codex, Claude, and ChatGPT Chat now share the same SMS-facing settings pattern: editable shortcut, shared new-conversation word, allowed phone numbers, optional per-agent PIN (off by default for new setup), receipt/progress controls, and one shared editable SMS instruction.
+
+ChatGPT Chat now has its own phone allowlist and PIN instead of borrowing Codex or Claude permissions. Existing installations migrate their currently SMS-enabled phone numbers to ChatGPT Chat once so G: keeps working after upgrade. Fresh installs start directly in the new three-agent schema, so adding a number to one agent never silently adds it to another.
+
+There is no default SMS agent. C:, A:, or the configured ChatGPT shortcut selects the agent for that phone, and unprefixed follow-up texts stay with the selected agent across app and PC restarts until another shortcut is used.
+
+Connection controls are kept at the top of each agent pane. A disconnected agent shows Connect; a connected agent shows Disconnect and Test. The ChatGPT pane removes the duplicate chat/connection clutter and keeps detailed diagnostics collapsed.
+
+The built-in shared SMS instruction is simply: `Reply for SMS. Keep it brief and plain text.` The same editable value is shown from each agent pane; changing it from any one of them changes the instruction used by all three agents.

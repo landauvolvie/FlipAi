@@ -86,6 +86,7 @@ type AgentSettings struct {
 	// ReplyAck and ProgressUpdates are per agent. A nil pointer means the agent
 	// has never been configured and follows the built-in default.
 	ReplyAck                *bool `json:"replyAck,omitempty"`
+	AckDelaySeconds         int   `json:"ackDelaySeconds,omitempty"`
 	ProgressUpdates         *bool `json:"progressUpdates,omitempty"`
 	ProgressIntervalSeconds int   `json:"progressIntervalSeconds,omitempty"`
 }
@@ -106,6 +107,13 @@ func (s AgentSettings) progressEnabled() bool {
 	return *s.ProgressUpdates
 }
 
+func (s AgentSettings) ackDelay() time.Duration {
+	if s.AckDelaySeconds <= 0 {
+		return 0
+	}
+	return time.Duration(s.AckDelaySeconds) * time.Second
+}
+
 // agentSettings returns reply behavior for an SMS destination. ChatGPT Chat
 // deliberately reuses the shared Google Voice reply/progress defaults; phone
 // authorization and optional security-code checking are resolved from the
@@ -115,24 +123,26 @@ func agentSettings(cfg Config, agent string) AgentSettings {
 	case "A":
 		return cfg.Claude.AgentSettings
 	case "G":
-		return AgentSettings{
-			ReplyAck: boolPtr(cfg.GoogleVoice.ReplyAck),
-			ProgressUpdates: boolPtr(cfg.GoogleVoice.ProgressUpdates),
-			ProgressIntervalSeconds: cfg.GoogleVoice.ProgressIntervalSeconds,
-		}
+		return cfg.ChatGPT.AgentSettings
 	default:
 		return cfg.Codex.AgentSettings
 	}
 }
 
 func agentDisplayName(agent string) string {
-	switch agent {
+	switch strings.ToUpper(strings.TrimSpace(agent)) {
 	case "A":
 		return "Claude"
 	case "G":
 		return "ChatGPT Chat"
-	case "B":
+	case "B", "CA", "AC":
 		return "Codex and Claude"
+	case "CG", "GC":
+		return "Codex and ChatGPT Chat"
+	case "AG", "GA":
+		return "Claude and ChatGPT Chat"
+	case "CAG", "CGA", "ACG", "AGC", "GCA", "GAC":
+		return "Codex, Claude, and ChatGPT Chat"
 	default:
 		return "Codex"
 	}
@@ -174,34 +184,45 @@ func combinedAgentPhone(a, b AgentPhone) AgentPhone {
 // choose the destination. If only one copy permits SMS, that agent remains the
 // only SMS destination even though the number may also call the other agent.
 func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok bool) {
-	c, cOK := agentPhoneForSender(cfg, "C", raw)
-	a, aOK := agentPhoneForSender(cfg, "A", raw)
-	switch {
-	case cOK && aOK:
-		switch {
-		case c.AllowsSMS() && a.AllowsSMS():
-			return "B", combinedAgentPhone(c, a), true
-		case c.AllowsSMS():
-			return "C", c, true
-		case a.AllowsSMS():
-			return "A", a, true
-		default:
-			return "B", combinedAgentPhone(c, a), true
+	var marker strings.Builder
+	found := false
+	sms, voice := false, false
+	for _, candidate := range []string{"C", "A", "G"} {
+		p, exists := agentPhoneForSender(cfg, candidate, raw)
+		if !exists {
+			continue
 		}
-	case cOK:
-		return "C", c, true
-	case aOK:
-		return "A", a, true
-	default:
+		if !found {
+			phone = p
+			found = true
+		}
+		if p.AllowsSMS() {
+			marker.WriteString(candidate)
+			sms = true
+		}
+		if p.AllowsVoice() {
+			voice = true
+		}
+	}
+	if !found {
 		return "", AgentPhone{}, false
 	}
+	switch {
+	case sms && voice:
+		phone.Access = AccessAll
+	case sms:
+		phone.Access = AccessSMS
+	default:
+		phone.Access = AccessVoice
+	}
+	return marker.String(), phone, true
 }
 
 // allAgentPhones lists every allowed number across agents, newest agent order
 // first, for the places that need to show or check the whole set.
 func allAgentPhones(cfg Config) []AgentPhone {
 	var out []AgentPhone
-	for _, agent := range []string{"C", "A"} {
+	for _, agent := range []string{"C", "A", "G"} {
 		out = append(out, agentSettings(cfg, agent).Phones...)
 	}
 	return out
@@ -257,46 +278,44 @@ func normalizeAgentPhones(list []AgentPhone, _ map[string]string) ([]AgentPhone,
 // same displayed contact name on two agents.
 func normalizeAgents(cfg *Config) error {
 	claimedNames := map[string]string{}
-	for _, agent := range []string{"C", "A"} {
+	for _, agent := range []string{"C", "A", "G"} {
 		settings := agentSettings(*cfg, agent)
 		cleaned, err := normalizeAgentPhones(settings.Phones, nil)
 		if err != nil {
 			return fmt.Errorf("%s numbers: %w", agentDisplayName(agent), err)
 		}
-		names, err := normalizeAllowedCallerLabels(settings.CallerNames, true)
-		if err != nil {
-			return fmt.Errorf("%s caller names: %w", agentDisplayName(agent), err)
-		}
-		// A caller belongs to one agent, exactly as a number does. Allowing the
-		// same name on both agents would mean a caller reached whichever agent
-		// happened to be the default -- a permission granted on one agent
-		// silently deciding for the other, which is the one thing these lists
-		// exist to prevent.
-		for _, name := range names {
-			key := strings.ToLower(name)
-			if other, taken := claimedNames[key]; taken {
-				return fmt.Errorf("%s caller names: %q is already an allowed caller on %s; a caller can reach one agent only",
-					agentDisplayName(agent), name, agentDisplayName(other))
+		if agent == "G" {
+			for i := range cleaned {
+				cleaned[i].Access = AccessSMS
 			}
-			claimedNames[key] = agent
+			settings.CallerNames = ""
+		} else {
+			names, err := normalizeAllowedCallerLabels(settings.CallerNames, true)
+			if err != nil {
+				return fmt.Errorf("%s caller names: %w", agentDisplayName(agent), err)
+			}
+			for _, name := range names {
+				key := strings.ToLower(name)
+				if other, taken := claimedNames[key]; taken {
+					return fmt.Errorf("%s caller names: %q is already an allowed caller on %s; a caller can reach one agent only", agentDisplayName(agent), name, agentDisplayName(other))
+				}
+				claimedNames[key] = agent
+			}
+			settings.CallerNames = strings.Join(names, "\n")
 		}
 		settings.Phones = cleaned
-		settings.CallerNames = strings.Join(names, "\n")
-		settings.Instruction = strings.TrimSpace(settings.Instruction)
-		if len(settings.Instruction) > 2000 {
-			settings.Instruction = strings.TrimSpace(settings.Instruction[:2000])
-		}
+		settings.Instruction = "" // retained only for old bridge.json compatibility
 		if settings.RequireCode && settings.CodeHash == "" {
 			return fmt.Errorf("%s: set a security code before requiring one", agentDisplayName(agent))
 		}
-		if agent == "A" {
+		switch agent {
+		case "A":
 			cfg.Claude.AgentSettings = settings
-		} else {
+		case "G":
+			cfg.ChatGPT.AgentSettings = settings
+		default:
 			cfg.Codex.AgentSettings = settings
 		}
-	}
-	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
-		cfg.DefaultAgent = "C"
 	}
 	return nil
 }
@@ -312,6 +331,7 @@ func migrateAgentSettings(cfg *Config) {
 		// Already moved. Running it again would refill a list the user has since
 		// emptied, or hand one agent's code back to the other.
 		ensureAgentReplyDefaults(cfg)
+		migrateChatGPTAgent(cfg)
 		return
 	}
 	cfg.Security.AgentsMigrated = true
@@ -375,6 +395,7 @@ func migrateAgentSettings(cfg *Config) {
 		}
 	}
 	ensureAgentReplyDefaults(cfg)
+	migrateChatGPTAgent(cfg)
 	if migrated {
 		// The old shared fields stay readable so a downgrade still works, but
 		// nothing reads them for authorization any more.
@@ -382,20 +403,75 @@ func migrateAgentSettings(cfg *Config) {
 	}
 }
 
-// ensureAgentReplyDefaults gives an agent that has never been configured the
-// same reply behaviour the shared settings used to provide.
+// migrateChatGPTAgent gives G: its own allowlist without breaking upgraded
+// installs that already used G through a Codex/Claude phone permission.
+func migrateChatGPTAgent(cfg *Config) {
+	if cfg.Security.ChatGPTAgentMigrated {
+		return
+	}
+	cfg.Security.ChatGPTAgentMigrated = true
+	if len(cfg.ChatGPT.Phones) == 0 {
+		seen := map[string]bool{}
+		for _, agent := range []string{"C", "A"} {
+			for _, p := range agentSettings(*cfg, agent).Phones {
+				if !p.AllowsSMS() || seen[p.Number] {
+					continue
+				}
+				seen[p.Number] = true
+				p.Access = AccessSMS
+				cfg.ChatGPT.Phones = append(cfg.ChatGPT.Phones, p)
+			}
+		}
+	}
+	// Preserve an existing PIN only when the existing SMS agents agree on it.
+	if cfg.ChatGPT.CodeHash == "" {
+		var secure []AgentSettings
+		for _, agent := range []string{"C", "A"} {
+			s := agentSettings(*cfg, agent)
+			if s.RequireCode && s.CodeHash != "" {
+				secure = append(secure, s)
+			}
+		}
+		if len(secure) > 0 {
+			first, same := secure[0], true
+			for _, s := range secure[1:] {
+				if s.CodeHash != first.CodeHash || s.CodeSalt != first.CodeSalt {
+					same = false
+				}
+			}
+			if same {
+				cfg.ChatGPT.RequireCode = true
+				cfg.ChatGPT.CodeHash = first.CodeHash
+				cfg.ChatGPT.CodeSalt = first.CodeSalt
+			}
+		}
+	}
+}
+
+// ensureAgentReplyDefaults gives every destination the same controls. Codex and
+// Claude acknowledge immediately; ChatGPT's default config supplies a 30-second
+// delay so quick conversational answers do not generate a redundant receipt.
 func ensureAgentReplyDefaults(cfg *Config) {
-	for _, agent := range []string{"C", "A"} {
+	for _, agent := range []string{"C", "A", "G"} {
 		s := agentSettings(*cfg, agent)
 		if s.ReplyAck == nil {
-			s.ReplyAck = boolPtr(cfg.GoogleVoice.ReplyAck)
+			s.ReplyAck = boolPtr(true)
 		}
 		if s.ProgressUpdates == nil {
-			s.ProgressUpdates = boolPtr(cfg.GoogleVoice.ProgressUpdates)
+			s.ProgressUpdates = boolPtr(true)
 		}
-		if agent == "A" {
+		if s.ProgressIntervalSeconds <= 0 {
+			s.ProgressIntervalSeconds = 120
+		}
+		if s.AckDelaySeconds < 0 {
+			s.AckDelaySeconds = 0
+		}
+		switch agent {
+		case "A":
 			cfg.Claude.AgentSettings = s
-		} else {
+		case "G":
+			cfg.ChatGPT.AgentSettings = s
+		default:
 			cfg.Codex.AgentSettings = s
 		}
 	}
@@ -417,9 +493,12 @@ func setAgentCode(cfg *Config, agent, code string) error {
 		}
 		s.CodeSalt, s.CodeHash = salt, hashSecurityCode(code, salt)
 	}
-	if agent == "A" {
+	switch agent {
+	case "A":
 		cfg.Claude.AgentSettings = s
-	} else {
+	case "G":
+		cfg.ChatGPT.AgentSettings = s
+	default:
 		cfg.Codex.AgentSettings = s
 	}
 	return nil
@@ -440,7 +519,7 @@ func verifyAgentCode(s AgentSettings, code string) bool {
 // exclusive because calls have no SMS shortcut.
 func salvageAgents(cfg *Config) {
 	claimedNames := map[string]bool{}
-	for _, agent := range []string{"C", "A"} {
+	for _, agent := range []string{"C", "A", "G"} {
 		s := agentSettings(*cfg, agent)
 		seenNumbers := map[string]bool{}
 		kept := make([]AgentPhone, 0, len(s.Phones))
@@ -452,35 +531,39 @@ func salvageAgents(cfg *Config) {
 			seenNumbers[number] = true
 			p.Number = number
 			p.Access = normalizeAccess(p.Access)
+			if agent == "G" {
+				p.Access = AccessSMS
+			}
 			kept = append(kept, p)
 		}
 		sort.Slice(kept, func(i, j int) bool { return kept[i].Number < kept[j].Number })
 		s.Phones = kept
-		names, _ := normalizeAllowedCallerLabels(s.CallerNames, false)
-		// A caller name claimed by an earlier agent is dropped here, exactly as
-		// a number is. Keeping it would leave a caller allowed on two agents,
-		// and a caller allowed on two agents is decided by a default rather
-		// than by anything the user granted.
-		keptNames := names[:0]
-		for _, name := range names {
-			key := strings.ToLower(name)
-			if claimedNames[key] {
-				continue
+		if agent == "G" {
+			s.CallerNames = ""
+		} else {
+			names, _ := normalizeAllowedCallerLabels(s.CallerNames, false)
+			keptNames := names[:0]
+			for _, name := range names {
+				key := strings.ToLower(name)
+				if claimedNames[key] {
+					continue
+				}
+				claimedNames[key] = true
+				keptNames = append(keptNames, name)
 			}
-			claimedNames[key] = true
-			keptNames = append(keptNames, name)
+			s.CallerNames = strings.Join(keptNames, "\n")
 		}
-		s.CallerNames = strings.Join(keptNames, "\n")
 		if s.CodeHash == "" {
 			s.RequireCode = false
 		}
-		if agent == "A" {
+		s.Instruction = ""
+		switch agent {
+		case "A":
 			cfg.Claude.AgentSettings = s
-		} else {
+		case "G":
+			cfg.ChatGPT.AgentSettings = s
+		default:
 			cfg.Codex.AgentSettings = s
 		}
-	}
-	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
-		cfg.DefaultAgent = "C"
 	}
 }

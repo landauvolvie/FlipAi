@@ -33,3 +33,38 @@ func TestBuildThreadedReplyRefusesStandaloneFallback(t *testing.T) {
 		t.Fatalf("expected missing Message-ID error, got %v", err)
 	}
 }
+
+func TestGoogleVoiceGatewayBodyKeepsAllMultilineContent(t *testing.T) {
+	got := googleVoiceGatewayBody("Today's notable Gmail:\n\n• VoIP.ms ticket escalated\n• Low balance: $7.78\n• Dell order is on the way.")
+	want := "Today's notable Gmail: • VoIP.ms ticket escalated • Low balance: $7.78 • Dell order is on the way."
+	if got != want {
+		t.Fatalf("gateway body = %q, want %q", got, want)
+	}
+}
+
+func TestNumberedVoiceReplyIsReassembledBeforeDelivery(t *testing.T) {
+	m := GmailMessage{ID: "voice-message-1"}
+	firstText := "Today's notable Gmail: • VoIP.ms ticket escalated to the dev team. • VoIP.ms low balance alert: $7.78 remaining. • Google Flights fare changed. • Amex payment received."
+	first := "1/2 " + firstText
+	if got, ready := assembleNumberedVoiceReply(m, first); ready || got != "" {
+		t.Fatalf("first part should be buffered; got %q ready=%v", got, ready)
+	}
+	secondText := "eBay Dell order was scanned and is on the way. • Robinhood statement available."
+	got, ready := assembleNumberedVoiceReply(m, "2/2 "+secondText)
+	if !ready {
+		t.Fatal("second part did not complete the reply")
+	}
+	want := firstText + " " + secondText
+	if got != want {
+		t.Fatalf("assembled reply = %q, want %q", got, want)
+	}
+}
+
+func TestShortNaturalFractionIsNotMistakenForSplitReply(t *testing.T) {
+	m := GmailMessage{ID: "voice-message-2"}
+	body := "1/2 cup sugar is enough."
+	got, ready := assembleNumberedVoiceReply(m, body)
+	if !ready || got != body {
+		t.Fatalf("natural fraction should pass through; got %q ready=%v", got, ready)
+	}
+}

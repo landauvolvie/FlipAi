@@ -141,19 +141,10 @@ func TestChatGPTMappedInternalIPCIsNotClaimedAsExternalAPI(t *testing.T) {
 func TestChatGPTAgentsPaneExposesRealWebViewConnectionWithoutGlobalUIAutomation(t *testing.T) {
 	body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
 	for _, want := range []string{
-		"ChatGPT Chat",
-		"Connect ChatGPT",
-		"Test ChatGPT",
-		`action="/chatgpt/connect"`,
-		`action="/chatgpt/test"`,
-		`action="/chatgpt/chat"`,
-		`action="/chatgpt/disconnect"`,
-		"Always-on private browser session",
-		"Connect only once",
-		"persistent WebView2 profile",
-		"Start a new ChatGPT chat",
-		"Activity diagnostics",
-		`href="/chatgpt-direct/probe"`,
+		"ChatGPT Chat", `action="/chatgpt/connect"`, `action="/chatgpt/test"`,
+		`action="/chatgpt/disconnect"`, "Routing &amp; conversation",
+		"Allowed phone numbers", "Security code", "Connection details",
+		"persistent browser session", `href="/chatgpt-direct/probe"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("ChatGPT live pane missing %q", want)
