@@ -8,7 +8,7 @@ This release follows the v0.46.9 ASAR result, which found the real ChatGPT Elect
 - Maps `ipcRenderer` calls and `ipcMain` handlers by direction and channel name.
 - Maps bridge method/property names near the exposed Electron bridge without returning their values.
 - Extracts regular ChatGPT `/backend-api` and `/conversation` route paths with query strings removed.
-- Extracts conversation request-shape **key names only** around those routes, such as message/conversation/model/parent identifiers when present.
+- Extracts conversation request-shape **key names only** around those routes, including both quoted and normal JavaScript object keys such as message/conversation/model/parent identifiers when present.
 - Detects OAuth/PKCE flow markers (`auth.openai.com`, authorize, client-id field, redirect field, code challenge/verifier) without reading or returning credentials.
 - Identifies streaming/runtime mechanisms such as WebSocket, SSE, fetch, Electron net, MessagePort/MessageChannel, utility processes and webContents messaging.
 - Looks for external-callability primitives such as Node servers, WebSocketServer, Windows pipe paths, stdin/stdout and Electron protocol handlers, attributed to exact app-bundle files.
