@@ -12,4 +12,4 @@ v0.46.15 keeps the short Google Voice timeout unchanged and gives only the await
 
 ## Diagnostics and verification
 
-The shared WebView error text is now generic instead of incorrectly calling the ChatGPT page a Google Voice page. Regression coverage verifies that the long timeout is selected only for the ChatGPT awaited turn while ordinary Runtime.evaluate and Google Voice calls retain the 8-second deadline. The full FlipAi build and browser test suite is rerun before publishing.
+The shared WebView error text is now generic instead of incorrectly calling the ChatGPT page a Google Voice page. Regression coverage verifies that the long timeout is selected only for the ChatGPT awaited turn while ordinary Runtime.evaluate and Google Voice calls retain the 8-second deadline. The app, VERSION file, and installer metadata are aligned on v0.46.15 before the final build and browser test suite runs.
