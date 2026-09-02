@@ -27,7 +27,7 @@ func chatGPTDirectUI(body string) string {
         <span class="bmark codex">{{brand "codex"}}</span>
         <span class="agent-item-copy">
           <b>ChatGPT Chat <span class="agent-chip warn" id="chatgpt-rail-status">Check status</span></b>
-          <span>Private signed-in browser session</span>
+          <span>Always-on private browser session</span>
         </span>
       </label>`
 	body = replaceAgentUIOnce(body, claudeRail, claudeRail+chatRail, "ChatGPT rail item")
@@ -41,7 +41,7 @@ func chatGPTDirectUI(body string) string {
           <span class="bmark lg codex">{{brand "codex"}}</span>
           <div>
             <h2>ChatGPT Chat <span class="pill warn" id="chatgpt-head-status">Checking</span></h2>
-            <p>Chat with your normal ChatGPT account through a dedicated browser session that FlipAi keeps separate from the ChatGPT desktop app.</p>
+            <p>Connect once. FlipAi keeps the same private ChatGPT browser profile running invisibly and restores it automatically after app or Windows restarts.</p>
           </div>
         </div>
         <div class="agent-head-actions chatgpt-actions">
@@ -51,31 +51,32 @@ func chatGPTDirectUI(body string) string {
         </div>
       </div>
 
-      <p class="callout"><b>No Windows UI automation.</b> Connect opens one normal sign-in window the first time. After that, FlipAi reuses its own persistent WebView2 profile off-screen. It does not touch your normal ChatGPT app, move your mouse, type globally, or depend on accessibility settings.</p>
+      <p class="callout"><b>Connect only once.</b> The sign-in window is only for the first login. After ChatGPT verifies the account, you may close that window. FlipAi automatically restores the same persistent WebView2 profile off-screen after the window closes, after FlipAi restarts, and after Windows restarts. It never touches your normal ChatGPT app, moves your mouse, types globally, or depends on accessibility settings.</p>
 
       <section class="card">
-        <div class="card-head divided"><div><h2>Connection</h2><p>The status below comes from the dedicated ChatGPT browser itself.</p></div></div>
+        <div class="card-head divided"><div><h2>Connection</h2><p>Saved connection and live browser readiness are tracked separately so a normal startup delay is never mistaken for a lost login.</p></div></div>
         <div class="card-body">
           <div class="rows">
-            <div class="row"><div class="label">Sign-in<span>Verified from inside the FlipAi-owned ChatGPT page.</span></div><div class="value"><span class="pill warn" id="chatgpt-signin">Checking</span></div></div>
-            <div class="row"><div class="label">Browser session<span>Uses a separate persistent WebView2 data folder for this connection.</span></div><div class="value"><span class="pill" id="chatgpt-browser">Stopped</span></div></div>
+            <div class="row"><div class="label">Saved connection<span>Stays connected across FlipAi and Windows restarts until you press Disconnect or ChatGPT expires the account session.</span></div><div class="value"><span class="pill warn" id="chatgpt-saved">Checking</span></div></div>
+            <div class="row"><div class="label">Live sign-in<span>Verified from inside the currently running FlipAi-owned ChatGPT page.</span></div><div class="value"><span class="pill warn" id="chatgpt-signin">Checking</span></div></div>
+            <div class="row"><div class="label">Browser session<span>Runs off-screen automatically after the one-time sign-in window is closed.</span></div><div class="value"><span class="pill" id="chatgpt-browser">Stopped</span></div></div>
             <div class="row"><div class="label">Current conversation<span>Captured from the normal saved ChatGPT conversation URL after a turn.</span></div><div class="value"><span class="mono" id="chatgpt-conversation">None yet</span></div></div>
-            <div class="row"><div class="label">Last browser event<span>Useful with Activity when a turn or sign-in fails.</span></div><div class="value"><span id="chatgpt-last-event">Not started</span></div></div>
+            <div class="row"><div class="label">Last browser event<span>Useful with Activity when a turn, restore, or sign-in fails.</span></div><div class="value"><span id="chatgpt-last-event">Not started</span></div></div>
             <div class="row" id="chatgpt-error-row" style="display:none"><div class="label">Last error<span>Also written to Activity with timing where available.</span></div><div class="value"><span class="pill bad" id="chatgpt-last-error"></span></div></div>
           </div>
-          <p class="hint" style="margin-top:16px">First time: press <b>Connect ChatGPT</b>, sign in to your normal ChatGPT account in the window that opens, then press <b>Test ChatGPT</b>. Test sends a real harmless prompt and waits for the completed assistant response.</p>
+          <p class="hint" style="margin-top:16px">First time only: press <b>Connect ChatGPT</b> and sign in to your normal ChatGPT account. Once <b>Saved connection</b> says Connected, close the sign-in window if you want. From then on, <b>Test ChatGPT</b> and normal turns wait for the hidden session to finish restoring before they send.</p>
         </div>
       </section>
 
       <section class="card">
-        <div class="card-head divided"><div><h2>Chat through FlipAi</h2><p>This is the same browser session the connection test uses.</p></div></div>
+        <div class="card-head divided"><div><h2>Chat through FlipAi</h2><p>This uses the always-on background browser session.</p></div></div>
         <div class="card-body">
           <form method="post" action="/chatgpt/chat" class="chatgpt-chat-form">
             <label class="field"><span>Message</span><textarea name="prompt" rows="4" maxlength="12000" placeholder="Ask ChatGPT something..." required></textarea></label>
             <label class="check-row"><input type="checkbox" name="new" value="1"><span>Start a new ChatGPT chat</span></label>
             <div class="actions"><button class="btn accent" type="submit">Send to ChatGPT</button></div>
           </form>
-          <p class="hint">Without “Start a new chat,” the WebView stays on the current ChatGPT conversation and the next message continues it. A new chat navigates to ChatGPT home first and then sends the message.</p>
+          <p class="hint">Without “Start a new chat,” the WebView stays on the current ChatGPT conversation and the next message continues it. A new chat navigates to ChatGPT home first and waits for the saved session to be ready before sending.</p>
         </div>
       </section>
 
@@ -83,8 +84,8 @@ func chatGPTDirectUI(body string) string {
         <div class="card-head divided"><div><h2>Activity diagnostics</h2><p>ChatGPT connection events are added to the existing Activity tab instead of creating another log screen.</p></div></div>
         <div class="card-body">
           <div class="rows">
-            <div class="row"><div class="label">Stages logged<span>Open, sign-in verified, worker start, test, turn, disconnect, and failures.</span></div><div class="value"><span class="pill">Enabled</span></div></div>
-            <div class="row"><div class="label">Timing<span>End-to-end test and turn durations are recorded in milliseconds.</span></div><div class="value"><span class="pill">Enabled</span></div></div>
+            <div class="row"><div class="label">Stages logged<span>One-time sign-in, saved-session restore, background start, readiness wait, test, turn, disconnect, and failures.</span></div><div class="value"><span class="pill">Enabled</span></div></div>
+            <div class="row"><div class="label">Timing<span>Session readiness plus end-to-end test and turn durations are recorded.</span></div><div class="value"><span class="pill">Enabled</span></div></div>
             <div class="row"><div class="label">Private content<span>Activity never stores your ChatGPT prompt, assistant reply, cookies, or tokens.</span></div><div class="value"><span class="pill ok">Not logged</span></div></div>
           </div>
           <div class="actions" style="margin-top:16px"><a class="btn" href="/activity">Open Activity</a><a class="btn" href="/chatgpt-direct/probe">Advanced protocol diagnostic</a></div>
@@ -106,17 +107,23 @@ func chatGPTDirectUI(body string) string {
         try{
           var r=await fetch('/chatgpt/status.json',{cache:'no-store'});if(!r.ok)return;
           var s=await r.json();
-          var connected=!!s.signedIn;
+          var connected=!!s.connected||!!s.signedIn;
+          var live=!!s.signedIn;
           pill('chatgpt-head-status',connected?'ok':'warn',connected?'Connected':'Not connected');
           var rail=document.getElementById('chatgpt-rail-status');if(rail){rail.textContent=connected?'Connected':'Not connected';rail.className='agent-chip'+(connected?'':' warn')}
-          pill('chatgpt-signin',connected?'ok':'warn',connected?'Signed in':'Not verified');
-          pill('chatgpt-browser',s.running?'ok':'',s.running?(s.visible?'Sign-in window open':'Background ready'):'Stopped');
+          pill('chatgpt-saved',connected?'ok':'warn',connected?'Connected':'Not connected');
+          pill('chatgpt-signin',live?'ok':connected?'warn':'warn',live?'Ready':connected?'Restoring':'Not verified');
+          var browserLabel='Stopped',browserState='';
+          if(s.loginActive)browserLabel='Sign-in window open';
+          else if(s.starting)browserLabel='Starting in background';
+          else if(s.running)browserLabel=s.visible?'Sign-in window open':(live?'Background ready':'Background loading');
+          pill('chatgpt-browser',live?'ok':(s.running||s.starting)?'warn':'',browserLabel);
           text('chatgpt-conversation',s.conversationId||'None yet');
           text('chatgpt-last-event',s.lastEvent||'Not started');
           var er=document.getElementById('chatgpt-error-row');if(er)er.style.display=s.lastError?'flex':'none';text('chatgpt-last-error',s.lastError||'');
         }catch(e){}
       }
-      refreshChatGPT();setInterval(refreshChatGPT,2000);
+      refreshChatGPT();setInterval(refreshChatGPT,1500);
     })();
     </script>`
 
