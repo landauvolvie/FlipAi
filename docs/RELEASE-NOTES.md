@@ -21,3 +21,5 @@ The mapper remains static package inspection only. It does not read ChatGPT cook
 ## What to do
 
 Keep ChatGPT desktop open and signed in. In FlipAi go to **Agents -> ChatGPT Chat -> Map Chat request protocol** and copy the complete result. The decisive lines are **BRIDGE EXPOSURE**, **BRIDGE METHOD**, **IPC BINDING**, **BACKEND ROUTE**, **REQUEST KEY**, **AUTH FLOW**, **EXTERNAL TRANSPORT SIGNAL**, the ASAR scan note, and **Direct-backend assessment**.
+
+ChatGPT Chat intentionally remains **Not connected** in this release; the mapper must first prove a safe externally callable path or an independent authentication flow before SMS routing can be enabled.
