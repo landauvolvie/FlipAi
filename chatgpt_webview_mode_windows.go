@@ -2,7 +2,10 @@
 
 package main
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 // The dedicated ChatGPT WebView runs in its own FlipAi process so its Win32
 // message loop and browser profile can stay alive independently of the desktop
@@ -19,6 +22,19 @@ func init() {
 	if err := ensureDataDir(dataDir); err != nil {
 		os.Exit(2)
 	}
+	// Quit/update/uninstall writes the same quit flag every FlipAi process
+	// watches. Once the WebView endpoint is up, asking it to stop lets WebView2
+	// close its profile cleanly rather than leaving files locked for Setup.
+	go func() {
+		t := time.NewTicker(250 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
+			if quitRequested(dataDir) {
+				_ = platformStopChatGPTWorker(dataDir)
+				return
+			}
+		}
+	}()
 	chatGPTWorkerMain(dataDir, os.Args[1] == "--chatgpt-login")
 	os.Exit(0)
 }
