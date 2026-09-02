@@ -10,6 +10,7 @@ import (
 const (
 	defaultCodexPrefix       = "C"
 	defaultClaudePrefix      = "A"
+	defaultChatGPTPrefix     = "G"
 	defaultNewSessionCommand = "NEW"
 )
 
@@ -50,6 +51,11 @@ func configuredCodexPrefix(cfg Config) string {
 func configuredClaudePrefix(cfg Config) string {
 	return normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)
 }
+
+// ChatGPT Chat intentionally starts with one fixed prefix in the first WebView
+// release. It is a third routing destination, not a replacement for the C/A
+// prefixes users may already have customized.
+func configuredChatGPTPrefix(_ Config) string { return defaultChatGPTPrefix }
 
 func configuredNewSessionCommand(cfg Config) string {
 	return normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)
