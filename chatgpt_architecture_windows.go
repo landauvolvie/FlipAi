@@ -405,7 +405,12 @@ func attributeChatGPTMarkerSources(ctx context.Context, installLocations, execut
 }
 
 func classifyChatGPTRuntime(signals, children, topLevel, windowClasses []string) string {
-	joined := strings.ToLower(strings.Join(append(append(append([]string{}, signals...), children...), append(topLevel, windowClasses...)...), " ")
+	all := make([]string, 0, len(signals)+len(children)+len(topLevel)+len(windowClasses))
+	all = append(all, signals...)
+	all = append(all, children...)
+	all = append(all, topLevel...)
+	all = append(all, windowClasses...)
+	joined := strings.ToLower(strings.Join(all, " "))
 	hasWebView2 := strings.Contains(joined, "msedgewebview2") || strings.Contains(joined, "webview2loader") || strings.Contains(joined, "corewebview")
 	hasElectron := strings.Contains(joined, "chrome_elf") || strings.Contains(joined, "electron") || strings.Contains(joined, "resources.pak")
 	hasWinUI := strings.Contains(joined, "microsoft.ui.xaml") || strings.Contains(joined, "winui")
