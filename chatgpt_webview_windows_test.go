@@ -21,8 +21,8 @@ func TestChatGPTWebViewUsesDedicatedProfileAndPrivateLoopback(t *testing.T) {
 		`--chatgpt-worker`,
 		`-30000, -30000`,
 		`NoActivate = true`,
-		`data-message-author-role=\"assistant\"`,
-		`data-testid=\"send-button\"`,
+		`data-message-author-role="assistant"`,
+		`data-testid="send-button"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("ChatGPT WebView implementation lost %q", want)
