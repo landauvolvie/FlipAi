@@ -30,33 +30,17 @@ jobs:
           start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'")
           end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'PY')
           code = []
+          in_triple = False
           for line in lines[start + 1:end]:
-              code.append(line[10:] if line.startswith('          ') else line)
+              # YAML added ten spaces to Python statements. Do not remove them
+              # from the contents of Python triple-quoted Go/HTML strings.
+              out = line
+              if not in_triple and line.startswith('          '):
+                  out = line[10:]
+              code.append(out)
+              if out.count("'''") % 2:
+                  in_triple = not in_triple
           script = '\n'.join(code) + '\n'
-
-          helper_start = script.index('def rep(path, old, new, expected=1):')
-          helper_end = script.index('\ndef between(path, start, end, replacement):', helper_start)
-          robust = '\n'.join([
-              'def rep(path, old, new, expected=1):',
-              '    import re',
-              '    s = read(path)',
-              '    n = s.count(old)',
-              '    if n == expected:',
-              '        write(path, s.replace(old, new, expected))',
-              '        return',
-              "    parts = old.split('\\\\n')",
-              "    pattern = r'^[ \\\\t]*' + re.escape(parts[0].strip())",
-              '    for part in parts[1:]:',
-              "        pattern += r'[ \\\\t]*\\\\n[ \\\\t]*' + re.escape(part.strip())",
-              '    matches = list(re.finditer(pattern, s, flags=re.M))',
-              '    if len(matches) != expected:',
-              "        raise SystemExit(f'{path}: expected {expected} occurrences, found exact={n} tolerant={len(matches)}: {old[:120]!r}')",
-              '    for m in reversed(matches):',
-              '        s = s[:m.start()] + new + s[m.end():]',
-              '    write(path, s)',
-              '',
-          ])
-          script = script[:helper_start] + robust + script[helper_end:]
           script = script.replace(
               r'\tif sourceAgent == "C" || sourceAgent == "A" {\n\t\treturn sourceAgent, nil\n\t}',
               r'    if sourceAgent == "C" || sourceAgent == "A" {\n        return sourceAgent, nil\n    }')
