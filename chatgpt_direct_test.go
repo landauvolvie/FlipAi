@@ -1,6 +1,7 @@
 package main
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -115,6 +116,9 @@ func TestChatGPTArchitectureEvidenceStillDoesNotClaimConnection(t *testing.T) {
 }
 
 func TestChatGPTMappedInternalIPCIsNotClaimedAsExternalAPI(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the direct-path assessment is Windows-specific")
+	}
 	p := chatGPTDirectProbeResult{
 		ASARIPCCandidates: []string{
 			"BRIDGE EXPOSURE: .vite/build/preload.js -> contextBridge exposes electronBridge",
