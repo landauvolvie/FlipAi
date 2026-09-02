@@ -1,0 +1,54 @@
+name: finish-v04616
+
+on:
+  push:
+    branches:
+      - fix/full-single-google-voice-replies-v04616
+    paths:
+      - .github/workflows/finish-v04616.yml
+
+permissions:
+  contents: write
+
+jobs:
+  align-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Align v0.46.16 version metadata and remove this one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('config.go')
+          s = p.read_text()
+          old = 'const version = "0.46.15"'
+          new = 'const version = "0.46.16"'
+          if old not in s and new not in s:
+              raise SystemExit('config.go version marker was not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('VERSION')
+          s = p.read_text().strip()
+          if s not in {'0.46.15', '0.46.16'}:
+              raise SystemExit(f'unexpected VERSION value: {s!r}')
+          p.write_text('0.46.16\n')
+
+          p = Path('installer/FlipAi.iss')
+          s = p.read_text()
+          old = '#define MyVersion "0.46.15"'
+          new = '#define MyVersion "0.46.16"'
+          if old not in s and new not in s:
+              raise SystemExit('installer version marker was not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          rm -f .github/workflows/finish-v04616.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config.go VERSION installer/FlipAi.iss .github/workflows/finish-v04616.yml
+          git commit -m "Align v0.46.16 version metadata"
+          git push origin HEAD:fix/full-single-google-voice-replies-v04616
