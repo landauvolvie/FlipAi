@@ -24,15 +24,21 @@ page.on('pageerror', e => errors.push(String(e)));
 await page.setContent(`<!doctype html><html><body>
   <textarea id="prompt-textarea"></textarea>
   <button data-testid="send-button">Send</button>
-  <div id="messages"></div>
+  <div id="messages"><div id="old-assistant" data-message-author-role="assistant">OLD GMAIL RESPONSE</div></div>
   <script>
     document.querySelector('[data-testid="send-button"]').addEventListener('click',()=>{
       const value=document.querySelector('#prompt-textarea').value;
+      const messages=document.querySelector('#messages');
+      const user=document.createElement('div');user.setAttribute('data-message-author-role','user');user.textContent=value;messages.appendChild(user);
       const stop=document.createElement('button');stop.dataset.testid='stop-button';stop.textContent='Stop';document.body.appendChild(stop);
-      const msg=document.createElement('div');msg.setAttribute('data-message-author-role','assistant');document.querySelector('#messages').appendChild(msg);
-      setTimeout(()=>msg.textContent='FLIPAI',120);
-      setTimeout(()=>msg.textContent='FLIPAI browser response for '+value,280);
+      const old=document.querySelector('#old-assistant');
+      setTimeout(()=>old.textContent='OLD GMAIL RESPONSE (UI MUTATED)',120);
       setTimeout(()=>stop.remove(),520);
+      setTimeout(()=>{
+        const msg=document.createElement('div');msg.setAttribute('data-message-author-role','assistant');messages.appendChild(msg);
+        msg.textContent='FLIPAI';
+        setTimeout(()=>msg.textContent='FLIPAI browser response for '+value,280);
+      },900);
     });
   </script>
 </body></html>`);

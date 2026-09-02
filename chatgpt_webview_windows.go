@@ -49,15 +49,27 @@ const chatGPTSignedInJS = `(async()=>{
 const chatGPTTurnJS = `(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const text=n=>(n&&n.innerText||n&&n.textContent||'').trim();
+  const users=()=>Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
   const assistants=()=>Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-  const current=()=>{const a=assistants();return a.length?text(a[a.length-1]):''};
   const composer=()=>document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"]');
   const send=()=>document.querySelector('button[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label^="Send" i]');
   const stop=()=>document.querySelector('button[data-testid="stop-button"],button[aria-label^="Stop" i]');
   let c=null;
   for(let i=0;i<100&&!c;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'ChatGPT is loaded but FlipAi could not find the message composer. The site layout may have changed.',href:location.href};
-  const before=current();
+  const beforeUserCount=users().length;
+  const beforeAssistantCount=assistants().length;
+  const assistantForThisTurn=()=>{
+    const us=users();
+    const as=assistants();
+    const newUser=us.length>beforeUserCount?us[us.length-1]:null;
+    if(newUser){
+      for(let i=as.length-1;i>=0;i--){
+        if(newUser.compareDocumentPosition(as[i])&Node.DOCUMENT_POSITION_FOLLOWING)return as[i];
+      }
+    }
+    return as.length>beforeAssistantCount?as[as.length-1]:null;
+  };
   c.focus();
   if(c.tagName==='TEXTAREA'||c.tagName==='INPUT'){
     const setter=Object.getOwnPropertyDescriptor(c.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;
@@ -76,11 +88,12 @@ const chatGPTTurnJS = `(async(input)=>{
   const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);
-    const now=current();
-    if(now&&now!==before)started=true;
-    if(started&&now){
+    const node=assistantForThisTurn();
+    if(node){
+      started=true;
+      const now=text(node);
       if(now===last)stable++;else{last=now;stable=0;}
-      if(!stop()&&stable>=5)return {ok:true,reply:now,href:location.href};
+      if(!stop()&&stable>=5)return {ok:true,reply:now||'I generated the image.',href:location.href};
     }
   }
   return {ok:false,detail:started?'ChatGPT started answering but did not finish within 90 seconds.':'ChatGPT did not produce an assistant response within 90 seconds.',href:location.href};

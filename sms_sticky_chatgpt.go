@@ -220,9 +220,21 @@ func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
 	return nil
 }
 
+func (b *Bridge) composeChatGPTSMSPrompt(command string) string {
+	command = strings.TrimSpace(command)
+	hint := strings.TrimSpace(b.cfg.replyStyleHintFor("G"))
+	if hint == "" {
+		hint = defaultReplyStyleHint
+	}
+	if hint == "" {
+		return command
+	}
+	return command + "\n\n" + hint
+}
+
 func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, error) {
 	dataDir := filepath.Dir(b.statePath)
-	return chatGPTBrowserSend(ctx, dataDir, b.composePrompt("G", command))
+	return chatGPTBrowserSend(ctx, dataDir, b.composeChatGPTSMSPrompt(command))
 }
 
 func (b *Bridge) newChatGPTConversation(ctx context.Context) error {
