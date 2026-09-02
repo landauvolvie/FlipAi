@@ -261,6 +261,14 @@ func agentForSharedSMSCommand(raw string, cfg Config) string {
 			isAgentNewSession(text, configuredClaudePrefix(cfg), newSession) {
 			return "A"
 		}
+		if _, ok := stripAgentCommandPrefix(text, configuredChatGPTPrefix(cfg)); ok ||
+			isAgentNewSession(text, configuredChatGPTPrefix(cfg), newSession) {
+			// ChatGPT uses the existing default C/A gate for a number that
+			// is shared by both agents; parseRemoteCommand changes the final
+			// destination to G only after that gate succeeds.
+			if cfg.DefaultAgent == "A" { return "A" }
+			return "C"
+		}
 		return ""
 	}
 	if agent := pick(raw); agent != "" {

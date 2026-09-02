@@ -138,30 +138,17 @@ func TestChatGPTMappedInternalIPCIsNotClaimedAsExternalAPI(t *testing.T) {
 	}
 }
 
-func TestChatGPTDirectAgentsPaneCannotBeMistakenForEnablement(t *testing.T) {
-	body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
+func TestChatGPTAgentsPaneShowsWorkingWebViewConnection(t *testing.T) {
+	body := chatGPTWebUI(agentConnectFirstRunHTML(agentsPageHTML))
 	for _, want := range []string{
-		"ChatGPT Chat",
-		"Not connected",
-		`data-test="/chatgpt-direct/probe"`,
-		"Map Chat request protocol",
-		"full read-only protocol map",
-		"Runtime architecture",
-		"Windows integration",
-		"Electron app.asar",
-		"Network metadata",
-		"Credential capture",
-		"Not used",
-		"SMS routing",
-		"Unavailable until proven",
-		"BACKEND ROUTE",
-		"REQUEST KEY",
-		"AUTH FLOW",
-		"IPC BINDING",
+		"ChatGPT Chat", "Connect ChatGPT", "Test", "Show session", "Answers G: messages",
+		"private FlipAi browser session", "network response", "DOM", "Open Activity",
+		"G: your message", "G NEW", "Windows accessibility", "Not used", "Disconnect",
 	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("ChatGPT direct pane missing %q", want)
-		}
+		if !strings.Contains(body, want) { t.Fatalf("ChatGPT WebView pane missing %q", want) }
+	}
+	for _, forbidden := range []string{"Unavailable until proven", "Map Chat request protocol", "full read-only protocol map"} {
+		if strings.Contains(body, forbidden) { t.Fatalf("retired ChatGPT diagnostic UI still contains %q", forbidden) }
 	}
 }
 

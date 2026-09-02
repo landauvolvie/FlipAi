@@ -310,6 +310,7 @@ func parseRemoteCommand(raw string, cfg Config, agent string) (remoteCommand, er
 
 	codexPrefix := configuredCodexPrefix(cfg)
 	claudePrefix := configuredClaudePrefix(cfg)
+	chatGPTPrefix := configuredChatGPTPrefix(cfg)
 	newSession := configuredNewSessionCommand(cfg)
 
 	// The new-session word is configurable too. It works by itself, or after the
@@ -329,6 +330,9 @@ func parseRemoteCommand(raw string, cfg Config, agent string) (remoteCommand, er
 		}
 		return remoteCommand{Agent: "A", New: true}, nil
 	}
+	if isAgentNewSession(rest, chatGPTPrefix, newSession) {
+		return remoteCommand{Agent: "G", New: true}, nil
+	}
 
 	text := rest
 	if tail, ok := stripAgentCommandPrefix(rest, codexPrefix); ok {
@@ -341,6 +345,9 @@ func parseRemoteCommand(raw string, cfg Config, agent string) (remoteCommand, er
 			return remoteCommand{}, wrongAgentForNumber(agent, "A")
 		}
 		text = tail
+	} else if tail, ok := stripAgentCommandPrefix(rest, chatGPTPrefix); ok {
+		text = tail
+		agent = "G"
 	}
 	if text == "" {
 		return remoteCommand{}, errors.New("empty command")
@@ -623,8 +630,11 @@ func (b *Bridge) poll(ctx context.Context) {
 		}
 
 		agentName := "Codex"
-		if rc.Agent == "A" {
+		switch rc.Agent {
+		case "A":
 			agentName = "Claude"
+		case "G":
+			agentName = "ChatGPT"
 		}
 		b.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
 		depth := b.enqueue(bridgeJob{msg: m, cmd: rc})
@@ -735,6 +745,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		if rc.Agent == "C" {
 			err = b.newCodexThread(ctx)
 			final = "New Codex conversation started."
+		} else if rc.Agent == "G" {
+			err = b.newChatGPTWebConversation()
+			final = "New ChatGPT conversation started."
 		} else {
 			// Claude sessions are created by the CLI on the turn that uses them,
 			// so there is no session to start here the way there is for Codex.
@@ -747,6 +760,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	} else if rc.Agent == "A" {
 		b.event("info", "agent", "Claude command started", rc.Sender, "A", m.ID)
 		final, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+	} else if rc.Agent == "G" {
+		b.event("info", "chatgpt", "ChatGPT command started in the private WebView", rc.Sender, "G", m.ID)
+		final, err = b.runChatGPTWithAttachments(ctx, rc.Text, rc.Sender, inbound)
 	} else {
 		b.event("info", "agent", "Codex command started", rc.Sender, "C", m.ID)
 		final, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
@@ -787,8 +803,11 @@ func (b *Bridge) heartbeat(ctx context.Context, stop <-chan struct{}, m GmailMes
 	t := time.NewTicker(every)
 	defer t.Stop()
 	agentName := "Codex"
-	if rc.Agent == "A" {
+	switch rc.Agent {
+	case "A":
 		agentName = "Claude"
+	case "G":
+		agentName = "ChatGPT"
 	}
 	for {
 		select {

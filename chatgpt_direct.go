@@ -194,6 +194,10 @@ func (p chatGPTDirectProbeResult) summary() string {
 }
 
 func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("web") == "1" {
+		a.chatGPTWebHandler(w, r)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	probe, err := platformProbeChatGPTDirect(ctx)
