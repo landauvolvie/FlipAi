@@ -114,14 +114,34 @@ func TestChatGPTArchitectureEvidenceStillDoesNotClaimConnection(t *testing.T) {
 	}
 }
 
+func TestChatGPTMappedInternalIPCIsNotClaimedAsExternalAPI(t *testing.T) {
+	p := chatGPTDirectProbeResult{
+		ASARIPCCandidates: []string{
+			"BRIDGE EXPOSURE: .vite/build/preload.js -> contextBridge exposes electronBridge",
+			"IPC BINDING: .vite/build/preload.js -> renderer.invoke -> chatgpt:send-conversation",
+		},
+		ASARMarkerSources: []string{
+			"BACKEND ROUTE: .vite/build/main.js -> /backend-api/conversation",
+			"REQUEST KEY: .vite/build/main.js -> messages",
+			"AUTH FLOW: .vite/build/main.js -> PKCE code_challenge",
+		},
+	}
+	got := assessChatGPTDirectPath(p)
+	for _, want := range []string{"renderer-to-main IPC", "independently authenticated cloud request path", "private session credentials"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("mapped assessment missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestChatGPTDirectAgentsPaneCannotBeMistakenForEnablement(t *testing.T) {
 	body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
 	for _, want := range []string{
 		"ChatGPT Chat",
 		"Not connected",
 		`data-test="/chatgpt-direct/probe"`,
-		"Run app bundle deep scan",
-		"deepest read-only direct-path test",
+		"Map Chat request protocol",
+		"full read-only protocol map",
 		"Runtime architecture",
 		"Windows integration",
 		"Electron app.asar",
@@ -130,7 +150,10 @@ func TestChatGPTDirectAgentsPaneCannotBeMistakenForEnablement(t *testing.T) {
 		"Not used",
 		"SMS routing",
 		"Unavailable until proven",
-		"ASAR IPC/bridge candidates",
+		"BACKEND ROUTE",
+		"REQUEST KEY",
+		"AUTH FLOW",
+		"IPC BINDING",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("ChatGPT direct pane missing %q", want)
