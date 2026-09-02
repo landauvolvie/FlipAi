@@ -16,25 +16,25 @@ import (
 // key names from app.asar. It never reads a ChatGPT profile, cookies, tokens,
 // browser storage, request bodies, process memory, or credential-manager data.
 type chatGPTProtocolMapScan struct {
-	BridgeExposures   []string
-	BridgeMethods     []string
-	IPCBindings       []string
-	BackendRoutes     []string
-	RequestShapeKeys  []string
-	AuthFlowMarkers   []string
-	TransportSignals  []string
-	ExternalSignals   []string
-	Detail            string
+	BridgeExposures  []string
+	BridgeMethods    []string
+	IPCBindings      []string
+	BackendRoutes    []string
+	RequestShapeKeys []string
+	AuthFlowMarkers  []string
+	TransportSignals []string
+	ExternalSignals  []string
+	Detail           string
 }
 
 var (
-	chatGPTExposeRegex = regexp.MustCompile(`(?i)contextBridge\s*\.\s*exposeInMainWorld\s*\(\s*["'\x60]([^"'\x60\r\n]{1,100})`)
-	chatGPTIPCRendererRegex = regexp.MustCompile(`(?i)ipcRenderer\s*\.\s*(invoke|send|sendSync|on|once)\s*\(\s*["'\x60]([^"'\x60\r\n]{1,160})`)
-	chatGPTIPCMainRegex = regexp.MustCompile(`(?i)ipcMain\s*\.\s*(handle|handleOnce|on|once)\s*\(\s*["'\x60]([^"'\x60\r\n]{1,160})`)
+	chatGPTExposeRegex             = regexp.MustCompile(`(?i)contextBridge\s*\.\s*exposeInMainWorld\s*\(\s*["'\x60]([^"'\x60\r\n]{1,100})`)
+	chatGPTIPCRendererRegex        = regexp.MustCompile(`(?i)ipcRenderer\s*\.\s*(invoke|send|sendSync|on|once)\s*\(\s*["'\x60]([^"'\x60\r\n]{1,160})`)
+	chatGPTIPCMainRegex            = regexp.MustCompile(`(?i)ipcMain\s*\.\s*(handle|handleOnce|on|once)\s*\(\s*["'\x60]([^"'\x60\r\n]{1,160})`)
 	chatGPTBridgeMethodInvokeRegex = regexp.MustCompile(`(?i)([A-Za-z_$][A-Za-z0-9_$]{1,80})\s*:\s*(?:async\s*)?(?:\([^)]{0,300}\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*(?:invoke|send)\s*\(\s*["'\x60]([^"'\x60\r\n]{1,160})`)
-	chatGPTRouteRegex = regexp.MustCompile(`(?i)(?:https://chatgpt\.com|https://chat\.openai\.com|wss://(?:ws\.)?chatgpt\.com)?/(?:backend-api|conversation)(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,220})?`)
-	chatGPTStringKeyRegex = regexp.MustCompile(`["'\x60]([A-Za-z_][A-Za-z0-9_]{2,80})["'\x60]\s*:`)
-	chatGPTObjectKeyRegex = regexp.MustCompile(`(?:^|[,;{])\s*([A-Za-z_$][A-Za-z0-9_$]{1,80})\s*:`)
+	chatGPTRouteRegex              = regexp.MustCompile(`(?i)(?:https://chatgpt\.com|https://chat\.openai\.com|wss://(?:ws\.)?chatgpt\.com)?/(?:backend-api|conversation)(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,220})?`)
+	chatGPTStringKeyRegex          = regexp.MustCompile(`["'\x60]([A-Za-z_][A-Za-z0-9_]{2,80})["'\x60]\s*:`)
+	chatGPTObjectKeyRegex          = regexp.MustCompile(`(?:^|[,;{])\s*([A-Za-z_$][A-Za-z0-9_$]{1,80})\s*:`)
 )
 
 var chatGPTInterestingRequestKeys = map[string]bool{
@@ -152,6 +152,7 @@ func extractChatGPTProtocolMap(path string, data []byte) chatGPTProtocolMapScan 
 			if len(m) >= 2 && chatGPTInterestingRequestKeys[m[1]] {
 				out.RequestShapeKeys = append(out.RequestShapeKeys, path+" -> "+m[1])
 			}
+		}
 	}
 
 	low := strings.ToLower(text)
@@ -278,7 +279,9 @@ func scanChatGPTProtocolMaps(ctx context.Context, roots []string) chatGPTProtoco
 			low := strings.ToLower(filepath.Clean(path))
 			for _, privatePart := range []string{"\\user data\\", "\\local storage\\", "\\indexeddb\\", "\\session storage\\", "\\network\\", "\\cache\\", "\\gpucache\\"} {
 				if strings.Contains(low, privatePart) {
-					if d.IsDir() { return filepath.SkipDir }
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
 					return nil
 				}
 			}
@@ -286,13 +289,17 @@ func scanChatGPTProtocolMaps(ctx context.Context, roots []string) chatGPTProtoco
 				return nil
 			}
 			key := strings.ToLower(filepath.Clean(path))
-			if seen[key] { return nil }
+			if seen[key] {
+				return nil
+			}
 			seen[key] = true
 			one, e := scanOneChatGPTProtocolMap(ctx, path)
 			if e == nil {
 				mergeChatGPTProtocolMap(&out, one)
 				if one.Detail != "" {
-					if out.Detail != "" { out.Detail += " | " }
+					if out.Detail != "" {
+						out.Detail += " | "
+					}
 					out.Detail += one.Detail
 				}
 			}

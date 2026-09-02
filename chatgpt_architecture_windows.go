@@ -195,18 +195,18 @@ foreach ($root in @('Registry::HKEY_CURRENT_USER\Software\Classes','Registry::HK
 		return fmt.Errorf("Windows ChatGPT architecture survey: %s", msg)
 	}
 	var raw struct {
-		InstallLocations  []string `json:"installLocations"`
-		ExecutablePaths   []string `json:"executablePaths"`
-		PackageIdentity   []string `json:"packageIdentity"`
-		ProcessInventory  []string `json:"processInventory"`
-		ChildInventory    []string `json:"childInventory"`
-		ModuleSignals     []string `json:"moduleSignals"`
-		WindowClasses     []string `json:"windowClasses"`
-		NetworkPeers      []string `json:"networkPeers"`
-		DNSNames          []string `json:"dnsNames"`
-		AppExtensions     []string `json:"appExtensions"`
-		ProtocolSchemes   []string `json:"protocolSchemes"`
-		PackageTopLevel   []string `json:"packageTopLevel"`
+		InstallLocations []string `json:"installLocations"`
+		ExecutablePaths  []string `json:"executablePaths"`
+		PackageIdentity  []string `json:"packageIdentity"`
+		ProcessInventory []string `json:"processInventory"`
+		ChildInventory   []string `json:"childInventory"`
+		ModuleSignals    []string `json:"moduleSignals"`
+		WindowClasses    []string `json:"windowClasses"`
+		NetworkPeers     []string `json:"networkPeers"`
+		DNSNames         []string `json:"dnsNames"`
+		AppExtensions    []string `json:"appExtensions"`
+		ProtocolSchemes  []string `json:"protocolSchemes"`
+		PackageTopLevel  []string `json:"packageTopLevel"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return fmt.Errorf("decode Windows ChatGPT architecture survey: %w", err)
