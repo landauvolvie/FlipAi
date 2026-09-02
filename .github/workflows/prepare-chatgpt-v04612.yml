@@ -1,108 +1,46 @@
 name: prepare-chatgpt-v04612
-
 on:
   push:
-    branches:
-      - feature/chatgpt-webview-chat-v04612
-
+    branches: [feature/chatgpt-webview-chat-v04612]
 permissions:
   contents: write
-
 jobs:
   prepare:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Wire ChatGPT routes and release metadata
+      - name: Wire routes and version
         run: |
           python - <<'PY'
           from pathlib import Path
-
-          web = Path('webui.go')
-          s = web.read_text(encoding='utf-8')
-          old = '''\tm.HandleFunc("/status.json", a.requireAuth(a.statusJSON))
-\tm.HandleFunc("/activity.json", a.requireAuth(a.activityJSON))
-\tm.HandleFunc("/folders.json", a.requireAuth(a.foldersJSON))'''
-          new = '''\tm.HandleFunc("/status.json", a.requireAuth(a.statusJSON))
-\tm.HandleFunc("/activity.json", a.requireAuth(a.activityJSON))
-\tm.HandleFunc("/folders.json", a.requireAuth(a.foldersJSON))
-\tm.HandleFunc("/chatgpt/status.json", a.requireAuth(a.chatGPTStatusJSON))'''
+          p=Path('webui.go'); s=p.read_text()
+          old='\tm.HandleFunc("/folders.json", a.requireAuth(a.foldersJSON))'
+          new=old+'\n\tm.HandleFunc("/chatgpt/status.json", a.requireAuth(a.chatGPTStatusJSON))'
           if '/chatgpt/status.json' not in s:
-              if old not in s:
-                  raise SystemExit('webui data route marker changed')
-              s = s.replace(old, new, 1)
-
-          old = '''\t\t"/claude/connect":        a.claudeConnect,
-\t\t"/claude/connect/verify": a.claudeConnectVerify,
-\t\t"/claude/disconnect":     a.claudeDisconnect,'''
-          new = '''\t\t"/claude/connect":        a.claudeConnect,
-\t\t"/claude/connect/verify": a.claudeConnectVerify,
-\t\t"/claude/disconnect":     a.claudeDisconnect,
-\t\t"/chatgpt/connect":       a.chatGPTConnect,
-\t\t"/chatgpt/test":          a.chatGPTTest,
-\t\t"/chatgpt/chat":          a.chatGPTChat,
-\t\t"/chatgpt/disconnect":    a.chatGPTDisconnect,'''
+              assert old in s
+              s=s.replace(old,new,1)
+          old='\t\t"/claude/disconnect":     a.claudeDisconnect,'
+          new=old+'\n\t\t"/chatgpt/connect":       a.chatGPTConnect,\n\t\t"/chatgpt/test":          a.chatGPTTest,\n\t\t"/chatgpt/chat":          a.chatGPTChat,\n\t\t"/chatgpt/disconnect":    a.chatGPTDisconnect,'
           if '"/chatgpt/connect"' not in s:
-              if old not in s:
-                  raise SystemExit('webui action route marker changed')
-              s = s.replace(old, new, 1)
-          web.write_text(s, encoding='utf-8')
-
-          main = Path('main.go')
-          s = main.read_text(encoding='utf-8')
-          old = 'if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() {'
-          new = 'if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() && !chatGPTBrowserStillOpen(dataDir) {'
+              assert old in s
+              s=s.replace(old,new,1)
+          p.write_text(s)
+          p=Path('main.go'); s=p.read_text()
+          old='if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() {'
+          new='if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() && !chatGPTBrowserStillOpen(dataDir) {'
           if 'chatGPTBrowserStillOpen(dataDir)' not in s:
-              if old not in s:
-                  raise SystemExit('shutdown marker changed')
-              s = s.replace(old, new, 1)
-          main.write_text(s, encoding='utf-8')
-
-          cfg = Path('config.go')
-          s = cfg.read_text(encoding='utf-8')
+              assert old in s
+              s=s.replace(old,new,1)
+          p.write_text(s)
+          p=Path('config.go'); s=p.read_text()
           if 'const version = "0.46.12"' not in s:
-              old = 'const version = "0.46.11"'
-              if old not in s:
-                  raise SystemExit('version constant marker changed')
-              s = s.replace(old, 'const version = "0.46.12"', 1)
-          cfg.write_text(s, encoding='utf-8')
-          Path('VERSION').write_text('0.46.12\n', encoding='utf-8')
-
-          Path('docs/RELEASE-NOTES.md').write_text('''# FlipAi v0.46.12
-
-This is the first live regular-ChatGPT browser connection in FlipAi. It replaces the diagnostic-only ChatGPT pane with a dedicated persistent WebView2 session that can sign in, run a real test turn, continue a normal ChatGPT conversation, and start a new one without controlling the visible ChatGPT desktop app.
-
-## ChatGPT Chat connection
-
-- **Connect ChatGPT** opens a one-time sign-in window using a FlipAi-owned WebView2 profile.
-- The signed-in profile persists in FlipAi and is separate from the normal ChatGPT desktop/browser profile.
-- **Test ChatGPT** sends a real harmless prompt and waits for the completed assistant answer.
-- The Agents page includes a real ChatGPT message box for end-to-end conversation testing.
-- Normal messages continue the current ChatGPT conversation; **Start a new ChatGPT chat** creates a new saved chat first.
-- FlipAi records the ChatGPT conversation id from the normal conversation URL after a successful turn.
-- **Disconnect** stops the dedicated browser and removes only FlipAi's ChatGPT profile.
-
-## No Windows accessibility or focus automation
-
-The ChatGPT browser runs through WebView2 owned by FlipAi. Sending uses the page's own composer and Send control inside that WebView, and receiving reads the completed assistant message inside the same page. It does not use Windows accessibility, SendKeys, global mouse input, coordinates, focus the normal ChatGPT app, copy its cookies/tokens, or enable a remote DevTools port.
-
-## Activity diagnostics
-
-The existing Activity tab now records ChatGPT browser open, verified sign-in, background worker start, test turns, chat turns, disconnects, failures, and end-to-end durations. Activity intentionally does not store ChatGPT prompts, assistant replies, cookies, or tokens.
-
-## Reliability tests
-
-The release suite covers the persistent-profile/runtime contract, private loopback authentication, no-global-UI-automation regression rules, conversation-id handling, Activity privacy, installer lifecycle, and the exact ChatGPT page driver in a real headless Chromium page that streams a changing assistant answer before completion.
-
-## What to do
-
-Install v0.46.12, open **Agents -> ChatGPT Chat**, press **Connect ChatGPT**, sign in to your normal ChatGPT account, then press **Test ChatGPT**. A successful test returns the real ChatGPT reply and conversation id. You can then use the message box on the same page to continue that chat or start a new one. If anything fails, open **Activity** and send the ChatGPT-related entries.
-
-This release proves and exposes the live ChatGPT browser connection inside FlipAi. SMS routing to ChatGPT remains separate from Codex/Claude routing in this release and is not silently enabled until the browser connection has been proven on the user's real account.
-''', encoding='utf-8')
+              assert 'const version = "0.46.11"' in s
+              s=s.replace('const version = "0.46.11"','const version = "0.46.12"',1)
+          p.write_text(s)
+          Path('VERSION').write_text('0.46.12\n')
           Path('.github/workflows/prepare-chatgpt-v04612.yml').unlink()
           PY
-      - name: Commit prepared release and remove helper workflow
+      - name: Commit prepared code
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
