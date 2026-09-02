@@ -1,0 +1,38 @@
+name: fix-v04614-agent-overlay
+on:
+  push:
+    branches:
+      - feature/chatgpt-g-sticky-routing-v04614
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[overlay-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove retired default controls from strict overlay
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('zzz_agent_connect_ui.go')
+          s = p.read_text(encoding='utf-8')
+          for line in [
+              '            {{if not .CodexAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="C" formnovalidate>{{icon "check"}}Make default</button>{{end}}\n',
+              '            {{if not .ClaudeAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="A" formnovalidate>{{icon "check"}}Make default</button>{{end}}\n',
+          ]:
+              if s.count(line) != 2:
+                  raise SystemExit(f'expected strict old/new overlay line twice, got {s.count(line)}')
+              s = s.replace(line, '')
+          p.write_text(s, encoding='utf-8')
+          Path('.github/workflows/fix-v04614-agent-overlay.yml').unlink()
+          PY
+      - name: Commit overlay fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update strict Agents overlay for sticky routing [overlay-fixed]"
+          git push
