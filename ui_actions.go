@@ -319,11 +319,6 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		if v, ok := formFlag(r, "claudeUseChrome"); ok {
 			cfg.Claude.UseChrome = v
 		}
-		if r.Form.Has("defaultAgent") {
-			if v := strings.ToUpper(strings.TrimSpace(r.FormValue("defaultAgent"))); v == "A" || v == "C" {
-				cfg.DefaultAgent = v
-			}
-		}
 		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("newSessionCommand") {
 			codexPrefix, claudePrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredNewSessionCommand(*cfg)
 			var err error
@@ -341,6 +336,9 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 			}
 			if strings.EqualFold(codexPrefix, claudePrefix) {
 				return fmt.Errorf("Codex and Claude prefixes must be different")
+			}
+			if strings.EqualFold(codexPrefix, chatGPTSMSPrefix) || strings.EqualFold(claudePrefix, chatGPTSMSPrefix) {
+				return fmt.Errorf("G is reserved for ChatGPT Chat; choose a different Codex or Claude prefix")
 			}
 			if r.Form.Has("newSessionCommand") {
 				newSession, err = validateCommandToken(r.FormValue("newSessionCommand"), "new-session command")

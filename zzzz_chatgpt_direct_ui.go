@@ -54,6 +54,17 @@ func chatGPTDirectUI(body string) string {
       <p class="callout"><b>Connect only once.</b> The sign-in window is only for the first login. After ChatGPT verifies the account, you may close that window. FlipAi automatically restores the same persistent WebView2 profile off-screen after the window closes, after FlipAi restarts, and after Windows restarts. It never touches your normal ChatGPT app, moves your mouse, types globally, or depends on accessibility settings.</p>
 
       <section class="card">
+        <div class="card-head divided"><div><h2>Google Voice SMS</h2><p>ChatGPT Chat is now a normal FlipAi SMS destination.</p></div></div>
+        <div class="card-body">
+          <div class="rows">
+            <div class="row"><div class="label">Shortcut<span>Send this once to switch the phone conversation to regular ChatGPT Chat.</span></div><div class="value"><b class="mono">G: your message</b></div></div>
+            <div class="row"><div class="label">Follow-up texts<span>No default agent. After C:, A:, or G:, every unprefixed follow-up stays with that selected agent until you switch.</span></div><div class="value"><span class="pill ok">Sticky per phone</span></div></div>
+            <div class="row"><div class="label">New ChatGPT chat<span>Starts a clean saved ChatGPT conversation and keeps G selected.</span></div><div class="value"><b class="mono">G: NEW</b></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-head divided"><div><h2>Connection</h2><p>Saved connection and live browser readiness are tracked separately so a normal startup delay is never mistaken for a lost login.</p></div></div>
         <div class="card-body">
           <div class="rows">

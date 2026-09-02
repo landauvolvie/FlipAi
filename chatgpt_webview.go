@@ -219,23 +219,54 @@ func runChatGPTBackgroundSupervisor(ctx context.Context, dataDir string) {
 	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
 	var lastAttempt time.Time
+	var notReadySince time.Time
 	var announced bool
 	for {
 		s := loadChatGPTRuntime(dataDir)
 		want := s.Connected && !s.LoginActive
 		if !want {
 			announced = false
-		} else if !s.Running && !s.Starting && time.Since(lastAttempt) >= 5*time.Second {
-			lastAttempt = time.Now()
-			if !announced {
-				chatGPTActivity(dataDir, "info", "chatgpt-session", "Restoring the saved ChatGPT session invisibly in the background.", 0)
-				announced = true
+			notReadySince = time.Time{}
+		} else {
+			// Running/Starting are process-local facts. After a hard reboot their
+			// persisted values can be stale, so verify the private loopback worker.
+			if s.Running && !chatGPTBrowserStillOpen(dataDir) {
+				mutateChatGPTRuntime(dataDir, func(v *ChatGPTWebRuntime) {
+					v.Running = false; v.Starting = false; v.SignedIn = false
+					v.ControlPort = 0; v.ControlToken = ""
+					v.LastEvent = "background-restart-pending"
+				})
+				chatGPTActivity(dataDir, "warn", "chatgpt-session", "Saved ChatGPT browser state had no live worker; restarting it invisibly.", 0)
+				s = loadChatGPTRuntime(dataDir)
 			}
-			if err := platformEnsureChatGPTWorker(dataDir); err != nil {
-				chatGPTActivity(dataDir, "error", "chatgpt-session", "Could not restore the saved ChatGPT background session: "+err.Error(), 0)
+			if s.Starting && time.Since(s.UpdatedAt) > 20*time.Second {
+				mutateChatGPTRuntime(dataDir, func(v *ChatGPTWebRuntime) { v.Starting = false; v.LastEvent = "background-restart-pending" })
+				s = loadChatGPTRuntime(dataDir)
 			}
-		} else if s.Running && s.SignedIn {
-			announced = false
+			if !s.Running && !s.Starting && time.Since(lastAttempt) >= 5*time.Second {
+				lastAttempt = time.Now()
+				if !announced {
+					chatGPTActivity(dataDir, "info", "chatgpt-session", "Restoring the saved ChatGPT session invisibly in the background.", 0)
+					announced = true
+				}
+				if err := platformEnsureChatGPTWorker(dataDir); err != nil {
+					chatGPTActivity(dataDir, "error", "chatgpt-session", "Could not restore the saved ChatGPT background session: "+err.Error(), 0)
+				}
+			} else if s.Running && s.SignedIn {
+				announced = false
+				notReadySince = time.Time{}
+			} else if s.Running {
+				if notReadySince.IsZero() {
+					notReadySince = time.Now()
+				} else if time.Since(notReadySince) > 75*time.Second && time.Since(lastAttempt) > 30*time.Second {
+					lastAttempt = time.Now()
+					chatGPTActivity(dataDir, "warn", "chatgpt-session", "ChatGPT browser stayed loaded without restoring the saved sign-in; recycling the hidden worker once and retrying.", 0)
+					_ = platformStopChatGPTWorker(dataDir)
+					waitForChatGPTStopped(dataDir, 4*time.Second)
+					_ = platformEnsureChatGPTWorker(dataDir)
+					notReadySince = time.Now()
+				}
+			}
 		}
 
 		select {
@@ -260,7 +291,7 @@ func (a *App) chatGPTConnect(w http.ResponseWriter, r *http.Request) {
 func (a *App) chatGPTTest(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	chatGPTActivity(a.dataDir, "info", "chatgpt-test", "Starting an end-to-end ChatGPT test turn in the dedicated browser session.", 0)
-	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	s, err := ensureChatGPTReady(ctx, a.dataDir)
 	cancel()
 	if err != nil {
@@ -314,7 +345,7 @@ func (a *App) chatGPTChat(w http.ResponseWriter, r *http.Request) {
 	}
 	started := time.Now()
 	chatGPTActivity(a.dataDir, "info", "chatgpt-turn", "Starting a ChatGPT browser-session turn.", 0)
-	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	s, err := ensureChatGPTReady(ctx, a.dataDir)
 	cancel()
 	if err != nil {

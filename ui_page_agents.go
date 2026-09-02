@@ -79,7 +79,7 @@ const agentsPageHTML = `
 {{define "agentAccess"}}
 <section class="card">
   <div class="card-head divided">
-    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}, by text or by call. The same phone can be allowed on both agents. For a shared number, start a text with <b>{{.Prefix}}:</b> to choose {{.Name}}; an unprefixed text uses the default agent. Calls have no SMS shortcut, so if both agents allow the same caller, the default agent answers.</p></div>
+    <div><h2>Allowed phone numbers</h2><p>Only these numbers can reach {{.Name}}, by text or by call. The same phone can be allowed on both agents. For a shared number, <b>C:</b> or <b>A:</b> switches the active SMS agent and unprefixed follow-ups stay with the most recently selected agent. <b>G:</b> switches to ChatGPT Chat. Calls keep their existing Codex/Claude routing.</p></div>
   </div>
   <div class="card-body">
     {{if .Phones}}
@@ -183,7 +183,7 @@ const agentsPageHTML = `
 <div class="page-head">
   <div>
     <h1>Agents</h1>
-    <p>Codex and Claude each keep their own routing, workspace, access, conversation, and SMS instruction here.</p>
+    <p>C: selects Codex, A: selects Claude, and G: selects ChatGPT Chat. After a selection, unprefixed follow-up texts stay with that agent until you switch again.</p>
   </div>
   <div class="page-actions">
     <a class="btn" href="/activity?stage=agent">{{icon "clock"}}Agent activity</a>
@@ -225,15 +225,13 @@ const agentsPageHTML = `
             <div>
               <h2>Codex
                 <span class="pill {{if .S.CodexCheck.Ready}}ok{{else}}warn{{end}}">{{if not .S.CodexCheck.Known}}Not tested{{else if .S.CodexCheck.OK}}Ready{{else}}Needs attention{{end}}</span>
-                {{if eq .S.DefaultAgent "C"}}<span class="pill brand">Default agent</span>{{end}}
-              </h2>
+                              </h2>
               <p>Local Codex CLI signed in with ChatGPT{{if .S.CodexCheck.Known}} · last tested {{ago .S.CodexCheck.At}}{{end}}</p>
             </div>
           </div>
           <div class="agent-head-actions">
             <button class="btn" type="button" data-test="/codex/test" data-test-busy="Asking Codex">{{icon "play"}}Test</button>
-            {{if not .CodexAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="C" formnovalidate>{{icon "check"}}Make default</button>{{end}}
-            <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
+                        <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Codex</button>
           </div>
         </div>
@@ -245,7 +243,7 @@ const agentsPageHTML = `
               <div class="field">
                 <label for="codexPrefix">SMS shortcut</label>
                 <input id="codexPrefix" type="text" name="codexPrefix" value="{{.S.CodexPrefix}}" maxlength="24" required>
-                <p class="hint">Text <b>{{.S.CodexPrefix}}: check the latest build</b> to reach Codex. Must differ from the Claude shortcut.</p>
+                <p class="hint">Text <b>{{.S.CodexPrefix}}: check the latest build</b> to reach Codex. Must differ from the Claude shortcut and reserved G: ChatGPT shortcut.</p>
               </div>
               <div class="field">
                 <label for="codexCwd">Working folder</label>
@@ -336,8 +334,7 @@ const agentsPageHTML = `
             <div>
               <h2>Claude
                 <span class="pill {{if .S.ClaudeCheck.Ready}}ok{{else}}warn{{end}}">{{if not .S.ClaudeCheck.Known}}Not tested{{else if .S.ClaudeCheck.OK}}Ready{{else}}Needs attention{{end}}</span>
-                {{if eq .S.DefaultAgent "A"}}<span class="pill brand">Default agent</span>{{end}}
-              </h2>
+                              </h2>
               <p>Claude Code CLI under your Claude subscription{{if .S.ClaudeCheck.Known}} · last tested {{ago .S.ClaudeCheck.At}}{{end}}</p>
             </div>
           </div>
@@ -348,8 +345,7 @@ const agentsPageHTML = `
             <button class="btn accent" type="submit" formaction="/claude/connect" formnovalidate>{{icon "link"}}Connect</button>
             {{end}}
             <button class="btn" type="button" data-test="/claude/test" data-test-busy="Asking Claude">{{icon "play"}}Test</button>
-            {{if not .ClaudeAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="A" formnovalidate>{{icon "check"}}Make default</button>{{end}}
-            <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
+                        <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Claude</button>
           </div>
         </div>
@@ -361,7 +357,7 @@ const agentsPageHTML = `
               <div class="field">
                 <label for="claudePrefix">SMS shortcut</label>
                 <input id="claudePrefix" type="text" name="claudePrefix" value="{{.S.ClaudePrefix}}" maxlength="24" required>
-                <p class="hint">Text <b>{{.S.ClaudePrefix}}: review this issue</b> to reach Claude. Must differ from the Codex shortcut.</p>
+                <p class="hint">Text <b>{{.S.ClaudePrefix}}: review this issue</b> to reach Claude. Must differ from the Codex shortcut and reserved G: ChatGPT shortcut.</p>
               </div>
               <div class="field">
                 <label for="claudeCwd">Working folder</label>

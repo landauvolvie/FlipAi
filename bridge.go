@@ -605,7 +605,8 @@ func (b *Bridge) poll(ctx context.Context) {
 			b.event("warn", "security", "SMS ignored: this number is allowed for calls only", sender, "", id)
 			continue
 		}
-		rc, err := parseRemoteCommandForMessage(raw, b.cfg, senderAgent, m)
+		sticky := b.stickySMSAgent(sender)
+		rc, err := parseRemoteCommandForMessageSticky(raw, b.cfg, senderAgent, sticky, m)
 		if err != nil {
 			log.Printf("Rejected remote SMS %s from %s: %v", id, sender, err)
 			b.event("warn", "security", "SMS rejected: "+err.Error(), sender, "", id)
@@ -613,6 +614,11 @@ func (b *Bridge) poll(ctx context.Context) {
 			continue
 		}
 		rc.Sender = sender
+		if !rc.Status && rc.Agent != "" {
+			if err := b.rememberStickySMSAgent(sender, rc.Agent); err != nil {
+				b.event("warn", "routing", "Could not persist the selected SMS agent: "+truncate(err.Error(), 180), sender, rc.Agent, id)
+			}
+		}
 
 		// STATUS needs no agent, so answer it inline. That keeps it instant even
 		// while a long turn is running, instead of queueing behind it.
@@ -622,10 +628,7 @@ func (b *Bridge) poll(ctx context.Context) {
 			continue
 		}
 
-		agentName := "Codex"
-		if rc.Agent == "A" {
-			agentName = "Claude"
-		}
+		agentName := agentDisplayName(rc.Agent)
 		b.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
 		depth := b.enqueue(bridgeJob{msg: m, cmd: rc})
 		if agentSettings(b.cfg, rc.Agent).ackEnabled() {
@@ -717,9 +720,13 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	var cleanupInbound func()
 	var prepErr error
 	if !rc.Status && !rc.New && len(m.Attachments) > 0 {
-		inbound, cleanupInbound, prepErr = prepareInboundAttachments(m.Attachments)
-		if cleanupInbound != nil {
-			defer cleanupInbound()
+		if rc.Agent == "G" {
+			prepErr = errors.New("ChatGPT Chat over Google Voice supports text messages in this release; switch to C: or A: for an attachment")
+		} else {
+			inbound, cleanupInbound, prepErr = prepareInboundAttachments(m.Attachments)
+			if cleanupInbound != nil {
+				defer cleanupInbound()
+			}
 		}
 	}
 
@@ -732,21 +739,24 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		final = b.statusLine()
 	} else if rc.New {
 		b.event("info", "agent", "Starting a new agent conversation", rc.Sender, rc.Agent, m.ID)
-		if rc.Agent == "C" {
+		switch rc.Agent {
+		case "C":
 			err = b.newCodexThread(ctx)
 			final = "New Codex conversation started."
-		} else {
-			// Claude sessions are created by the CLI on the turn that uses them,
-			// so there is no session to start here the way there is for Codex.
-			// Clearing the id and minting the name now is what makes the next
-			// Claude text open a fresh conversation and every text after that
-			// continue it.
+		case "G":
+			err = b.newChatGPTConversation(ctx)
+			final = "New ChatGPT conversation started."
+		default:
+			// Claude sessions are created by the CLI on the turn that uses them.
 			b.startNewClaudeSession()
 			final = "New Claude conversation started."
 		}
 	} else if rc.Agent == "A" {
 		b.event("info", "agent", "Claude command started", rc.Sender, "A", m.ID)
 		final, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+	} else if rc.Agent == "G" {
+		b.event("info", "agent", "ChatGPT Chat command started", rc.Sender, "G", m.ID)
+		final, err = b.runChatGPTSMS(ctx, rc.Text)
 	} else {
 		b.event("info", "agent", "Codex command started", rc.Sender, "C", m.ID)
 		final, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
@@ -786,10 +796,7 @@ func (b *Bridge) heartbeat(ctx context.Context, stop <-chan struct{}, m GmailMes
 	every := b.cfg.progressIntervalFor(rc.Agent)
 	t := time.NewTicker(every)
 	defer t.Stop()
-	agentName := "Codex"
-	if rc.Agent == "A" {
-		agentName = "Claude"
-	}
+	agentName := agentDisplayName(rc.Agent)
 	for {
 		select {
 		case <-ctx.Done():

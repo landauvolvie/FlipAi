@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.13"
+const version = "0.46.14"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -241,6 +241,10 @@ type State struct {
 	LastMessageID       string    `json:"lastMessageId,omitempty"`
 	LastRunAt           time.Time `json:"lastRunAt,omitempty"`
 	LastAgent           string    `json:"lastAgent,omitempty"`
+	// LastAgentBySender remembers the most recently selected SMS destination
+	// for each allowed phone. An explicit C:, A:, or G: changes it; follow-up
+	// texts without a prefix keep going to that agent across app/PC restarts.
+	LastAgentBySender map[string]string `json:"lastAgentBySender,omitempty"`
 
 	// Checks record the outcome of the last real connection test for each
 	// dependency. The UI reports these instead of guessing: a tile says "Ready"

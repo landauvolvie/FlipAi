@@ -106,22 +106,35 @@ func (s AgentSettings) progressEnabled() bool {
 	return *s.ProgressUpdates
 }
 
-// agentSettings returns the settings for "C" (Codex) or "A" (Claude).
+// agentSettings returns reply behavior for an SMS destination. ChatGPT Chat
+// deliberately reuses the shared Google Voice reply/progress defaults; phone
+// authorization and optional security-code checking are resolved from the
+// sender's existing Codex/Claude allowlist entry before G: is accepted.
 func agentSettings(cfg Config, agent string) AgentSettings {
-	if agent == "A" {
+	switch agent {
+	case "A":
 		return cfg.Claude.AgentSettings
+	case "G":
+		return AgentSettings{
+			ReplyAck: boolPtr(cfg.GoogleVoice.ReplyAck),
+			ProgressUpdates: boolPtr(cfg.GoogleVoice.ProgressUpdates),
+			ProgressIntervalSeconds: cfg.GoogleVoice.ProgressIntervalSeconds,
+		}
+	default:
+		return cfg.Codex.AgentSettings
 	}
-	return cfg.Codex.AgentSettings
 }
 
 func agentDisplayName(agent string) string {
 	switch agent {
 	case "A":
 		return "Claude"
+	case "G":
+		return "ChatGPT Chat"
 	case "B":
-		return "ChatGPT / Codex and Claude"
+		return "Codex and Claude"
 	default:
-		return "ChatGPT / Codex"
+		return "Codex"
 	}
 }
 
