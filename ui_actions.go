@@ -319,8 +319,8 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		if v, ok := formFlag(r, "claudeUseChrome"); ok {
 			cfg.Claude.UseChrome = v
 		}
-		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("newSessionCommand") {
-			codexPrefix, claudePrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredNewSessionCommand(*cfg)
+		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("chatgptPrefix") || r.Form.Has("newSessionCommand") {
+			codexPrefix, claudePrefix, chatGPTPrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredChatGPTPrefix(*cfg), configuredNewSessionCommand(*cfg)
 			var err error
 			if r.Form.Has("codexPrefix") {
 				codexPrefix, err = validateCommandToken(r.FormValue("codexPrefix"), "Codex prefix")
@@ -334,11 +334,14 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			}
-			if strings.EqualFold(codexPrefix, claudePrefix) {
-				return fmt.Errorf("Codex and Claude prefixes must be different")
+			if r.Form.Has("chatgptPrefix") {
+				chatGPTPrefix, err = validateCommandToken(r.FormValue("chatgptPrefix"), "ChatGPT shortcut")
+				if err != nil {
+					return err
+				}
 			}
-			if strings.EqualFold(codexPrefix, chatGPTSMSPrefix) || strings.EqualFold(claudePrefix, chatGPTSMSPrefix) {
-				return fmt.Errorf("G is reserved for ChatGPT Chat; choose a different Codex or Claude prefix")
+			if strings.EqualFold(codexPrefix, claudePrefix) || strings.EqualFold(codexPrefix, chatGPTPrefix) || strings.EqualFold(claudePrefix, chatGPTPrefix) {
+				return fmt.Errorf("Codex, Claude, and ChatGPT shortcuts must all be different")
 			}
 			if r.Form.Has("newSessionCommand") {
 				newSession, err = validateCommandToken(r.FormValue("newSessionCommand"), "new-session command")
@@ -346,7 +349,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			}
-			cfg.CodexPrefix, cfg.ClaudePrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, newSession
+			cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, chatGPTPrefix, newSession
 		}
 		if n, ok, err := formInt(r, "turnTimeout", 1, 600); err != nil {
 			return fmt.Errorf("turn timeout: %w", err)
@@ -372,7 +375,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		// The shared line itself falls back to the built-in default when cleared,
 		// because every turn needs some framing and a blank one would silently
 		// stop telling the agent its answer becomes a text message.
-		for _, agent := range []string{"C", "A"} {
+		for _, agent := range []string{"C", "A", "G"} {
 			if err := applyAgentAccessForm(cfg, r, agent); err != nil {
 				return err
 			}
@@ -389,19 +392,26 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		} else if ok {
 			cfg.GoogleVoice.MaxReplyParts = n
 		}
-		if r.Form.Has("codexReplyStyle") {
-			cfg.Codex.Instruction = normalizeReplyStyleHint(r.FormValue("codexReplyStyle"))
+		// One editable SMS instruction is shown in every agent pane. Old form
+		// names are accepted as aliases during upgrade, but all save into the
+		// same shared value and the retired per-agent copies are cleared.
+		sharedField := ""
+		for _, field := range []string{"sharedReplyStyle", "codexReplyStyle", "claudeReplyStyle"} {
+			if r.Form.Has(field) {
+				sharedField = field
+				break
+			}
 		}
-		if r.Form.Has("claudeReplyStyle") {
-			cfg.Claude.Instruction = normalizeReplyStyleHint(r.FormValue("claudeReplyStyle"))
-		}
-		if r.Form.Has("sharedReplyStyle") {
-			shared := normalizeReplyStyleHint(r.FormValue("sharedReplyStyle"))
+		if sharedField != "" {
+			shared := normalizeReplyStyleHint(r.FormValue(sharedField))
 			if shared == "" {
 				shared = defaultReplyStyleHint
 			}
 			cfg.GoogleVoice.ReplyStyleHint = shared
 		}
+		cfg.Codex.Instruction = ""
+		cfg.Claude.Instruction = ""
+		cfg.ChatGPT.Instruction = ""
 		if r.Form.Has("claudeSessionMode") {
 			// Anything unrecognised normalises to per-message, so a stale form
 			// post can never leave the bridge in a mode it does not implement.

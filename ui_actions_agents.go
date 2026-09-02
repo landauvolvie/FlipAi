@@ -12,16 +12,23 @@ import (
 
 // agentFromForm reads the agent letter a form is acting on.
 func agentFromForm(r *http.Request, field string) string {
-	if strings.ToUpper(strings.TrimSpace(r.FormValue(field))) == "A" {
+	switch strings.ToUpper(strings.TrimSpace(r.FormValue(field))) {
+	case "A":
 		return "A"
+	case "G":
+		return "G"
+	default:
+		return "C"
 	}
-	return "C"
 }
 
 func putAgentSettings(cfg *Config, agent string, s AgentSettings) {
-	if agent == "A" {
+	switch agent {
+	case "A":
 		cfg.Claude.AgentSettings = s
-	} else {
+	case "G":
+		cfg.ChatGPT.AgentSettings = s
+	default:
 		cfg.Codex.AgentSettings = s
 	}
 }
@@ -40,10 +47,14 @@ func (a *App) addAgentNumber(w http.ResponseWriter, r *http.Request) {
 	}
 	err := a.updateConfig(func(cfg *Config) error {
 		s := agentSettings(*cfg, agent)
+		access := normalizeAccess(r.FormValue("newAccess"))
+		if agent == "G" {
+			access = AccessSMS
+		}
 		s.Phones = append(s.Phones, AgentPhone{
 			Number: number,
 			Label:  r.FormValue("newLabel"),
-			Access: normalizeAccess(r.FormValue("newAccess")),
+			Access: access,
 		})
 		putAgentSettings(cfg, agent, s)
 		return normalizeAgents(cfg)
@@ -66,7 +77,7 @@ func (a *App) removeAgentNumber(w http.ResponseWriter, r *http.Request) {
 	// The button carries both halves, because one button can send one value.
 	agent, number, _ := strings.Cut(r.FormValue("number"), ":")
 	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "A" {
+	if agent != "A" && agent != "G" {
 		agent = "C"
 	}
 	number = normalizeUSPhone(number)
@@ -96,9 +107,8 @@ func (a *App) removeAgentNumber(w http.ResponseWriter, r *http.Request) {
 // Agents form into the configuration. It is called from saveAgents so one Save
 // covers everything on the pane.
 func applyAgentAccessForm(cfg *Config, r *http.Request, agent string) error {
-	// Keep accepting the retired defaultAgent field for upgrade/test compatibility.
-	// v0.46.14 no longer uses DefaultAgent for SMS routing and exposes no control
-	// for it; sticky per-sender C/A/G selection remains authoritative.
+	// Keep accepting the retired defaultAgent field for old forms only. It is
+	// never rendered and SMS routing never reads it.
 	if agent == "C" && r.Form.Has("defaultAgent") {
 		if v := strings.ToUpper(strings.TrimSpace(r.FormValue("defaultAgent"))); v == "A" || v == "C" {
 			cfg.DefaultAgent = v
@@ -106,36 +116,43 @@ func applyAgentAccessForm(cfg *Config, r *http.Request, agent string) error {
 	}
 
 	s := agentSettings(*cfg, agent)
-
-	// Per-number access selects, named access-<agent>-<number>.
 	for i, p := range s.Phones {
 		if v := r.FormValue("access-" + agent + "-" + p.Number); v != "" {
-			s.Phones[i].Access = normalizeAccess(v)
+			if agent == "G" {
+				s.Phones[i].Access = AccessSMS
+			} else {
+				s.Phones[i].Access = normalizeAccess(v)
+			}
 		}
 	}
-	if r.Form.Has(agentFieldName(agent, "callerNames")) {
+	if agent != "G" && r.Form.Has(agentFieldName(agent, "callerNames")) {
 		s.CallerNames = r.FormValue(agentFieldName(agent, "callerNames"))
 	}
-	if r.Form.Has(agentFieldName(agent, "ack")) || r.Form.Has(agentFieldName(agent, "progress")) ||
-		r.Form.Has(agentFieldName(agent, "progressInterval")) {
-		s.ReplyAck = boolPtr(r.FormValue(agentFieldName(agent, "ack")) == "1")
-		s.ProgressUpdates = boolPtr(r.FormValue(agentFieldName(agent, "progress")) == "1")
-		if v, err := strconv.Atoi(r.FormValue(agentFieldName(agent, "progressInterval"))); err == nil && v > 0 {
+	if v, ok := formFlag(r, agentFieldName(agent, "ack")); ok {
+		s.ReplyAck = boolPtr(v)
+	}
+	if v, ok := formFlag(r, agentFieldName(agent, "progress")); ok {
+		s.ProgressUpdates = boolPtr(v)
+	}
+	if r.Form.Has(agentFieldName(agent, "progressInterval")) {
+		if v, err := strconv.Atoi(r.FormValue(agentFieldName(agent, "progressInterval"))); err == nil && v >= 30 {
 			s.ProgressIntervalSeconds = v
+		}
+	}
+	if r.Form.Has(agentFieldName(agent, "ackDelay")) {
+		if v, err := strconv.Atoi(r.FormValue(agentFieldName(agent, "ackDelay"))); err == nil && v >= 0 && v <= 300 {
+			s.AckDelaySeconds = v
 		}
 	}
 	putAgentSettings(cfg, agent, s)
 
-	// A new code is set before the toggle is read, so turning the requirement on
-	// and typing the code in one save works.
 	if code := strings.TrimSpace(r.FormValue(agentFieldName(agent, "code"))); code != "" {
 		if err := setAgentCode(cfg, agent, code); err != nil {
 			return err
 		}
 	}
 	s = agentSettings(*cfg, agent)
-	if r.Form.Has(agentFieldName(agent, "requireCode")) || r.Form.Has(agentFieldName(agent, "ack")) {
-		want := r.FormValue(agentFieldName(agent, "requireCode")) == "1"
+	if want, ok := formFlag(r, agentFieldName(agent, "requireCode")); ok {
 		if want && s.CodeHash == "" {
 			return errAgentCodeMissing(agent)
 		}

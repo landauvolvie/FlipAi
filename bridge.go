@@ -15,8 +15,9 @@ import (
 
 // bridgeJob is one authenticated SMS command waiting for an agent turn.
 type bridgeJob struct {
-	msg GmailMessage
-	cmd remoteCommand
+	msg  GmailMessage
+	cmd  remoteCommand
+	done chan struct{}
 }
 
 type Bridge struct {
@@ -143,7 +144,49 @@ func (b *Bridge) drainQueue(ctx context.Context) {
 			return
 		}
 		b.execute(ctx, j.msg, j.cmd)
+		if j.done != nil {
+			close(j.done)
+		}
 	}
+}
+
+func (b *Bridge) sendReceipt(ctx context.Context, m GmailMessage, rc remoteCommand, depth int) {
+	agentName := agentDisplayName(rc.Agent)
+	line := "✓ " + agentName + " working on it…"
+	if depth > 1 {
+		line = fmt.Sprintf("✓ Queued for %s (%d ahead)…", agentName, depth-1)
+	}
+	b.notify(ctx, m, line)
+}
+
+func (b *Bridge) scheduleReceipt(ctx context.Context, m GmailMessage, rc remoteCommand, depth int, done <-chan struct{}) {
+	settings := agentSettings(b.cfg, rc.Agent)
+	if !settings.ackEnabled() {
+		return
+	}
+	delay := settings.ackDelay()
+	if delay <= 0 {
+		b.sendReceipt(ctx, m, rc, depth)
+		return
+	}
+	go func() {
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-t.C:
+			// If completion and the timer became ready together, completion wins.
+			select {
+			case <-done:
+				return
+			default:
+			}
+			b.sendReceipt(ctx, m, rc, depth)
+		}
+	}()
 }
 
 func (b *Bridge) setProgress(step string) {
@@ -630,14 +673,9 @@ func (b *Bridge) poll(ctx context.Context) {
 
 		agentName := agentDisplayName(rc.Agent)
 		b.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
-		depth := b.enqueue(bridgeJob{msg: m, cmd: rc})
-		if agentSettings(b.cfg, rc.Agent).ackEnabled() {
-			line := "✓ " + agentName + " working on it…"
-			if depth > 1 {
-				line = fmt.Sprintf("✓ Queued for %s (%d ahead)…", agentName, depth-1)
-			}
-			b.notify(ctx, m, line)
-		}
+		doneCh := make(chan struct{})
+		depth := b.enqueue(bridgeJob{msg: m, cmd: rc, done: doneCh})
+		b.scheduleReceipt(ctx, m, rc, depth, doneCh)
 	}
 }
 

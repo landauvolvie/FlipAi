@@ -176,9 +176,6 @@ func checkTone(ok bool) string {
 }
 
 func agentRole(s uiStatus, agent string) string {
-	if s.DefaultAgent == agent {
-		return "Default agent"
-	}
 	if agent == "C" {
 		return "Handles " + s.CodexPrefix + ": messages"
 	}

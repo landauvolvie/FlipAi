@@ -1,15 +1,25 @@
-# FlipAi v0.46.16
+# FlipAi v0.46.17
 
-This hotfix fixes incomplete ChatGPT/Codex/Claude text replies arriving through Google Voice.
+This release combines the pending full Google Voice reply fix with a streamlined three-agent SMS setup.
 
-## Full answer arrives as one FlipAi reply
+## Complete ChatGPT replies
 
-FlipAi previously split a longer agent answer into numbered parts such as `1/2` and `2/2` before replying through Google Voice's email gateway. The gateway only forwarded the first logical line of each email body, so a complete multi-line answer visible in the web chat could reach the phone as only two tiny fragments while the middle of the answer disappeared.
+Long ChatGPT answers are delivered as one logical Google Voice reply instead of numbered `1/2`, `2/2` fragments. FlipAi reassembles the response before handing it to the Google Voice email gateway, so the full answer survives instead of only the first line of each fragment.
 
-v0.46.16 now reassembles FlipAi's numbered chunks before delivery, removes the part prefixes, and collapses transport newlines so the gateway receives the complete answer as one logical outbound message. Bullets and punctuation are preserved in the text.
+## Smarter ChatGPT acknowledgement
 
-The earlier v0.46.15 ChatGPT `Runtime.evaluate` timeout fix remains unchanged.
+Codex and Claude still acknowledge immediately because their turns commonly run for minutes. ChatGPT Chat now waits 30 seconds by default. If ChatGPT answers before then, the phone receives only the answer. If it is still working after 30 seconds, FlipAi sends the normal `ChatGPT Chat working on it` receipt and continues waiting for the final answer.
 
-## Verification
+The receipt delay is configurable per agent. Codex and Claude default to immediate; ChatGPT defaults to 30 seconds.
 
-Regression coverage verifies multiline answers keep all content, split parts are reassembled in order, and ordinary text such as `1/2 cup` is not mistaken for a generated split reply. The full Windows build and real-browser test suite run before publishing.
+## One familiar agent setup
+
+Codex, Claude, and ChatGPT Chat now share the same SMS-facing settings pattern: editable shortcut, shared new-conversation word, allowed phone numbers, optional per-agent PIN (off by default for new setup), receipt/progress controls, and one shared editable SMS instruction.
+
+ChatGPT Chat now has its own phone allowlist and PIN instead of borrowing Codex or Claude permissions. Existing installations migrate their currently SMS-enabled phone numbers to ChatGPT Chat once so G: keeps working after upgrade.
+
+There is no default agent. C:, A:, or the configured ChatGPT shortcut selects the agent for that phone, and unprefixed follow-up texts stay with the selected agent across app and PC restarts until another shortcut is used.
+
+Connection controls are kept at the top of each agent pane. A disconnected agent shows Connect; a connected agent shows Disconnect and Test. The ChatGPT pane removes the duplicate chat/connection clutter and keeps detailed diagnostics collapsed.
+
+The built-in shared SMS instruction is now simply: `Reply for SMS. Keep it brief and plain text.` Editing it in any agent pane changes it for all three agents.
