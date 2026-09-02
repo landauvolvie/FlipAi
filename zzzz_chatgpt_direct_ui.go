@@ -4,9 +4,9 @@ import "strings"
 
 // ChatGPT Chat is deliberately introduced as a discovery pane before it becomes
 // an SMS destination. The user asked for the Codex-like backend path first, not
-// accessibility/UI automation. This pane therefore has exactly one job: check
-// whether the signed-in ChatGPT desktop app exposes a background transport on
-// the real machine without moving focus, typing, or reading credentials.
+// accessibility/UI automation. This pane checks live local transports and the
+// installed desktop application's static protocol definitions without moving
+// focus, typing, or reading credentials.
 func init() {
 	registerPage("agents", chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML)))
 }
@@ -29,7 +29,7 @@ func chatGPTDirectUI(body string) string {
         <span class="bmark codex">{{brand "codex"}}</span>
         <span class="agent-item-copy">
           <b>ChatGPT Chat <span class="agent-chip warn">Not connected</span></b>
-          <span>Direct backend diagnostic</span>
+          <span>Deep backend discovery</span>
         </span>
       </label>`
 	body = replaceAgentUIOnce(body, claudeRail, claudeRail+chatRail, "ChatGPT direct rail item")
@@ -43,34 +43,35 @@ func chatGPTDirectUI(body string) string {
           <span class="bmark lg codex">{{brand "codex"}}</span>
           <div>
             <h2>ChatGPT Chat <span class="pill warn">Not connected</span></h2>
-            <p>Check whether regular ChatGPT exposes a direct background connection that FlipAi can safely use.</p>
+            <p>Find the background protocol used by regular ChatGPT without controlling the visible app.</p>
           </div>
         </div>
         <div class="agent-head-actions">
-          <button class="btn accent" type="button" data-test="/chatgpt-direct/probe" data-test-busy="Checking ChatGPT desktop">{{icon "search"}}Run backend diagnostic</button>
+          <button class="btn accent" type="button" data-test="/chatgpt-direct/probe" data-test-busy="Inspecting ChatGPT desktop">{{icon "search"}}Run deep backend diagnostic</button>
         </div>
       </div>
 
-      <p class="callout"><b>This button does not enable ChatGPT.</b> It only checks whether the desktop app exposes a usable direct backend. ChatGPT SMS routing stays off until FlipAi can prove and test that backend.</p>
+      <p class="callout"><b>This still does not enable ChatGPT.</b> FlipAi first checks live ChatGPT-owned transports, then safely inspects the installed ChatGPT program package for protocol/IPC clues. It never reads your signed-in profile or controls the visible window.</p>
 
       <section class="card">
-        <div class="card-head divided"><div><h2>Direct connection status</h2><p>No visible UI control and no hidden ChatGPT browser are used.</p></div></div>
+        <div class="card-head divided"><div><h2>Direct connection status</h2><p>No accessibility, mouse/keyboard control, or hidden ChatGPT browser is used.</p></div></div>
         <div class="card-body">
           <div class="rows">
-            <div class="row"><div class="label">ChatGPT connection<span>A successful diagnostic is not the same as a connected agent.</span></div><div class="value"><span class="pill warn">Not connected</span></div></div>
+            <div class="row"><div class="label">ChatGPT connection<span>A diagnostic result is not the same as a connected agent.</span></div><div class="value"><span class="pill warn">Not connected</span></div></div>
             <div class="row"><div class="label">Visible UI automation<span>FlipAi must not steal focus or interfere with someone using the PC.</span></div><div class="value"><span class="pill">Not used</span></div></div>
             <div class="row"><div class="label">Browser/WebView automation<span>No built-in ChatGPT browser is used by this experiment.</span></div><div class="value"><span class="pill">Not used</span></div></div>
-            <div class="row"><div class="label">Credential capture<span>The diagnostic never reads ChatGPT cookies, tokens, Local Storage, or full process command lines.</span></div><div class="value"><span class="pill">Not used</span></div></div>
+            <div class="row"><div class="label">Static package inspection<span>Reads installed app code such as app.asar/JavaScript for route and IPC names; user-data folders are skipped.</span></div><div class="value"><span class="pill">Diagnostic only</span></div></div>
+            <div class="row"><div class="label">Credential capture<span>The diagnostic never reads ChatGPT cookies, tokens, Local Storage, process memory, or full process command lines.</span></div><div class="value"><span class="pill">Not used</span></div></div>
             <div class="row"><div class="label">SMS routing<span>There is no Enable button yet because a usable ChatGPT backend has not been proven.</span></div><div class="value"><span class="pill warn">Unavailable in this build</span></div></div>
           </div>
-          <p class="hint" style="margin-top:16px">Keep the regular ChatGPT desktop app open and signed in, then run the diagnostic. If it finds only Codex pipes, those are ignored and do not count as ChatGPT connectivity.</p>
+          <p class="hint" style="margin-top:16px">Keep the regular ChatGPT desktop app open and signed in, then run the deep diagnostic. Codex pipes remain ignored. If ChatGPT exposes no live transport, FlipAi will report static endpoint/protocol markers from the installed application package instead.</p>
         </div>
       </section>
 
       <section class="card">
-        <div class="card-head divided"><div><h2>What the diagnostic means</h2><p>It checks for a direct transport; it never turns ChatGPT on by itself.</p></div></div>
+        <div class="card-head divided"><div><h2>What we are looking for</h2><p>The goal is the same background request path regular ChatGPT itself uses.</p></div></div>
         <div class="card-body">
-          <p class="hint" style="font-size:12.5px;margin:0">If FlipAi proves a ChatGPT-owned listener or protocol channel, the next build can test a harmless background conversation through it. A globally visible pipe name by itself is not enough, because Codex and other apps can create pipes on the same PC.</p>
+          <p class="hint" style="font-size:12.5px;margin:0">Useful clues include a ChatGPT-owned IPC name, custom protocol, conversation endpoint, websocket route, preload bridge, or other request identifier. Finding one still does not send a message; it tells the next build what exact background interface to test.</p>
         </div>
       </section>
     </section>
