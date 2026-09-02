@@ -22,4 +22,4 @@ There is no default SMS agent. C:, A:, or the configured ChatGPT shortcut select
 
 Connection controls are kept at the top of each agent pane. A disconnected agent shows Connect; a connected agent shows Disconnect and Test. The ChatGPT pane removes the duplicate chat/connection clutter and keeps detailed diagnostics collapsed.
 
-The built-in shared SMS instruction is now simply: `Reply for SMS. Keep it brief and plain text.` Editing it in any agent pane changes it for all three agents.
+The built-in shared SMS instruction is simply: `Reply for SMS. Keep it brief and plain text.` The same editable value is shown from each agent pane; changing it from any one of them changes the instruction used by all three agents.
