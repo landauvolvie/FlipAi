@@ -95,11 +95,16 @@ end;
 
 { Stop FlipAi and wait for it to really be gone. The flag alone only files a
   request; FlipAi.exe --quit waits until nothing is answering and the Google
-  Voice window has closed. Without that wait Setup began replacing FlipAi.exe
-  and deleting the data folder while both were still open. }
+  Voice window has closed. Older builds could leave detached --chatgpt-worker
+  processes behind, and each of those owns a full WebView2/Chromium process
+  tree. After the graceful stop, force-close any remaining FlipAi.exe process
+  trees owned by this user so an upgrade cannot carry an old memory leak into
+  the new build. taskkill only targets FlipAi.exe; it does not touch Edge or
+  WebView2 processes belonging to other applications. }
 procedure StopFlipAiAndWait(const Reason: String);
 var
   Exe: String;
+  TaskKill: String;
   ResultCode: Integer;
 begin
   SignalBridgeToQuit(Reason);
@@ -111,6 +116,13 @@ begin
   end
   else
     Sleep(3000);
+
+  TaskKill := ExpandConstant('{sys}\taskkill.exe');
+  if FileExists(TaskKill) then
+  begin
+    Exec(TaskKill, '/F /T /IM FlipAi.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(700);
+  end;
 end;
 
 { An existing install is an update, not a first run. Setup detects it up front
