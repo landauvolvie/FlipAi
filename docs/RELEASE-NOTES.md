@@ -1,30 +1,18 @@
-# FlipAi v0.46.8
+# FlipAi v0.46.9
 
-This release turns the regular ChatGPT direct-backend experiment into a full Windows architecture survey. v0.46.7 found useful-looking strings, but the real-PC result showed that many came from bundled Playwright/browser/Codex tooling rather than proven regular ChatGPT Chat code. v0.46.8 is designed to finish that uncertainty in one diagnostic instead of adding another narrow probe.
+This release follows the v0.46.8 real-PC result: ChatGPT is an Electron/Chromium desktop client, but it exposes no ChatGPT-owned localhost API, DevTools endpoint, named pipe, Windows AppService, or message-send activation protocol. The only registered protocol is `codex://`, and the earlier backend-looking strings were not attributable to regular ChatGPT app code.
 
-## Full ChatGPT architecture diagnostic
+## Electron app.asar deep scan
 
-- Renames the action to **Run full architecture diagnostic**.
-- Keeps checking for a ChatGPT-owned localhost listener, Chromium DevTools endpoint, remote-debugging pipe, and ChatGPT/OpenAI-named pipes while continuing to exclude neighboring `codex-*` pipes from connection decisions.
-- Inventories the ChatGPT process tree without reading full command lines, including child/runtime process names and parent relationships.
-- Checks loaded module names for WebView2, Edge, Electron/Chromium, WinUI and related runtime signals.
-- Reads the AppX package identity and manifest to report application entry points, Windows AppServices, other extension categories, and registered activation protocols without invoking them.
-- Reports top-level installed package entries and the main window class so FlipAi can distinguish a native shell, WebView2 host and Electron/Chromium-style client.
-- Records only safe active-network metadata (remote address/port) plus OpenAI/ChatGPT-related DNS names already cached by Windows. It does not capture packets, HTTP headers, request bodies or TLS/session secrets.
-- Re-runs package protocol discovery with **source attribution**: every strong Chat/backend/conversation/IPC marker is tied to the exact installed file that contained it.
-- Separates app-specific marker sources from generic/runtime sources such as `node_modules`, `cua_node`, Playwright, PDF.js, browser/chrome plugins, Codex app tools and Electron's default app.
-- Produces a final **Direct-backend assessment** explaining which path is actually worth implementing next: owned local transport, Windows AppService, activation-only protocol, app-specific cloud backend machinery, or no safe direct interface.
+- Parses Electron `app.asar` directly instead of treating it as an opaque binary blob.
+- Reads the ASAR file index and attributes findings to exact application-bundle paths.
+- Scans regular app JavaScript/JSON/HTML while excluding `node_modules`, CUA, Playwright, PDF.js, Codex app tools, browser/chrome plugins, locales and asset noise.
+- Reports app-code entries, strong Chat/backend/conversation markers and Electron IPC/bridge channel candidates such as `ipcMain.handle`, `ipcRenderer.invoke/send`, and `contextBridge.exposeInMainWorld` names.
+- Recalculates the Direct-backend assessment after the ASAR scan so app-bundle evidence outranks generic runtime strings.
+- Keeps the diagnostic read-only: no accessibility, mouse/keyboard automation, hidden ChatGPT browser, DevTools enabling, protocol invocation, cookies/tokens, profile storage, process memory or network-payload capture.
 
-## Privacy and interference rules
+## Why this is the next step
 
-The diagnostic does not use Windows accessibility, move the mouse, type, focus ChatGPT, launch a hidden ChatGPT browser, invoke activation protocols, read cookies/tokens, read Local Storage/IndexedDB/session storage, inspect process memory, capture network payloads, or copy the desktop app's authentication material.
+The real v0.46.8 result proved there is no externally advertised local ChatGPT transport to call. The next remaining non-invasive source of truth is the Electron application bundle itself. If regular ChatGPT has an internal main/preload/renderer bridge, v0.46.9 should expose the exact channel and file names. If the ASAR contains only direct cloud-request code and no callable bridge, we will know that a clean local background integration is not exposed by the desktop app.
 
-## Goal
-
-After this diagnostic runs on the real PC, the result should be specific enough to stop guessing. If ChatGPT exposes a real local/AppService/IPC path, the next build can protocol-test it. If the evidence shows only a cloud-backed private session path, FlipAi can stop pursuing an unsafe credential-copying design and choose a supported alternative instead.
-
-This release remains diagnostic-only and does not enable ChatGPT SMS routing until an actual usable request path is proven. Keep ChatGPT desktop open and signed in, run the diagnostic once, and copy the full result including the final **Direct-backend assessment**. The result is intentionally verbose so one real-PC run can distinguish all of the supported-looking local paths at once.
-
-## Verified
-
-The normal FlipAi CI covers Linux and Windows tests, `go vet`, race tests, Windows x64 build, desktop/background lifecycle checks, Google Voice receiver validation, installer build, install/uninstall smoke test, Microsoft Defender scan when available, and SHA-256 generation.
+Keep ChatGPT desktop open and signed in, install v0.46.9, go to Agents -> ChatGPT Chat, run **Run app bundle deep scan**, and copy the entire result, especially the ASAR sections and Direct-backend assessment.
