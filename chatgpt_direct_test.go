@@ -120,17 +120,17 @@ func TestChatGPTDirectAgentsPaneCannotBeMistakenForEnablement(t *testing.T) {
 		"ChatGPT Chat",
 		"Not connected",
 		`data-test="/chatgpt-direct/probe"`,
-		"Run full architecture diagnostic",
-		"broadest safe direct-backend test",
+		"Run app bundle deep scan",
+		"deepest read-only direct-path test",
 		"Runtime architecture",
 		"Windows integration",
+		"Electron app.asar",
 		"Network metadata",
-		"Protocol source attribution",
 		"Credential capture",
 		"Not used",
 		"SMS routing",
 		"Unavailable until proven",
-		"Codex pipes remain excluded",
+		"ASAR IPC/bridge candidates",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("ChatGPT direct pane missing %q", want)
