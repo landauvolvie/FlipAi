@@ -11,9 +11,10 @@ func TestAgentsFirstRunShowsConnectBeforeVisibleTest(t *testing.T) {
 	a := newTestApp(t)
 	body := a.do(t, http.MethodGet, "/agents", nil).Body.String()
 
-	if strings.Contains(body, `<h2>Connection</h2>`) {
-		t.Fatal("Claude still renders the duplicate lower-page Connection card")
-	}
+	// ChatGPT now has its own Connection section, so the old page-wide h2 check
+	// is no longer a valid way to detect Claude's retired duplicate editor. The
+	// fallback-token field was unique to that editor and keeps the regression
+	// specific to Claude.
 	if strings.Contains(body, "Long-lived token — fallback only") {
 		t.Fatal("Claude still renders the lower fallback-token connection editor")
 	}
