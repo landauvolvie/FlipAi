@@ -68,8 +68,9 @@ $roots += @($procs | ForEach-Object {
 	p.ASARIPCCandidates = append(p.ASARIPCCandidates, scan.IPCCandidates...)
 	p.ASARScanDetail = strings.TrimSpace(scan.Detail)
 
-	// Second pass: focused protocol mapping. The result deliberately stores only
-	// names, route paths and schema key names; never values or authenticated data.
+	// Second pass: focused Electron/request protocol mapping from v0.46.10.
+	// The result deliberately stores only names, route paths and schema key
+	// names; never values or authenticated data.
 	mapped := scanChatGPTProtocolMaps(ctx, roots)
 	for _, v := range mapped.BridgeExposures {
 		p.ASARIPCCandidates = append(p.ASARIPCCandidates, "BRIDGE EXPOSURE: "+v)
@@ -100,6 +101,60 @@ $roots += @($procs | ForEach-Object {
 			p.ASARScanDetail += " | "
 		}
 		p.ASARScanDetail += strings.TrimSpace(mapped.Detail)
+	}
+
+	// Third pass: independently usable cloud-auth/request mapping. Unlike the
+	// earlier broad OAuth marker search, this pass recovers public OAuth client
+	// configuration, conversation endpoint/state shape, header *names*, stream
+	// framing and browser/device-challenge dependencies. Static public config is
+	// okay to report; authenticated values are never read or returned.
+	cloud := scanChatGPTCloudMaps(ctx, roots)
+	for _, v := range cloud.PublicClientIDs {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 01 PUBLIC CLIENT ID: "+v)
+	}
+	for _, v := range cloud.RedirectURIs {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 02 REDIRECT URI: "+v)
+	}
+	for _, v := range cloud.OAuthEndpoints {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 03 OAUTH ENDPOINT: "+v)
+	}
+	for _, v := range cloud.OAuthScopes {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 04 OAUTH SCOPE: "+v)
+	}
+	for _, v := range cloud.OAuthMechanics {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 05 OAUTH MECHANIC: "+v)
+	}
+	for _, v := range cloud.ConversationEndpoints {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 06 CONVERSATION ENDPOINT: "+v)
+	}
+	for _, v := range cloud.HeaderNames {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 07 HEADER NAME: "+v)
+	}
+	for _, v := range cloud.RequestFields {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 08 REQUEST FIELD: "+v)
+	}
+	for _, v := range cloud.ConversationState {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 09 CONVERSATION STATE: "+v)
+	}
+	for _, v := range cloud.StreamFormats {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 10 STREAM FORMAT: "+v)
+	}
+	for _, v := range cloud.SessionDependencies {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 11 SESSION DEPENDENCY: "+v)
+	}
+	if strings.TrimSpace(cloud.Assessment) != "" {
+		p.ASARMarkerSources = append(p.ASARMarkerSources, "CLOUD 12 PATH ASSESSMENT: "+strings.TrimSpace(cloud.Assessment))
+	}
+	if strings.TrimSpace(cloud.Detail) != "" || strings.TrimSpace(cloud.Assessment) != "" {
+		if p.ASARScanDetail != "" {
+			p.ASARScanDetail += " | "
+		}
+		if strings.TrimSpace(cloud.Detail) != "" {
+			p.ASARScanDetail += strings.TrimSpace(cloud.Detail)
+		}
+		if strings.TrimSpace(cloud.Assessment) != "" {
+			p.ASARScanDetail += " | cloud path assessment: " + strings.TrimSpace(cloud.Assessment)
+		}
 	}
 	return nil
 }

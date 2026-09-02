@@ -1,25 +1,23 @@
-# FlipAi v0.46.10
+# FlipAi v0.46.11
 
-This release follows the v0.46.9 ASAR result, which found the real ChatGPT Electron bundle, `electronBridge`, regular ChatGPT backend routes, conversation/WebSocket markers, and internal Electron IPC names while still proving that no ChatGPT-owned local listener or DevTools transport is exposed.
+This release continues the direct regular-ChatGPT investigation after v0.46.10 proved that the desktop Electron bridge is internal IPC rather than a Codex-style externally callable local backend.
 
-## Full Chat request protocol map
+## Independent ChatGPT cloud protocol map
 
-- Maps `contextBridge.exposeInMainWorld` exposure names, including `electronBridge`.
-- Maps `ipcRenderer` calls and `ipcMain` handlers by direction and channel name.
-- Maps bridge method/property names near the exposed Electron bridge without returning their values.
-- Extracts regular ChatGPT `/backend-api` and `/conversation` route paths with query strings removed.
-- Extracts conversation request-shape **key names only** around those routes, including both quoted and normal JavaScript object keys such as message/conversation/model/parent identifiers when present.
-- Detects OAuth/PKCE flow markers (`auth.openai.com`, authorize, client-id field, redirect field, code challenge/verifier) without reading or returning credentials.
-- Identifies streaming/runtime mechanisms such as WebSocket, SSE, fetch, Electron net, MessagePort/MessageChannel, utility processes and webContents messaging.
-- Looks for external-callability primitives such as Node servers, WebSocketServer, Windows pipe paths, stdin/stdout and Electron protocol handlers, attributed to exact app-bundle files.
-- Updates the Direct-backend assessment so internal Electron IPC is never mistaken for an API FlipAi can call from another process.
+- Maps OAuth authorize/token endpoint literals from the installed ChatGPT application package.
+- Maps safe public OAuth client-id literals, redirect URIs, scopes, and PKCE mechanics without returning verifier/challenge values.
+- Maps the regular ChatGPT conversation endpoint, request-field names, and new/continued-conversation state identifiers.
+- Maps HTTP header names only; header values are never returned.
+- Maps SSE/WebSocket response framing used by regular Chat.
+- Identifies browser/session/device/anti-abuse dependency markers so a browser-cookie requirement cannot be mistaken for a clean OAuth flow.
+- Adds a CLOUD PATH ASSESSMENT explaining whether an explicit independently authorized OAuth proof is justified or whether a dedicated signed-in WebView is the safer fallback.
 
 ## Privacy boundary
 
-The mapper remains static package inspection only. It does not read ChatGPT cookies, tokens, Local Storage, IndexedDB, session storage, request bodies, network payloads, Windows credential values, process memory, or full process command lines. It does not enable DevTools, use accessibility, move the mouse, type into ChatGPT, or launch a hidden ChatGPT browser.
+The mapper reads installed application-package code only. It does not read ChatGPT cookies, access or refresh tokens, passwords, Local Storage, IndexedDB, browser profile data, process memory, request bodies, packet payloads, or credential values. It does not use accessibility, mouse/keyboard automation, DevTools, or a hidden ChatGPT browser.
 
 ## What to do
 
-Keep ChatGPT desktop open and signed in. In FlipAi go to **Agents -> ChatGPT Chat -> Map Chat request protocol** and copy the complete result. The decisive lines are **BRIDGE EXPOSURE**, **BRIDGE METHOD**, **IPC BINDING**, **BACKEND ROUTE**, **REQUEST KEY**, **AUTH FLOW**, **EXTERNAL TRANSPORT SIGNAL**, the ASAR scan note, and **Direct-backend assessment**.
+Keep ChatGPT desktop open and signed in. In FlipAi go to **Agents -> ChatGPT Chat -> Map independent cloud auth** and copy the full result, especially **OAUTH ENDPOINT**, **PUBLIC CLIENT ID**, **REDIRECT URI**, **OAUTH SCOPE**, **OAUTH MECHANIC**, **CONVERSATION ENDPOINT**, **HEADER NAME**, **REQUEST FIELD**, **CONVERSATION STATE**, **STREAM FORMAT**, **SESSION DEPENDENCY**, and **CLOUD PATH ASSESSMENT**.
 
-ChatGPT Chat intentionally remains **Not connected** in this release; the mapper must first prove a safe externally callable path or an independent authentication flow before SMS routing can be enabled.
+ChatGPT Chat remains intentionally **Not connected** in this release. No message is sent until the diagnostic proves a safe independent authorization path.

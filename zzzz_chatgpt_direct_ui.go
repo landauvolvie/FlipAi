@@ -29,7 +29,7 @@ func chatGPTDirectUI(body string) string {
         <span class="bmark codex">{{brand "codex"}}</span>
         <span class="agent-item-copy">
           <b>ChatGPT Chat <span class="agent-chip warn">Not connected</span></b>
-          <span>Chat request protocol map</span>
+          <span>Cloud auth + Chat protocol map</span>
         </span>
       </label>`
 	body = replaceAgentUIOnce(body, claudeRail, claudeRail+chatRail, "ChatGPT direct rail item")
@@ -43,18 +43,18 @@ func chatGPTDirectUI(body string) string {
           <span class="bmark lg codex">{{brand "codex"}}</span>
           <div>
             <h2>ChatGPT Chat <span class="pill warn">Not connected</span></h2>
-            <p>Map electronBridge, IPC handlers, Chat backend routes, request schema and authentication-flow markers without controlling the visible app.</p>
+            <p>Map the independent OAuth/PKCE path and regular Chat request protocol without borrowing the desktop app's signed-in session.</p>
           </div>
         </div>
         <div class="agent-head-actions">
-          <button class="btn accent" type="button" data-test="/chatgpt-direct/probe" data-test-busy="Mapping ChatGPT request protocol">{{icon "search"}}Map Chat request protocol</button>
+          <button class="btn accent" type="button" data-test="/chatgpt-direct/probe" data-test-busy="Mapping ChatGPT cloud auth and request protocol">{{icon "search"}}Map Chat request protocol</button>
         </div>
       </div>
 
-      <p class="callout"><b>This is the full read-only protocol map.</b> FlipAi checks the Windows runtime and then maps the real Electron app.asar: contextBridge exposure, bridge properties, ipcRenderer/ipcMain directions, regular Chat backend routes, conversation request field names, OAuth/PKCE markers, streaming transports, and any server/pipe primitives. Values and credentials are never returned.</p>
+      <p class="callout"><b>This is the full read-only protocol map.</b> FlipAi still maps the Windows runtime and Electron app.asar, and now adds an <b>Independent cloud auth map</b>: public OAuth client configuration, redirect URI, scopes, PKCE mechanics, regular Chat conversation endpoint/state fields, header names, stream framing, and browser/device-challenge dependencies. Authenticated values and credentials are never returned.</p>
 
       <section class="card">
-        <div class="card-head divided"><div><h2>Direct connection status</h2><p>No accessibility, mouse/keyboard control, or hidden ChatGPT browser is used.</p></div></div>
+        <div class="card-head divided"><div><h2>Direct connection status</h2><p>No accessibility, mouse/keyboard control, hidden ChatGPT browser, or desktop-session credential copying is used.</p></div></div>
         <div class="card-body">
           <div class="rows">
             <div class="row"><div class="label">ChatGPT connection<span>A diagnostic result is not the same as a connected agent.</span></div><div class="value"><span class="pill warn">Not connected</span></div></div>
@@ -63,18 +63,19 @@ func chatGPTDirectUI(body string) string {
             <div class="row"><div class="label">Runtime architecture<span>Identifies Electron, WebView2, WinUI/native shell, child processes, modules and window classes.</span></div><div class="value"><span class="pill">Included</span></div></div>
             <div class="row"><div class="label">Windows integration<span>Checks AppX extensions, AppServices and registered ChatGPT/OpenAI activation protocols without invoking them.</span></div><div class="value"><span class="pill">Included</span></div></div>
             <div class="row"><div class="label">Electron app.asar<span>Maps regular app-code files, electronBridge/IPC directions, backend routes, request key names, auth-flow markers and external transport primitives.</span></div><div class="value"><span class="pill">Included</span></div></div>
+            <div class="row"><div class="label">Independent cloud auth map<span>Maps public OAuth client id, callback, scopes, PKCE mechanics, Chat endpoint/schema, stream format and session/challenge requirements.</span></div><div class="value"><span class="pill">Included</span></div></div>
             <div class="row"><div class="label">Network metadata<span>Records only remote address/port and cached OpenAI/ChatGPT host names. It does not capture packet contents or HTTP headers.</span></div><div class="value"><span class="pill">Included</span></div></div>
-            <div class="row"><div class="label">Credential capture<span>The diagnostic never reads ChatGPT cookies, tokens, Local Storage, IndexedDB, process memory, request bodies, or full process command lines.</span></div><div class="value"><span class="pill">Not used</span></div></div>
-            <div class="row"><div class="label">SMS routing<span>FlipAi will only expose Enable after an actual usable ChatGPT request path is proven.</span></div><div class="value"><span class="pill warn">Unavailable until proven</span></div></div>
+            <div class="row"><div class="label">Credential capture<span>The diagnostic never reads ChatGPT cookies, tokens, Local Storage, IndexedDB, process memory, request bodies, credential values, or the desktop app's private session.</span></div><div class="value"><span class="pill">Not used</span></div></div>
+            <div class="row"><div class="label">SMS routing<span>FlipAi will only expose Enable after an actual independently authenticated ChatGPT request path is proven.</span></div><div class="value"><span class="pill warn">Unavailable until proven</span></div></div>
           </div>
-          <p class="hint" style="margin-top:16px">Keep the regular ChatGPT desktop app open and signed in, then press <b>Map Chat request protocol</b>. Copy the full result, especially BACKEND ROUTE, REQUEST KEY, AUTH FLOW, BRIDGE EXPOSURE, BRIDGE METHOD, IPC BINDING, EXTERNAL TRANSPORT SIGNAL, the ASAR scan note, and Direct-backend assessment.</p>
+          <p class="hint" style="margin-top:16px">Keep the regular ChatGPT desktop app installed, then press <b>Map Chat request protocol</b>. Copy the full result. The new decisive lines begin with <b>CLOUD 01 PUBLIC CLIENT ID</b>, <b>CLOUD 02 REDIRECT URI</b>, <b>CLOUD 03 OAUTH ENDPOINT</b>, <b>CLOUD 04 OAUTH SCOPE</b>, <b>CLOUD 06 CONVERSATION ENDPOINT</b>, <b>CLOUD 07 HEADER NAME</b>, <b>CLOUD 08 REQUEST FIELD</b>, <b>CLOUD 10 STREAM FORMAT</b>, <b>CLOUD 11 SESSION DEPENDENCY</b>, and <b>CLOUD 12 PATH ASSESSMENT</b>. BACKEND ROUTE, REQUEST KEY, AUTH FLOW, IPC BINDING and the ASAR scan note remain useful too.</p>
         </div>
       </section>
 
       <section class="card">
-        <div class="card-head divided"><div><h2>What the result should decide</h2><p>The diagnostic ends with a Direct-backend assessment rather than another ambiguous green/red clue.</p></div></div>
+        <div class="card-head divided"><div><h2>What this result should decide</h2><p>This pass is designed to choose the implementation path, not produce another ambiguous green/red clue.</p></div></div>
         <div class="card-body">
-          <p class="hint" style="font-size:12.5px;margin:0">This pass distinguishes internal Electron IPC from anything externally callable and maps the cloud request/auth shape at the same time. If no external transport exists, we should know whether Option 2 can only work through an independent authenticated ChatGPT cloud session rather than a local desktop bridge.</p>
+          <p class="hint" style="font-size:12.5px;margin:0">If the package contains a public OAuth client id + redirect + PKCE flow and regular Chat protocol without mandatory browser-session credentials, the next build can test an explicit user-authorized independent login. If the Chat request is inseparable from cookies/device challenges held by a browser session, FlipAi will say so and the dedicated signed-in WebView becomes the practical fallback instead of harvesting the desktop app's profile.</p>
         </div>
       </section>
     </section>
