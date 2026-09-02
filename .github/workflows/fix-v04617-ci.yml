@@ -1,0 +1,354 @@
+name: fix-v04617-ci
+
+on:
+  push:
+    branches:
+      - fix/full-single-google-voice-replies-v04616
+    paths:
+      - .github/workflows/fix-v04617-ci.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Fix fresh-install migration and align tests to v0.46.17 behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(p): return Path(p).read_text()
+          def write(p,s): Path(p).write_text(s)
+          def rep(p, old, new, count=1):
+              s=read(p); n=s.count(old)
+              if n != count:
+                  raise SystemExit(f'{p}: expected {count} occurrences, found {n}: {old[:100]!r}')
+              write(p, s.replace(old,new,count))
+
+          # Fresh installs are already in the per-agent schema. Mark both legacy
+          # migrations complete before the first bridge.json is saved; otherwise
+          # adding a Codex number and later restarting can incorrectly clone it
+          # into ChatGPT as if this were an upgraded v0.46.15 install.
+          rep('main.go',
+              '''\tif errors.Is(err, os.ErrNotExist) {
+\t\tcfg = defaultConfig(dataDir)
+\t\tif err := saveConfig(cfgPath, cfg); err != nil {''',
+              '''\tif errors.Is(err, os.ErrNotExist) {
+\t\tcfg = defaultConfig(dataDir)
+\t\tcfg.Security.AgentsMigrated = true
+\t\tcfg.Security.ChatGPTAgentMigrated = true
+\t\tif err := saveConfig(cfgPath, cfg); err != nil {''')
+
+          rep('ui_test.go',
+              '''\tcfg.Security.AgentsMigrated = true
+\ta := &App{''',
+              '''\tcfg.Security.AgentsMigrated = true
+\tcfg.Security.ChatGPTAgentMigrated = true
+\ta := &App{''')
+          rep('ui_test.go',
+              '''\tif !ok || agent != "B" || !phone.AllowsSMS() {
+\t\tt.Fatalf("shared number did not become an SMS-selectable sender: agent=%q phone=%+v ok=%v", agent, phone, ok)
+\t}
+\trc, err := parseRemoteCommandForMessage("A: hello Claude", cfg, agent, GmailMessage{})''',
+              '''\tif !ok || agent != "CA" || !phone.AllowsSMS() {
+\t\tt.Fatalf("shared number did not become an SMS-selectable sender: agent=%q phone=%+v ok=%v", agent, phone, ok)
+\t}
+\trc, err := parseRemoteCommandForMessageSticky("A: hello Claude", cfg, agent, "", GmailMessage{})''')
+
+          # Shared-number tests now assert sticky/no-default routing instead of
+          # the retired DefaultAgent behavior. Voice keeps its separate legacy
+          # ambiguity rule; these changes are SMS-specific.
+          write('shared_agent_number_test.go', r'''package main
+
+import (
+    "strings"
+    "testing"
+)
+
+func TestSharedNumberUsesShortcutThenStickyRoutingWithNoSMSDefault(t *testing.T) {
+    cfg := defaultConfig(t.TempDir())
+    shared := AgentPhone{Number: "8455551000", Access: AccessAll}
+    cfg.Codex.Phones = []AgentPhone{shared}
+    cfg.Claude.Phones = []AgentPhone{shared}
+    if err := normalizeAgents(&cfg); err != nil {
+        t.Fatalf("shared number rejected: %v", err)
+    }
+
+    owner, phone, ok := agentForSender(cfg, shared.Number)
+    if !ok || owner != "CA" || !phone.AllowsSMS() {
+        t.Fatalf("shared SMS number resolved to owner=%q phone=%+v ok=%v", owner, phone, ok)
+    }
+    if _, err := parseRemoteCommandForMessageSticky("unprefixed task", cfg, owner, "", GmailMessage{}); err == nil || !strings.Contains(err.Error(), "no SMS agent is selected") {
+        t.Fatalf("shared SMS unexpectedly used a default agent: %v", err)
+    }
+
+    for raw, want := range map[string]string{
+        "C: codex task":  "C",
+        "A: claude task": "A",
+    } {
+        rc, err := parseRemoteCommandForMessageSticky(raw, cfg, owner, "", GmailMessage{})
+        if err != nil || rc.Agent != want {
+            t.Errorf("%q routed to %+v, err=%v; want %s", raw, rc, err, want)
+        }
+        follow, err := parseRemoteCommandForMessageSticky("follow up", cfg, owner, want, GmailMessage{})
+        if err != nil || follow.Agent != want || follow.Text != "follow up" {
+            t.Errorf("sticky follow-up for %s failed: %+v err=%v", want, follow, err)
+        }
+    }
+}
+
+func TestSharedNumberDoesNotWidenPerAgentSMSAccess(t *testing.T) {
+    cfg := defaultConfig(t.TempDir())
+    cfg.Codex.Phones = []AgentPhone{{Number: "8455551000", Access: AccessSMS}}
+    cfg.Claude.Phones = []AgentPhone{{Number: "8455551000", Access: AccessVoice}}
+    if err := normalizeAgents(&cfg); err != nil {
+        t.Fatal(err)
+    }
+
+    owner, phone, ok := agentForSender(cfg, "8455551000")
+    if !ok || owner != "C" || !phone.AllowsSMS() {
+        t.Fatalf("SMS permission should remain Codex-only: owner=%q phone=%+v ok=%v", owner, phone, ok)
+    }
+    if _, err := parseRemoteCommandForMessageSticky("A: should fail", cfg, owner, "", GmailMessage{}); err == nil || !strings.Contains(err.Error(), "cannot address") {
+        t.Fatalf("Claude voice-only copy unexpectedly gained SMS permission: %v", err)
+    }
+}
+
+func TestSharedNumberSecurityCodeCanPrecedeShortcut(t *testing.T) {
+    cfg := defaultConfig(t.TempDir())
+    shared := AgentPhone{Number: "8455551000", Access: AccessAll}
+    cfg.Codex.Phones = []AgentPhone{shared}
+    cfg.Claude.Phones = []AgentPhone{shared}
+    if err := setAgentCode(&cfg, "A", "claude1"); err != nil {
+        t.Fatal(err)
+    }
+    s := cfg.Claude.AgentSettings
+    s.RequireCode = true
+    cfg.Claude.AgentSettings = s
+    if err := normalizeAgents(&cfg); err != nil {
+        t.Fatal(err)
+    }
+
+    owner, _, ok := agentForSender(cfg, "8455551000")
+    if !ok || owner != "CA" {
+        t.Fatalf("expected shared marker, got %q (ok=%v)", owner, ok)
+    }
+    rc, err := parseRemoteCommandForMessageSticky("claude1 A: protected task", cfg, owner, "", GmailMessage{})
+    if err != nil || rc.Agent != "A" || rc.Text != "protected task" {
+        t.Fatalf("security-code + shortcut routing failed: %+v %v", rc, err)
+    }
+}
+
+func TestSharedVoiceCallerUsesDefaultAgentWhenBothAllowCalls(t *testing.T) {
+    cfg := defaultConfig(t.TempDir())
+    cfg.DefaultAgent = "A"
+    cfg.Codex.Phones = []AgentPhone{{Number: "8455551000", Access: AccessAll}}
+    cfg.Claude.Phones = []AgentPhone{{Number: "8455551000", Access: AccessAll}}
+    if err := normalizeAgents(&cfg); err != nil {
+        t.Fatal(err)
+    }
+    vc := defaultVoiceCallConfig()
+    vc.Enabled = true
+    d := decideVoiceCall(vc, cfg, "8455551000", "")
+    if !d.Allowed || d.Agent != "A" {
+        t.Fatalf("shared caller should use default Claude when both allow calls: %+v", d)
+    }
+}
+''')
+
+          # Sticky ChatGPT tests now give G its own explicit permission and use
+          # the real CAG marker instead of old B compatibility.
+          rep('sms_sticky_chatgpt_test.go',
+              '''    cfg.Claude.Phones = []AgentPhone{{Number: "18455550123", Access: AccessSMS}}
+    return cfg''',
+              '''    cfg.Claude.Phones = []AgentPhone{{Number: "18455550123", Access: AccessSMS}}
+    cfg.ChatGPT.Phones = []AgentPhone{{Number: "18455550123", Access: AccessSMS}}
+    return cfg''')
+          rep('sms_sticky_chatgpt_test.go',
+              '''    if _, err := selectStickySMSAgent("hello", cfg, "B", ""); err == nil || !strings.Contains(err.Error(), "C:") || !strings.Contains(err.Error(), "G:") {''',
+              '''    owner, _, ok := agentForSender(cfg, "18455550123")
+    if !ok || owner != "CAG" {
+        t.Fatalf("shared sender marker=%q ok=%v", owner, ok)
+    }
+    if _, err := selectStickySMSAgent("hello", cfg, owner, ""); err == nil || !strings.Contains(err.Error(), "C:") || !strings.Contains(err.Error(), "G:") {''')
+          for old,new in [
+              ('parseRemoteCommandForMessageSticky("G: hi", cfg, "B", "", GmailMessage{})','parseRemoteCommandForMessageSticky("G: hi", cfg, owner, "", GmailMessage{})'),
+              ('parseRemoteCommandForMessageSticky("follow up", cfg, "B", "G", GmailMessage{})','parseRemoteCommandForMessageSticky("follow up", cfg, owner, "G", GmailMessage{})'),
+              ('parseRemoteCommandForMessageSticky("A: switch", cfg, "B", "G", GmailMessage{})','parseRemoteCommandForMessageSticky("A: switch", cfg, owner, "G", GmailMessage{})'),
+              ('parseRemoteCommandForMessageSticky("next", cfg, "B", "A", GmailMessage{})','parseRemoteCommandForMessageSticky("next", cfg, owner, "A", GmailMessage{})')]:
+              rep('sms_sticky_chatgpt_test.go',old,new)
+          # This test inspects source template text, not rendered values. Test
+          # the semantic controls instead of literal default substitutions.
+          s=read('sms_sticky_chatgpt_test.go')
+          s=re.sub(r'func TestAgentsUIHasStickyRoutingAndNoDefaultAgentControl\(t \*testing\.T\) \{.*?\n\}', r'''func TestAgentsUIHasStickyRoutingAndNoDefaultAgentControl(t *testing.T) {
+    body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
+    for _, want := range []string{"chatgptPrefix", "No default agent.", "Unprefixed follow-ups stay here until you switch", "New conversation word"} {
+        if !strings.Contains(body, want) {
+            t.Fatalf("Agents UI missing %q", want)
+        }
+    }
+    for _, old := range []string{"Make default", "Default agent"} {
+        if strings.Contains(body, old) {
+            t.Fatalf("Agents UI still contains retired default routing control %q", old)
+        }
+    }
+}''', s, count=1, flags=re.S)
+          write('sms_sticky_chatgpt_test.go',s)
+
+          # The v0.46.17 parity test should inspect the rendered page for dynamic
+          # field names generated by the shared agentAccess template.
+          s=read('agent_parity_v04617_test.go')
+          s=re.sub(r'func TestAgentsUIExposesSharedParityControls\(t \*testing\.T\) \{.*?\n\}', r'''func TestAgentsUIExposesSharedParityControls(t *testing.T) {
+    a := newTestApp(t)
+    body := a.do(t, "GET", "/agents", nil).Body.String()
+    for _, want := range []string{`name="chatgptPrefix"`, `name="chatgptRequireCode"`, `name="chatgptAckDelay"`, `name="sharedReplyStyle"`, "No default agent."} {
+        if !strings.Contains(body, want) {
+            t.Fatalf("Agents UI missing %q", want)
+        }
+    }
+}''', s, count=1, flags=re.S)
+          write('agent_parity_v04617_test.go',s)
+
+          # Update the older Agents-page contract from per-agent instructions to
+          # one shared editor and include ChatGPT access/PIN controls.
+          s=read('ui_page_agents_test.go')
+          s=s.replace('''\t\t`name="codexReplyStyle"`,
+\t\t`name="claudeReplyStyle"`,''','''\t\t`name="sharedReplyStyle"`,
+\t\t`name="chatgptPrefix"`,''')
+          s=s.replace('''\t\t`name="codexAck"`,
+\t\t`name="claudeProgress"`,''','''\t\t`name="codexAck"`,
+\t\t`name="claudeProgress"`,
+\t\t`name="chatgptRequireCode"`,
+\t\t`name="chatgptAckDelay"`,''')
+          s=s.replace('''\t\t`name="codexReplyStyle"`:  1,
+\t\t`name="claudeReplyStyle"`: 1,
+\t\t`name="codexRequireCode"`: 1,
+\t\t`name="claudeCode"`:       1,''','''\t\t`name="sharedReplyStyle"`:    3,
+\t\t`name="codexRequireCode"`:   2,
+\t\t`name="claudeRequireCode"`:  2,
+\t\t`name="chatgptRequireCode"`: 2,
+\t\t`name="claudeCode"`:         1,
+\t\t`name="chatgptCode"`:        1,''')
+          s=s.replace('''agentFields := []string{`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`, `name="codexPrefix"`, `name="claudePrefix"`, `name="claudeReplyStyle"`, `name="codexReplyStyle"`}''','''agentFields := []string{`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`, `name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="sharedReplyStyle"`}''')
+          start=s.index('// The SMS instruction is the one thing FlipAi puts in front of the agent')
+          end=s.index('func TestAgentConversationResetClearsOnlySelectedAgent',start)
+          shared_test=r'''// FlipAi has one SMS instruction for all three agents. Editing it in any
+// agent pane changes the one shared value used by every composePrompt call.
+func TestSharedSMSInstructionIsEditableAndUsedByEveryAgent(t *testing.T) {
+    a := newTestApp(t)
+
+    rr := a.do(t, http.MethodPost, "/agents/save", url.Values{
+        "sharedReplyStyle": {"  Answer in one line. No markdown.  "},
+    })
+    if rr.Code != http.StatusSeeOther {
+        t.Fatalf("saving instruction returned %d: %s", rr.Code, rr.Body.String())
+    }
+    cfg := a.reloadConfig(t)
+    if cfg.GoogleVoice.ReplyStyleHint != "Answer in one line. No markdown." {
+        t.Fatalf("shared instruction was not stored trimmed: %q", cfg.GoogleVoice.ReplyStyleHint)
+    }
+    if cfg.Codex.Instruction != "" || cfg.Claude.Instruction != "" || cfg.ChatGPT.Instruction != "" {
+        t.Fatalf("retired per-agent instruction overrides survived: C=%q A=%q G=%q", cfg.Codex.Instruction, cfg.Claude.Instruction, cfg.ChatGPT.Instruction)
+    }
+    b := NewBridge(cfg, a.statePath, State{}, nil, nil, nil)
+    for _, agent := range []string{"C", "A", "G"} {
+        if got := b.composePrompt(agent, "ship it"); !strings.HasSuffix(got, "Answer in one line. No markdown.") {
+            t.Fatalf("%s prompt does not carry the shared instruction: %q", agent, got)
+        }
+    }
+
+    if rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"sharedReplyStyle": {"   "}}); rr.Code != http.StatusSeeOther {
+        t.Fatalf("clearing instruction returned %d", rr.Code)
+    }
+    if got := a.reloadConfig(t).GoogleVoice.ReplyStyleHint; got != defaultReplyStyleHint {
+        t.Fatalf("cleared shared instruction should restore default, got %q", got)
+    }
+
+    long := strings.Repeat("x", replyStyleHintMaxChars+500)
+    if rr := a.do(t, http.MethodPost, "/agents/save", url.Values{"sharedReplyStyle": {long}}); rr.Code != http.StatusSeeOther {
+        t.Fatalf("saving a long instruction returned %d", rr.Code)
+    }
+    if got := len(a.reloadConfig(t).GoogleVoice.ReplyStyleHint); got > replyStyleHintMaxChars {
+        t.Fatalf("instruction was stored at %d chars, cap is %d", got, replyStyleHintMaxChars)
+    }
+}
+
+'''
+          s=s[:start]+shared_test+s[end:]
+          write('ui_page_agents_test.go',s)
+
+          # The ChatGPT pane was intentionally simplified: connection actions
+          # live at the top and detailed protocol/status information is folded
+          # under Connection details.
+          s=read('chatgpt_direct_test.go')
+          start=s.index('func TestChatGPTAgentsPaneExposesRealWebViewConnectionWithoutGlobalUIAutomation')
+          end=s.index('func TestUniqueSortedDirectProbeMetadata',start)
+          replacement=r'''func TestChatGPTAgentsPaneExposesRealWebViewConnectionWithoutGlobalUIAutomation(t *testing.T) {
+    body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
+    for _, want := range []string{
+        "ChatGPT Chat",
+        `action="/chatgpt/connect"`,
+        `action="/chatgpt/test"`,
+        `action="/chatgpt/disconnect"`,
+        "Routing &amp; conversation",
+        "Allowed phone numbers",
+        "Security code",
+        "Connection details",
+        "persistent browser session",
+        `href="/chatgpt-direct/probe"`,
+    } {
+        if !strings.Contains(body, want) {
+            t.Fatalf("ChatGPT live pane missing %q", want)
+        }
+    }
+    for _, forbidden := range []string{"Windows accessibility required", "SendKeys", "Unavailable until proven"} {
+        if strings.Contains(body, forbidden) {
+            t.Fatalf("ChatGPT live pane still exposes retired diagnostic/UI automation wording %q", forbidden)
+        }
+    }
+}
+
+'''
+          s=s[:start]+replacement+s[end:]
+          write('chatgpt_direct_test.go',s)
+
+          s=read('chatgpt_persistence_test.go')
+          start=s.index('func TestChatGPTAgentsPaneExplainsOneTimePersistentConnection')
+          replacement=r'''func TestChatGPTAgentsPaneKeepsPersistentConnectionStatusAvailable(t *testing.T) {
+    body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
+    for _, want := range []string{
+        "private persistent browser session",
+        "Saved connection",
+        "Live session",
+        "Connection details",
+        "Restoring",
+    } {
+        if !strings.Contains(body, want) {
+            t.Fatalf("persistent ChatGPT UI missing %q", want)
+        }
+    }
+}
+'''
+          # It is the final function in this file.
+          s=s[:start]+replacement
+          write('chatgpt_persistence_test.go',s)
+          PY
+
+          gofmt -w main.go ui_test.go shared_agent_number_test.go sms_sticky_chatgpt_test.go agent_parity_v04617_test.go ui_page_agents_test.go chatgpt_direct_test.go chatgpt_persistence_test.go
+          rm -f .github/workflows/fix-v04617-ci.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix v0.46.17 fresh-install agent migration and tests"
+          git push origin HEAD:fix/full-single-google-voice-replies-v04616
