@@ -20,7 +20,7 @@ G uses the sender's existing allowed Codex/Claude phone authorization. If every 
 
 v0.46.13 correctly preserved the signed-in WebView profile, but Windows could terminate the process before FlipAi cleared process-only `Running`/`SignedIn`/control-port fields. On the next boot the tray could temporarily trust those stale fields and not launch the hidden browser until the first message forced a retry.
 
-v0.46.14 verifies the private worker at tray startup, discards only stale process metadata while keeping the saved login/profile and conversation id, immediately starts the hidden WebView, waits longer for a cold-boot network/auth restore, and recycles a hidden worker that remains alive but never restores sign-in. No login popup is opened by recovery.
+v0.46.14 verifies the private worker at tray startup, discards only stale process metadata while keeping the saved login/profile and conversation id, immediately starts the hidden WebView, waits longer for a cold-boot network/auth restore, and recycles a hidden worker that remains alive but never restores sign-in. No login popup is opened by recovery. The visible Connect ChatGPT window remains a one-time sign-in step only, unless ChatGPT itself later expires the saved account session.
 
 ## Diagnostics and tests
 
