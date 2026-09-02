@@ -47,7 +47,7 @@ func TestStickySMSAgentPersistsPerSender(t *testing.T) {
         t.Fatal(err)
     }
     st := loadState(b.statePath)
-    if got := st.LastAgentBySender["18455550123"]; got != "G" {
+    if got := st.LastAgentBySender["8455550123"]; got != "G" {
         t.Fatalf("persisted sticky agent=%q, want G", got)
     }
 }
