@@ -1,0 +1,202 @@
+name: wire-chatgpt-web-v04612
+
+on:
+  push:
+    branches: [feature/chatgpt-web-session-v04612]
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: ${{ !contains(github.event.head_commit.message, '[chatgpt-web-wired]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/chatgpt-web-session-v04612
+      - name: Apply integration patch
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p=Path(path); s=p.read_text(encoding='utf-8')
+              n=s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{path}: expected one match, got {n}: {old[:100]!r}')
+              p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          # Shared C/A numbers can address G:, but they keep the existing
+          # selected agent's security-code gate before ChatGPT is chosen.
+          replace_once('attachments.go', '''\t\tif _, ok := stripAgentCommandPrefix(text, configuredClaudePrefix(cfg)); ok ||
+          \t\t\tisAgentNewSession(text, configuredClaudePrefix(cfg), newSession) {
+          \t\t\treturn "A"
+          \t\t}
+          \t\treturn ""
+          ''', '''\t\tif _, ok := stripAgentCommandPrefix(text, configuredClaudePrefix(cfg)); ok ||
+          \t\t\tisAgentNewSession(text, configuredClaudePrefix(cfg), newSession) {
+          \t\t\treturn "A"
+          \t\t}
+          \t\tif _, ok := stripAgentCommandPrefix(text, configuredChatGPTPrefix(cfg)); ok ||
+          \t\t\tisAgentNewSession(text, configuredChatGPTPrefix(cfg), newSession) {
+          \t\t\t// ChatGPT uses the existing default C/A gate for a number that
+          \t\t\t// is shared by both agents; parseRemoteCommand changes the final
+          \t\t\t// destination to G only after that gate succeeds.
+          \t\t\tif cfg.DefaultAgent == "A" { return "A" }
+          \t\t\treturn "C"
+          \t\t}
+          \t\treturn ""
+          ''')
+
+          replace_once('bridge.go', '''\tcodexPrefix := configuredCodexPrefix(cfg)
+          \tclaudePrefix := configuredClaudePrefix(cfg)
+          \tnewSession := configuredNewSessionCommand(cfg)
+          ''', '''\tcodexPrefix := configuredCodexPrefix(cfg)
+          \tclaudePrefix := configuredClaudePrefix(cfg)
+          \tchatGPTPrefix := configuredChatGPTPrefix(cfg)
+          \tnewSession := configuredNewSessionCommand(cfg)
+          ''')
+
+          replace_once('bridge.go', '''\tif isAgentNewSession(rest, claudePrefix, newSession) {
+          \t\tif agent != "A" {
+          \t\t\treturn remoteCommand{}, wrongAgentForNumber(agent, "A")
+          \t\t}
+          \t\treturn remoteCommand{Agent: "A", New: true}, nil
+          \t}
+
+          \ttext := rest
+          ''', '''\tif isAgentNewSession(rest, claudePrefix, newSession) {
+          \t\tif agent != "A" {
+          \t\t\treturn remoteCommand{}, wrongAgentForNumber(agent, "A")
+          \t\t}
+          \t\treturn remoteCommand{Agent: "A", New: true}, nil
+          \t}
+          \tif isAgentNewSession(rest, chatGPTPrefix, newSession) {
+          \t\treturn remoteCommand{Agent: "G", New: true}, nil
+          \t}
+
+          \ttext := rest
+          ''')
+
+          replace_once('bridge.go', '''\t} else if tail, ok := stripAgentCommandPrefix(rest, claudePrefix); ok {
+          \t\tif agent != "A" {
+          \t\t\treturn remoteCommand{}, wrongAgentForNumber(agent, "A")
+          \t\t}
+          \t\ttext = tail
+          \t}
+          ''', '''\t} else if tail, ok := stripAgentCommandPrefix(rest, claudePrefix); ok {
+          \t\tif agent != "A" {
+          \t\t\treturn remoteCommand{}, wrongAgentForNumber(agent, "A")
+          \t\t}
+          \t\ttext = tail
+          \t} else if tail, ok := stripAgentCommandPrefix(rest, chatGPTPrefix); ok {
+          \t\ttext = tail
+          \t\tagent = "G"
+          \t}
+          ''')
+
+          replace_once('bridge.go', '''\t\tagentName := "Codex"
+          \t\tif rc.Agent == "A" {
+          \t\t\tagentName = "Claude"
+          \t\t}
+          ''', '''\t\tagentName := "Codex"
+          \t\tswitch rc.Agent {
+          \t\tcase "A":
+          \t\t\tagentName = "Claude"
+          \t\tcase "G":
+          \t\t\tagentName = "ChatGPT"
+          \t\t}
+          ''')
+
+          replace_once('bridge.go', '''\t\tif rc.Agent == "C" {
+          \t\t\terr = b.newCodexThread(ctx)
+          \t\t\tfinal = "New Codex conversation started."
+          \t\t} else {
+          \t\t\t// Claude sessions are created by the CLI on the turn that uses them,
+          ''', '''\t\tif rc.Agent == "C" {
+          \t\t\terr = b.newCodexThread(ctx)
+          \t\t\tfinal = "New Codex conversation started."
+          \t\t} else if rc.Agent == "G" {
+          \t\t\terr = b.newChatGPTWebConversation()
+          \t\t\tfinal = "New ChatGPT conversation started."
+          \t\t} else {
+          \t\t\t// Claude sessions are created by the CLI on the turn that uses them,
+          ''')
+
+          replace_once('bridge.go', '''\t} else if rc.Agent == "A" {
+          \t\tb.event("info", "agent", "Claude command started", rc.Sender, "A", m.ID)
+          \t\tfinal, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+          \t} else {
+          \t\tb.event("info", "agent", "Codex command started", rc.Sender, "C", m.ID)
+          \t\tfinal, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+          \t}
+          ''', '''\t} else if rc.Agent == "A" {
+          \t\tb.event("info", "agent", "Claude command started", rc.Sender, "A", m.ID)
+          \t\tfinal, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+          \t} else if rc.Agent == "G" {
+          \t\tb.event("info", "chatgpt", "ChatGPT command started in the private WebView", rc.Sender, "G", m.ID)
+          \t\tfinal, err = b.runChatGPTWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+          \t} else {
+          \t\tb.event("info", "agent", "Codex command started", rc.Sender, "C", m.ID)
+          \t\tfinal, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+          \t}
+          ''')
+
+          replace_once('bridge.go', '''\tagentName := "Codex"
+          \tif rc.Agent == "A" {
+          \t\tagentName = "Claude"
+          \t}
+          ''', '''\tagentName := "Codex"
+          \tswitch rc.Agent {
+          \tcase "A":
+          \t\tagentName = "Claude"
+          \tcase "G":
+          \t\tagentName = "ChatGPT"
+          \t}
+          ''')
+
+          # The existing authenticated diagnostic route is retained for old
+          # links, and ?web=1 switches it to the working WebView control API.
+          replace_once('chatgpt_direct.go', '''func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
+          \tctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+          ''', '''func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
+          \tif r.URL.Query().Get("web") == "1" {
+          \t\ta.chatGPTWebHandler(w, r)
+          \t\treturn
+          \t}
+          \tctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+          ''')
+
+          # Retire only the old pane assertion; all metadata/privacy tests stay.
+          p=Path('chatgpt_direct_test.go')
+          s=p.read_text(encoding='utf-8')
+          pat=r'''func TestChatGPTDirectAgentsPaneCannotBeMistakenForEnablement\(t \*testing\.T\) \{.*?\n\}\n\nfunc TestUniqueSortedDirectProbeMetadata'''
+          repl='''func TestChatGPTAgentsPaneShowsWorkingWebViewConnection(t *testing.T) {
+          \tbody := chatGPTWebUI(agentConnectFirstRunHTML(agentsPageHTML))
+          \tfor _, want := range []string{
+          \t\t"ChatGPT Chat", "Connect ChatGPT", "Test", "Show session", "Answers G: messages",
+          \t\t"private FlipAi browser session", "network response", "DOM", "Open Activity",
+          \t\t"G: your message", "G NEW", "Windows accessibility", "Not used", "Disconnect",
+          \t} {
+          \t\tif !strings.Contains(body, want) { t.Fatalf("ChatGPT WebView pane missing %q", want) }
+          \t}
+          \tfor _, forbidden := range []string{"Unavailable until proven", "Map Chat request protocol", "full read-only protocol map"} {
+          \t\tif strings.Contains(body, forbidden) { t.Fatalf("retired ChatGPT diagnostic UI still contains %q", forbidden) }
+          \t}
+          }
+
+          func TestUniqueSortedDirectProbeMetadata'''
+          s2,n=re.subn(pat,repl,s,flags=re.S)
+          if n != 1: raise SystemExit(f'chatgpt_direct_test.go pane test replacement count {n}')
+          p.write_text(s2,encoding='utf-8')
+
+      - name: Commit integration wiring
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add attachments.go bridge.go chatgpt_direct.go chatgpt_direct_test.go
+          git commit -m "Wire ChatGPT WebView into SMS bridge [chatgpt-web-wired]"
+          git push
