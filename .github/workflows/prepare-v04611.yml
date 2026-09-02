@@ -1,0 +1,64 @@
+name: prepare-v04611
+
+on:
+  push:
+    branches:
+      - feature/chatgpt-cloud-auth-map-v04611
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: ${{ !contains(github.event.head_commit.message, '[v0.46.11-ready]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump release metadata
+        shell: python
+        run: |
+          from pathlib import Path
+
+          cfg = Path('config.go')
+          text = cfg.read_text(encoding='utf-8')
+          old = 'const version = "0.46.10"'
+          new = 'const version = "0.46.11"'
+          if old not in text and new not in text:
+              raise SystemExit('expected version constant not found')
+          cfg.write_text(text.replace(old, new, 1), encoding='utf-8')
+          Path('VERSION').write_text('0.46.11\n', encoding='utf-8')
+          Path('docs/RELEASE-NOTES.md').write_text('''# FlipAi v0.46.11
+
+This release continues the direct regular-ChatGPT investigation after v0.46.10 proved that the desktop Electron bridge is internal IPC rather than a Codex-style externally callable local backend.
+
+## Independent ChatGPT cloud protocol map
+
+- Maps OAuth authorize/token endpoint literals from the installed ChatGPT application package.
+- Maps safe public OAuth client-id literals, redirect URIs, scopes, and PKCE mechanics without returning verifier/challenge values.
+- Maps the regular ChatGPT conversation endpoint, request-field names, and new/continued-conversation state identifiers.
+- Maps HTTP header names only; header values are never returned.
+- Maps SSE/WebSocket response framing used by regular Chat.
+- Identifies browser/session/device/anti-abuse dependency markers so a browser-cookie requirement cannot be mistaken for a clean OAuth flow.
+- Adds a CLOUD PATH ASSESSMENT explaining whether an explicit independently authorized OAuth proof is justified or whether a dedicated signed-in WebView is the safer fallback.
+
+## Privacy boundary
+
+The mapper reads installed application-package code only. It does not read ChatGPT cookies, access or refresh tokens, passwords, Local Storage, IndexedDB, browser profile data, process memory, request bodies, packet payloads, or credential values. It does not use accessibility, mouse/keyboard automation, DevTools, or a hidden ChatGPT browser.
+
+## What to do
+
+Keep ChatGPT desktop open and signed in. In FlipAi go to **Agents -> ChatGPT Chat -> Map independent cloud auth** and copy the full result, especially **OAUTH ENDPOINT**, **PUBLIC CLIENT ID**, **REDIRECT URI**, **OAUTH SCOPE**, **OAUTH MECHANIC**, **CONVERSATION ENDPOINT**, **HEADER NAME**, **REQUEST FIELD**, **CONVERSATION STATE**, **STREAM FORMAT**, **SESSION DEPENDENCY**, and **CLOUD PATH ASSESSMENT**.
+
+ChatGPT Chat remains intentionally **Not connected** in this release. No message is sent until the diagnostic proves a safe independent authorization path.
+''', encoding='utf-8')
+      - name: Commit release metadata
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config.go VERSION docs/RELEASE-NOTES.md
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Prepare v0.46.11 release [v0.46.11-ready]"
+          git push
