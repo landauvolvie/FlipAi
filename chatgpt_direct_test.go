@@ -138,29 +138,30 @@ func TestChatGPTMappedInternalIPCIsNotClaimedAsExternalAPI(t *testing.T) {
 	}
 }
 
-func TestChatGPTDirectAgentsPaneCannotBeMistakenForEnablement(t *testing.T) {
+func TestChatGPTAgentsPaneExposesRealWebViewConnectionWithoutGlobalUIAutomation(t *testing.T) {
 	body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
 	for _, want := range []string{
 		"ChatGPT Chat",
-		"Not connected",
-		`data-test="/chatgpt-direct/probe"`,
-		"Map Chat request protocol",
-		"full read-only protocol map",
-		"Runtime architecture",
-		"Windows integration",
-		"Electron app.asar",
-		"Network metadata",
-		"Credential capture",
-		"Not used",
-		"SMS routing",
-		"Unavailable until proven",
-		"BACKEND ROUTE",
-		"REQUEST KEY",
-		"AUTH FLOW",
-		"IPC BINDING",
+		"Connect ChatGPT",
+		"Test ChatGPT",
+		`action="/chatgpt/connect"`,
+		`action="/chatgpt/test"`,
+		`action="/chatgpt/chat"`,
+		`action="/chatgpt/disconnect"`,
+		"Private signed-in browser session",
+		"No Windows UI automation",
+		"persistent WebView2 profile",
+		"Start a new ChatGPT chat",
+		"Activity diagnostics",
+		`href="/chatgpt-direct/probe"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("ChatGPT direct pane missing %q", want)
+			t.Fatalf("ChatGPT live pane missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Windows accessibility required", "SendKeys", "Unavailable until proven"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("ChatGPT live pane still exposes retired diagnostic/UI automation wording %q", forbidden)
 		}
 	}
 }
