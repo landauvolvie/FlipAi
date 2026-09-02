@@ -1,0 +1,806 @@
+name: finish-agent-streamline-v04616
+
+on:
+  push:
+    branches:
+      - fix/full-single-google-voice-replies-v04616
+    paths:
+      - .github/workflows/finish-agent-streamline-v04616.yml
+
+permissions:
+  contents: write
+
+jobs:
+  streamline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Streamline agent settings and ChatGPT SMS behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def load(name):
+              return Path(name).read_text()
+          def save(name, text):
+              Path(name).write_text(text)
+          def once(text, old, new, label):
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1 match, found {n}')
+              return text.replace(old, new, 1)
+          def sub1(text, pattern, repl, label, flags=0):
+              out, n = re.subn(pattern, repl, text, count=1, flags=flags)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1 regex match, found {n}')
+              return out
+
+          # -----------------------------------------------------------------
+          # Config: one shared SMS instruction, a real ChatGPT agent settings
+          # block, and a configurable G shortcut. DefaultAgent stays readable
+          # only for old bridge.json files; routing no longer consults it.
+          # -----------------------------------------------------------------
+          p = 'config.go'; s = load(p)
+          s = once(s,
+              'const defaultReplyStyleHint = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."',
+              'const defaultReplyStyleHint = "This reply will be sent by SMS. Keep it short and plain text."',
+              'short shared SMS instruction')
+          s = once(s,
+              '\tCodexPrefix        string `json:"codexPrefix,omitempty"`\n\tClaudePrefix       string `json:"claudePrefix,omitempty"`\n\tNewSessionCommand  string `json:"newSessionCommand,omitempty"`',
+              '\tCodexPrefix        string `json:"codexPrefix,omitempty"`\n\tClaudePrefix       string `json:"claudePrefix,omitempty"`\n\tChatGPTPrefix      string `json:"chatgptPrefix,omitempty"`\n\tNewSessionCommand  string `json:"newSessionCommand,omitempty"`',
+              'ChatGPT prefix config')
+          s = once(s,
+              '\tCodex       CodexConfig       `json:"codex"`\n\tClaude      ClaudeConfig      `json:"claude"`',
+              '\tCodex       CodexConfig       `json:"codex"`\n\tClaude      ClaudeConfig      `json:"claude"`\n\tChatGPT     ChatGPTConfig     `json:"chatgpt"`',
+              'ChatGPT config field')
+          s = once(s,
+              'type ClaudeConfig struct {\n\tAgentSettings',
+              'type ChatGPTConfig struct {\n\tAgentSettings\n}\n\ntype ClaudeConfig struct {\n\tAgentSettings',
+              'ChatGPT config type')
+          s = once(s,
+              '\tAgentsMigrated bool `json:"agentsMigrated,omitempty"`',
+              '\tAgentsMigrated bool `json:"agentsMigrated,omitempty"`\n\n\t// ChatGPTAccessMigrated records the one-time copy that preserves G: access\n\t// for phones that were already allowed before ChatGPT had its own list.\n\tChatGPTAccessMigrated bool `json:"chatgptAccessMigrated,omitempty"`',
+              'ChatGPT access migration flag')
+          s = once(s,
+              '\t\tDefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, NewSessionCommand: defaultNewSessionCommand,',
+              '\t\tDefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, ChatGPTPrefix: defaultChatGPTPrefix, NewSessionCommand: defaultNewSessionCommand,',
+              'default ChatGPT prefix')
+          s = once(s,
+              '\t\tCodex:    CodexConfig{ApprovalPolicy: "never"},\n\t\tClaude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},',
+              '\t\tCodex:    CodexConfig{ApprovalPolicy: "never"},\n\t\tClaude:   ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},\n\t\tChatGPT:  ChatGPTConfig{},',
+              'default ChatGPT settings')
+          # Progress cadence can now be per-agent for G as well.
+          s = once(s,
+              '\tcase "C":\n\t\tif v := c.Codex.ProgressIntervalSeconds; v > 0 {\n\t\t\tseconds = v\n\t\t}\n\t}',
+              '\tcase "C":\n\t\tif v := c.Codex.ProgressIntervalSeconds; v > 0 {\n\t\t\tseconds = v\n\t\t}\n\tcase "G":\n\t\tif v := c.ChatGPT.ProgressIntervalSeconds; v > 0 {\n\t\t\tseconds = v\n\t\t}\n\t}',
+              'ChatGPT progress interval')
+          s = sub1(s,
+              r'// replyStyleHintFor resolves.*?func \(c Config\) replyStyleHintFor\(agent string\) string \{.*?\n\}',
+              '''// replyStyleHintFor resolves the one shared SMS instruction used by every\n// agent. Agent-specific instruction fields remain readable for downgrade\n// compatibility, but v0.46.16 deliberately ignores them so one edit changes\n// Codex, Claude and ChatGPT together.\nfunc (c Config) replyStyleHintFor(_ string) string {\n\tif shared := strings.TrimSpace(c.GoogleVoice.ReplyStyleHint); shared != "" {\n\t\treturn shared\n\t}\n\treturn defaultReplyStyleHint\n}''',
+              'shared reply instruction helper', re.S)
+          s = once(s,
+              '\tcfg.CodexPrefix = normalizeCommandToken(cfg.CodexPrefix, defaultCodexPrefix)\n\tcfg.ClaudePrefix = normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)\n\tcfg.NewSessionCommand = normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)\n\tif strings.EqualFold(cfg.CodexPrefix, cfg.ClaudePrefix) {\n\t\tcfg.CodexPrefix, cfg.ClaudePrefix = defaultCodexPrefix, defaultClaudePrefix\n\t}',
+              '\tcfg.CodexPrefix = normalizeCommandToken(cfg.CodexPrefix, defaultCodexPrefix)\n\tcfg.ClaudePrefix = normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)\n\tcfg.ChatGPTPrefix = normalizeCommandToken(cfg.ChatGPTPrefix, defaultChatGPTPrefix)\n\tcfg.NewSessionCommand = normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)\n\tif strings.EqualFold(cfg.CodexPrefix, cfg.ClaudePrefix) || strings.EqualFold(cfg.CodexPrefix, cfg.ChatGPTPrefix) || strings.EqualFold(cfg.ClaudePrefix, cfg.ChatGPTPrefix) {\n\t\tcfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix\n\t}',
+              'three unique agent prefixes')
+          save(p, s)
+
+          # Commands: G is configured exactly like C/A.
+          p = 'commands.go'; s = load(p)
+          s = once(s,
+              '\tdefaultCodexPrefix       = "C"\n\tdefaultClaudePrefix      = "A"\n\tdefaultNewSessionCommand = "NEW"',
+              '\tdefaultCodexPrefix       = "C"\n\tdefaultClaudePrefix      = "A"\n\tdefaultChatGPTPrefix     = "G"\n\tdefaultNewSessionCommand = "NEW"',
+              'default ChatGPT command prefix')
+          s = once(s,
+              'func configuredClaudePrefix(cfg Config) string {\n\treturn normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)\n}\n\nfunc configuredNewSessionCommand',
+              'func configuredClaudePrefix(cfg Config) string {\n\treturn normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)\n}\n\nfunc configuredChatGPTPrefix(cfg Config) string {\n\treturn normalizeCommandToken(cfg.ChatGPTPrefix, defaultChatGPTPrefix)\n}\n\nfunc configuredNewSessionCommand',
+              'configured ChatGPT prefix helper')
+          save(p, s)
+
+          # -----------------------------------------------------------------
+          # Agent settings: ChatGPT owns phones/PIN/reply behavior just like C/A.
+          # -----------------------------------------------------------------
+          p = 'agents.go'; s = load(p)
+          s = sub1(s,
+              r'func agentSettings\(cfg Config, agent string\) AgentSettings \{.*?\n\}',
+              '''func agentSettings(cfg Config, agent string) AgentSettings {\n\tswitch agent {\n\tcase "A":\n\t\treturn cfg.Claude.AgentSettings\n\tcase "G":\n\t\treturn cfg.ChatGPT.AgentSettings\n\tdefault:\n\t\treturn cfg.Codex.AgentSettings\n\t}\n}''',
+              'agentSettings G support', re.S)
+          # Replace the inbound SMS resolver with a list-driven 3-agent version.
+          s = sub1(s,
+              r'// agentForSender resolves.*?func agentForSender\(cfg Config, raw string\) \(agent string, phone AgentPhone, ok bool\) \{.*?\n\}',
+              '''// smsAgentsForSender returns every agent this phone may text. It is the\n// authority for C/A/G routing; a prefix can select only a member of this set.\nfunc smsAgentsForSender(cfg Config, raw string) []string {\n\tvar out []string\n\tfor _, agent := range []string{"C", "A", "G"} {\n\t\tif p, ok := agentPhoneForSender(cfg, agent, raw); ok && p.AllowsSMS() {\n\t\t\tout = append(out, agent)\n\t\t}\n\t}\n\treturn out\n}\n\n// agentForSender is retained for the bridge admission check. A unique phone\n// returns its agent; a phone allowed on several agents returns B, meaning\n// "multiple", while selectStickySMSAgent does the exact destination choice.\nfunc agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok bool) {\n\tmatches := smsAgentsForSender(cfg, raw)\n\tif len(matches) == 0 {\n\t\treturn "", AgentPhone{}, false\n\t}\n\tfirst, _ := agentPhoneForSender(cfg, matches[0], raw)\n\tif len(matches) == 1 {\n\t\treturn matches[0], first, true\n\t}\n\tfirst.Access = AccessSMS\n\treturn "B", first, true\n}''',
+              '3-agent sender resolution', re.S)
+          s = once(s,
+              'for _, agent := range []string{"C", "A"} {\n\t\tout = append(out, agentSettings(cfg, agent).Phones...)',
+              'for _, agent := range []string{"C", "A", "G"} {\n\t\tout = append(out, agentSettings(cfg, agent).Phones...)',
+              'all agent phone lists')
+          # normalizeAgents: include G, but caller names only apply to voice agents.
+          s = once(s,
+              'for _, agent := range []string{"C", "A"} {\n\t\tsettings := agentSettings(*cfg, agent)',
+              'for _, agent := range []string{"C", "A", "G"} {\n\t\tsettings := agentSettings(*cfg, agent)',
+              'normalize all 3 agents')
+          s = once(s,
+              '\t\tnames, err := normalizeAllowedCallerLabels(settings.CallerNames, true)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("%s caller names: %w", agentDisplayName(agent), err)\n\t\t}',
+              '\t\tvar names []string\n\t\tif agent != "G" {\n\t\t\tvar err error\n\t\t\tnames, err = normalizeAllowedCallerLabels(settings.CallerNames, true)\n\t\t\tif err != nil {\n\t\t\t\treturn fmt.Errorf("%s caller names: %w", agentDisplayName(agent), err)\n\t\t\t}\n\t\t} else {\n\t\t\t// ChatGPT Chat is an SMS destination; calls remain on Codex/Claude.\n\t\t\tsettings.CallerNames = ""\n\t\t}',
+              'ChatGPT has no caller-name routing')
+          s = once(s,
+              '\t\tif agent == "A" {\n\t\t\tcfg.Claude.AgentSettings = settings\n\t\t} else {\n\t\t\tcfg.Codex.AgentSettings = settings\n\t\t}\n\t}\n\tif cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {\n\t\tcfg.DefaultAgent = "C"\n\t}\n\treturn nil',
+              '\t\tswitch agent {\n\t\tcase "A":\n\t\t\tcfg.Claude.AgentSettings = settings\n\t\tcase "G":\n\t\t\tcfg.ChatGPT.AgentSettings = settings\n\t\tdefault:\n\t\t\tcfg.Codex.AgentSettings = settings\n\t\t}\n\t}\n\treturn nil',
+              'store normalized G settings and remove default routing')
+          # Make old installations keep G access exactly once by copying their
+          # existing SMS-capable phones into the new ChatGPT list.
+          marker = '\tensureAgentReplyDefaults(cfg)\n\tif migrated {'
+          insert = '''\tif !cfg.Security.ChatGPTAccessMigrated {\n\t\tcfg.Security.ChatGPTAccessMigrated = true\n\t\tif len(cfg.ChatGPT.Phones) == 0 {\n\t\t\tseen := map[string]bool{}\n\t\t\tfor _, source := range []AgentSettings{cfg.Codex.AgentSettings, cfg.Claude.AgentSettings} {\n\t\t\t\tfor _, p := range source.Phones {\n\t\t\t\t\tif !p.AllowsSMS() || seen[p.Number] {\n\t\t\t\t\t\tcontinue\n\t\t\t\t\t}\n\t\t\t\t\tseen[p.Number] = true\n\t\t\t\t\tp.Access = AccessSMS\n\t\t\t\t\tcfg.ChatGPT.Phones = append(cfg.ChatGPT.Phones, p)\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\tensureAgentReplyDefaults(cfg)\n\tif migrated {'''
+          s = once(s, marker, insert, 'one-time ChatGPT phone migration')
+          # All reply defaults, including G.
+          s = once(s,
+              'for _, agent := range []string{"C", "A"} {\n\t\ts := agentSettings(*cfg, agent)\n\t\tif s.ReplyAck == nil {',
+              'for _, agent := range []string{"C", "A", "G"} {\n\t\ts := agentSettings(*cfg, agent)\n\t\tif s.ReplyAck == nil {',
+              'reply defaults for G')
+          # First matching storage block in ensureAgentReplyDefaults after this point.
+          s = sub1(s,
+              r'(func ensureAgentReplyDefaults\(cfg \*Config\) \{.*?)(\t\tif agent == "A" \{\n\t\t\tcfg\.Claude\.AgentSettings = s\n\t\t\} else \{\n\t\t\tcfg\.Codex\.AgentSettings = s\n\t\t\})',
+              r'''\1\t\tswitch agent {\n\t\tcase "A":\n\t\t\tcfg.Claude.AgentSettings = s\n\t\tcase "G":\n\t\t\tcfg.ChatGPT.AgentSettings = s\n\t\tdefault:\n\t\t\tcfg.Codex.AgentSettings = s\n\t\t}''',
+              'store G reply defaults', re.S)
+          # setAgentCode has its own C/A storage block.
+          s = sub1(s,
+              r'(func setAgentCode\(cfg \*Config, agent, code string\) error \{.*?)(\tif agent == "A" \{\n\t\tcfg\.Claude\.AgentSettings = s\n\t\} else \{\n\t\tcfg\.Codex\.AgentSettings = s\n\t\})',
+              r'''\1\tswitch agent {\n\tcase "A":\n\t\tcfg.Claude.AgentSettings = s\n\tcase "G":\n\t\tcfg.ChatGPT.AgentSettings = s\n\tdefault:\n\t\tcfg.Codex.AgentSettings = s\n\t}''',
+              'store G security code', re.S)
+          save(p, s)
+
+          # -----------------------------------------------------------------
+          # Sticky routing: exact per-phone permissions across C/A/G; G no
+          # longer borrows C/A permissions or PINs.
+          # -----------------------------------------------------------------
+          p = 'sms_sticky_chatgpt.go'; s = load(p)
+          s = once(s,
+              'const (\n    chatGPTSMSAgent  = "G"\n    chatGPTSMSPrefix = "G"\n)',
+              'const chatGPTSMSAgent = "G"',
+              'remove hard-coded ChatGPT prefix')
+          start = s.index('func explicitSMSAgent')
+          end = s.index('func stickySMSKey')
+          replacement = r'''func explicitSMSAgent(raw string, cfg Config) string {
+    raw = strings.TrimSpace(raw)
+    if raw == "" {
+        return ""
+    }
+    candidates := []string{raw}
+    if f := strings.Fields(raw); len(f) > 1 {
+        candidates = append(candidates, strings.TrimSpace(strings.TrimPrefix(raw, f[0])))
+    }
+    newWord := configuredNewSessionCommand(cfg)
+    for _, v := range candidates {
+        for _, x := range []struct{ agent, prefix string }{
+            {"C", configuredCodexPrefix(cfg)},
+            {"A", configuredClaudePrefix(cfg)},
+            {"G", configuredChatGPTPrefix(cfg)},
+        } {
+            if _, ok := stripAgentCommandPrefix(v, x.prefix); ok || isAgentNewSession(v, x.prefix, newWord) {
+                return x.agent
+            }
+        }
+    }
+    return ""
+}
+
+func smsTargetAllowed(cfg Config, sender, target string) bool {
+    p, ok := agentPhoneForSender(cfg, target, sender)
+    return ok && p.AllowsSMS()
+}
+
+func selectStickySMSAgent(raw string, cfg Config, sender, sticky string) (string, error) {
+    if explicit := explicitSMSAgent(raw, cfg); explicit != "" {
+        if !smsTargetAllowed(cfg, sender, explicit) {
+            return "", fmt.Errorf("this phone is not allowed to text %s; add it under that agent first", agentDisplayName(explicit))
+        }
+        return explicit, nil
+    }
+    sticky = strings.ToUpper(strings.TrimSpace(sticky))
+    if smsTargetAllowed(cfg, sender, sticky) {
+        return sticky, nil
+    }
+    allowed := smsAgentsForSender(cfg, sender)
+    if len(allowed) == 1 {
+        return allowed[0], nil
+    }
+    return "", fmt.Errorf("no SMS agent is selected for this phone yet; start with %s: for Codex, %s: for Claude, or %s: for ChatGPT Chat",
+        configuredCodexPrefix(cfg), configuredClaudePrefix(cfg), configuredChatGPTPrefix(cfg))
+}
+
+func authorizeChatGPTRaw(raw string, cfg Config) (string, error) {
+    settings := agentSettings(cfg, "G")
+    if !settings.RequireCode {
+        return strings.TrimSpace(raw), nil
+    }
+    f := strings.Fields(raw)
+    if len(f) < 2 {
+        return "", errors.New("missing the ChatGPT Chat security code or command")
+    }
+    if !verifyAgentCode(settings, f[0]) {
+        return "", errors.New("invalid security code for ChatGPT Chat")
+    }
+    return strings.TrimSpace(strings.TrimPrefix(raw, f[0])), nil
+}
+
+func parseChatGPTSMSCommand(raw string, cfg Config) (remoteCommand, error) {
+    rest, err := authorizeChatGPTRaw(raw, cfg)
+    if err != nil {
+        return remoteCommand{}, err
+    }
+    if strings.EqualFold(rest, "STATUS") {
+        return remoteCommand{Status: true}, nil
+    }
+    newWord := configuredNewSessionCommand(cfg)
+    prefix := configuredChatGPTPrefix(cfg)
+    if strings.EqualFold(rest, newWord) || isAgentNewSession(rest, prefix, newWord) {
+        return remoteCommand{Agent: "G", New: true}, nil
+    }
+    text := rest
+    if tail, ok := stripAgentCommandPrefix(rest, prefix); ok {
+        text = tail
+    }
+    text = strings.TrimSpace(text)
+    if text == "" {
+        return remoteCommand{}, errors.New("empty ChatGPT command")
+    }
+    return remoteCommand{Agent: "G", Text: text}, nil
+}
+
+func parseRemoteCommandForMessageSticky(raw string, cfg Config, sender, sticky string, m GmailMessage) (remoteCommand, error) {
+    target, err := selectStickySMSAgent(raw, cfg, sender, sticky)
+    if err != nil {
+        return remoteCommand{}, err
+    }
+    if strings.TrimSpace(raw) != "" {
+        if target == "G" {
+            return parseChatGPTSMSCommand(raw, cfg)
+        }
+        return parseRemoteCommand(raw, cfg, target)
+    }
+    if target == "G" {
+        return remoteCommand{}, errors.New("ChatGPT Chat over Google Voice supports text messages in this release; switch to Codex or Claude for an attachment")
+    }
+    return parseRemoteCommandForMessage(raw, cfg, target, m)
+}
+
+'''
+          s = s[:start] + replacement + s[end:]
+          save(p, s)
+
+          # -----------------------------------------------------------------
+          # Bridge: delayed 30-second ACK only for ChatGPT; immediate for C/A.
+          # -----------------------------------------------------------------
+          p = 'bridge.go'; s = load(p)
+          s = once(s,
+              'type bridgeJob struct {\n\tmsg GmailMessage\n\tcmd remoteCommand\n}',
+              'type bridgeJob struct {\n\tmsg     GmailMessage\n\tcmd     remoteCommand\n\tackDone chan struct{}\n}',
+              'bridgeJob delayed ack channel')
+          s = once(s,
+              '\t\tb.execute(ctx, j.msg, j.cmd)\n\t}',
+              '\t\tb.execute(ctx, j.msg, j.cmd)\n\t\tif j.ackDone != nil {\n\t\t\tclose(j.ackDone)\n\t\t}\n\t}',
+              'cancel delayed ack when turn finishes')
+          s = once(s,
+              'rc, err := parseRemoteCommandForMessageSticky(raw, b.cfg, senderAgent, sticky, m)',
+              'rc, err := parseRemoteCommandForMessageSticky(raw, b.cfg, sender, sticky, m)',
+              'sticky parser gets sender permissions')
+          old = '''\t\tagentName := agentDisplayName(rc.Agent)
+\t\tb.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
+\t\tdepth := b.enqueue(bridgeJob{msg: m, cmd: rc})
+\t\tif agentSettings(b.cfg, rc.Agent).ackEnabled() {
+\t\t\tline := "✓ " + agentName + " working on it…"
+\t\t\tif depth > 1 {
+\t\t\t\tline = fmt.Sprintf("✓ Queued for %s (%d ahead)…", agentName, depth-1)
+\t\t\t}
+\t\t\tb.notify(ctx, m, line)
+\t\t}'''.replace('\\t','\t').replace('\\n','\n')
+          new = '''\t\tagentName := agentDisplayName(rc.Agent)
+\t\tb.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
+\t\tjob := bridgeJob{msg: m, cmd: rc}
+\t\tsettings := agentSettings(b.cfg, rc.Agent)
+\t\tif rc.Agent == "G" && settings.ackEnabled() && !rc.Status && !rc.New {
+\t\t\tjob.ackDone = make(chan struct{})
+\t\t}
+\t\tdepth := b.enqueue(job)
+\t\tif settings.ackEnabled() {
+\t\t\tif rc.Agent == "G" && job.ackDone != nil {
+\t\t\t\tgo b.delayedChatGPTAck(ctx, job.ackDone, m, depth)
+\t\t\t} else {
+\t\t\t\tline := "✓ " + agentName + " working on it…"
+\t\t\t\tif depth > 1 {
+\t\t\t\t\tline = fmt.Sprintf("✓ Queued for %s (%d ahead)…", agentName, depth-1)
+\t\t\t\t}
+\t\t\t\tb.notify(ctx, m, line)
+\t\t\t}
+\t\t}'''.replace('\\t','\t').replace('\\n','\n')
+          s = once(s, old, new, 'agent receipt acknowledgment block')
+          # Add helper before composePrompt.
+          marker = '// composePrompt hands the SMS to the agent with as little framing as possible.'
+          helper = '''const chatGPTReceiptDelay = 30 * time.Second
+
+// delayedChatGPTAck keeps fast ChatGPT turns quiet. If the final turn has not
+// returned after 30 seconds, the phone gets exactly one receipt confirmation.
+func (b *Bridge) delayedChatGPTAck(ctx context.Context, done <-chan struct{}, m GmailMessage, depth int) {
+\tt := time.NewTimer(chatGPTReceiptDelay)
+\tdefer t.Stop()
+\tselect {
+\tcase <-done:
+\t\treturn
+\tcase <-ctx.Done():
+\t\treturn
+\tcase <-t.C:
+\t}
+\tline := "✓ ChatGPT Chat working on it…"
+\tif depth > 1 {
+\t\tline = fmt.Sprintf("✓ ChatGPT Chat is queued (%d ahead)…", depth-1)
+\t}
+\tb.notify(ctx, m, line)
+}
+
+'''
+          s = once(s, marker, helper + marker, 'delayed ChatGPT ACK helper')
+          # Update composePrompt comments to match shared instruction.
+          s = s.replace('Each agent can carry its own wording — Codex and\n// Claude answer a text differently — and an agent with no wording of its own\n// falls back to the shared line.',
+                        'One shared editable line is used for Codex, Claude and ChatGPT, so the\n// transport framing stays predictable across agents.')
+          save(p, s)
+
+          # -----------------------------------------------------------------
+          # Agent form actions: G is accepted anywhere C/A are accepted.
+          # -----------------------------------------------------------------
+          p = 'ui_actions_agents.go'; s = load(p)
+          s = sub1(s,
+              r'func agentFromForm\(r \*http.Request, field string\) string \{.*?\n\}',
+              '''func agentFromForm(r *http.Request, field string) string {\n\tswitch strings.ToUpper(strings.TrimSpace(r.FormValue(field))) {\n\tcase "A":\n\t\treturn "A"\n\tcase "G":\n\t\treturn "G"\n\tdefault:\n\t\treturn "C"\n\t}\n}''',
+              'agentFromForm G support', re.S)
+          s = sub1(s,
+              r'func putAgentSettings\(cfg \*Config, agent string, s AgentSettings\) \{.*?\n\}',
+              '''func putAgentSettings(cfg *Config, agent string, s AgentSettings) {\n\tswitch agent {\n\tcase "A":\n\t\tcfg.Claude.AgentSettings = s\n\tcase "G":\n\t\tcfg.ChatGPT.AgentSettings = s\n\tdefault:\n\t\tcfg.Codex.AgentSettings = s\n\t}\n}''',
+              'putAgentSettings G support', re.S)
+          s = once(s,
+              '\t\t\tAccess: normalizeAccess(r.FormValue("newAccess")),',
+              '\t\t\tAccess: func() string { if agent == "G" { return AccessSMS }; return normalizeAccess(r.FormValue("newAccess")) }(),',
+              'ChatGPT numbers are SMS-only')
+          s = once(s,
+              '\tif agent != "A" {\n\t\tagent = "C"\n\t}',
+              '\tif agent != "A" && agent != "G" {\n\t\tagent = "C"\n\t}',
+              'removeAgentNumber G support')
+          save(p, s)
+
+          # Agent save: configurable G shortcut, all 3 access forms, one shared instruction.
+          p = 'ui_actions.go'; s = load(p)
+          old = 'if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("newSessionCommand") {'
+          s = once(s, old, 'if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("chatgptPrefix") || r.Form.Has("newSessionCommand") {', 'save G prefix trigger')
+          s = once(s,
+              'codexPrefix, claudePrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredNewSessionCommand(*cfg)',
+              'codexPrefix, claudePrefix, chatgptPrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredChatGPTPrefix(*cfg), configuredNewSessionCommand(*cfg)',
+              'load three prefixes')
+          needle = '''\t\t\tif r.Form.Has("claudePrefix") {
+\t\t\t\tclaudePrefix, err = validateCommandToken(r.FormValue("claudePrefix"), "Claude prefix")
+\t\t\t\tif err != nil {
+\t\t\t\t\treturn err
+\t\t\t\t}
+\t\t\t}'''.replace('\\t','\t').replace('\\n','\n')
+          repl = needle + '''
+\t\t\tif r.Form.Has("chatgptPrefix") {
+\t\t\t\tchatgptPrefix, err = validateCommandToken(r.FormValue("chatgptPrefix"), "ChatGPT prefix")
+\t\t\t\tif err != nil {
+\t\t\t\t\treturn err
+\t\t\t\t}
+\t\t\t}'''.replace('\\t','\t').replace('\\n','\n')
+          s = once(s, needle, repl, 'validate G prefix')
+          s = once(s,
+              '\t\t\tif strings.EqualFold(codexPrefix, claudePrefix) {\n\t\t\t\treturn fmt.Errorf("Codex and Claude prefixes must be different")\n\t\t\t}\n\t\t\tif strings.EqualFold(codexPrefix, chatGPTSMSPrefix) || strings.EqualFold(claudePrefix, chatGPTSMSPrefix) {\n\t\t\t\treturn fmt.Errorf("G is reserved for ChatGPT Chat; choose a different Codex or Claude prefix")\n\t\t\t}',
+              '\t\t\tif strings.EqualFold(codexPrefix, claudePrefix) || strings.EqualFold(codexPrefix, chatgptPrefix) || strings.EqualFold(claudePrefix, chatgptPrefix) {\n\t\t\t\treturn fmt.Errorf("Codex, Claude and ChatGPT shortcuts must all be different")\n\t\t\t}',
+              'validate all prefixes unique')
+          s = once(s,
+              'cfg.CodexPrefix, cfg.ClaudePrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, newSession',
+              'cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, chatgptPrefix, newSession',
+              'save G prefix')
+          s = once(s,
+              '"codexProgressInterval":  &cfg.Codex.ProgressIntervalSeconds,',
+              '"codexProgressInterval":  &cfg.Codex.ProgressIntervalSeconds,\n\t\t\t"chatgptProgressInterval": &cfg.ChatGPT.ProgressIntervalSeconds,',
+              'G progress interval save')
+          s = once(s,
+              'for _, agent := range []string{"C", "A"} {\n\t\t\tif err := applyAgentAccessForm(cfg, r, agent); err != nil {',
+              'for _, agent := range []string{"C", "A", "G"} {\n\t\t\tif err := applyAgentAccessForm(cfg, r, agent); err != nil {',
+              'save all 3 access forms')
+          # Shared instruction is authoritative; old per-agent fields are cleared.
+          old = '''\t\tif r.Form.Has("codexReplyStyle") {
+\t\t\tcfg.Codex.Instruction = normalizeReplyStyleHint(r.FormValue("codexReplyStyle"))
+\t\t}
+\t\tif r.Form.Has("claudeReplyStyle") {
+\t\t\tcfg.Claude.Instruction = normalizeReplyStyleHint(r.FormValue("claudeReplyStyle"))
+\t\t}
+\t\tif r.Form.Has("sharedReplyStyle") {
+\t\t\tshared := normalizeReplyStyleHint(r.FormValue("sharedReplyStyle"))
+\t\t\tif shared == "" {
+\t\t\t\tshared = defaultReplyStyleHint
+\t\t\t}
+\t\t\tcfg.GoogleVoice.ReplyStyleHint = shared
+\t\t}'''.replace('\\t','\t').replace('\\n','\n')
+          new = '''\t\tif r.Form.Has("sharedReplyStyle") {
+\t\t\tshared := normalizeReplyStyleHint(r.FormValue("sharedReplyStyle"))
+\t\t\tif shared == "" {
+\t\t\t\tshared = defaultReplyStyleHint
+\t\t\t}
+\t\t\tcfg.GoogleVoice.ReplyStyleHint = shared
+\t\t\t// Retired per-agent overrides must never shadow the shared editor.
+\t\t\tcfg.Codex.Instruction = ""
+\t\t\tcfg.Claude.Instruction = ""
+\t\t\tcfg.ChatGPT.Instruction = ""
+\t\t}'''.replace('\\t','\t').replace('\\n','\n')
+          s = once(s, old, new, 'one shared SMS instruction save')
+          save(p, s)
+
+          # Status snapshot: expose G shortcut and make effective instructions shared.
+          p = 'ui_status.go'; s = load(p)
+          s = once(s,
+              '\tCodexPrefix       string\n\tClaudePrefix      string\n\tNewSessionCommand string',
+              '\tCodexPrefix       string\n\tClaudePrefix      string\n\tChatGPTPrefix     string\n\tNewSessionCommand string',
+              'ui status G prefix')
+          s = once(s,
+              '\t\tClaudePrefix:           configuredClaudePrefix(cfg),\n\t\tNewSessionCommand:',
+              '\t\tClaudePrefix:           configuredClaudePrefix(cfg),\n\t\tChatGPTPrefix:          configuredChatGPTPrefix(cfg),\n\t\tNewSessionCommand:',
+              'populate G prefix status')
+          s = once(s,
+              '\ts.CodexReplyStyleEffective = cfg.replyStyleHintFor("C")\n\ts.ClaudeReplyStyleEffective = cfg.replyStyleHintFor("A")',
+              '\ts.CodexReplyStyleEffective = cfg.replyStyleHintFor("C")\n\ts.ClaudeReplyStyleEffective = cfg.replyStyleHintFor("A")\n\t// Per-agent instruction fields are retired; the shared line is authoritative.\n\ts.CodexReplyStyle = ""\n\ts.ClaudeReplyStyle = ""\n\ts.CodexReplyStyleCustom = false\n\ts.ClaudeReplyStyleCustom = false',
+              'retire per-agent instruction status')
+          save(p, s)
+
+          # Home no longer labels any agent as default.
+          p = 'ui_pages.go'; s = load(p)
+          s = sub1(s,
+              r'func agentRole\(s uiStatus, agent string\) string \{.*?\n\}',
+              '''func agentRole(s uiStatus, agent string) string {\n\tif agent == "C" {\n\t\treturn "Handles " + s.CodexPrefix + ": messages"\n\t}\n\treturn "Handles " + s.ClaudePrefix + ": messages"\n}''',
+              'remove default agent label', re.S)
+          save(p, s)
+
+          # -----------------------------------------------------------------
+          # Agents page data + common access template.
+          # -----------------------------------------------------------------
+          p = 'ui_page_agents.go'; s = load(p)
+          s = once(s,
+              '\tCodexPrompt  promptEditorView\n\tClaudePrompt promptEditorView',
+              '\tCodexPrompt   promptEditorView // retained for template compatibility\n\tClaudePrompt  promptEditorView // retained for template compatibility\n\tSharedPrompt  promptEditorView\n\tChatGPTAccess agentAccessView',
+              'agents view shared prompt/G access')
+          s = sub1(s,
+              r'func agentFieldName\(agent, name string\) string \{.*?\n\}',
+              '''func agentFieldName(agent, name string) string {\n\tswitch agent {\n\tcase "A":\n\t\treturn "claude" + strings.ToUpper(name[:1]) + name[1:]\n\tcase "G":\n\t\treturn "chatgpt" + strings.ToUpper(name[:1]) + name[1:]\n\tdefault:\n\t\treturn "codex" + strings.ToUpper(name[:1]) + name[1:]\n\t}\n}''',
+              'agent field names for G', re.S)
+          # Access select: G is text-only but stays in the same card structure.
+          s = once(s,
+              '''          <select name="access-{{$.Agent}}-{{.Number}}" aria-label="What {{.Display}} may do">
+            <option value="all"{{if eq .Access "all"}} selected{{end}}>Texts and calls</option>
+            <option value="sms"{{if eq .Access "sms"}} selected{{end}}>Texts only</option>
+            <option value="voice"{{if eq .Access "voice"}} selected{{end}}>Calls only</option>
+          </select>''',
+              '''          {{if $.Voice}}<select name="access-{{$.Agent}}-{{.Number}}" aria-label="What {{.Display}} may do">
+            <option value="all"{{if eq .Access "all"}} selected{{end}}>Texts and calls</option>
+            <option value="sms"{{if eq .Access "sms"}} selected{{end}}>Texts only</option>
+            <option value="voice"{{if eq .Access "voice"}} selected{{end}}>Calls only</option>
+          </select>{{else}}<span class="pill">Texts</span>{{end}}''',
+              'G text-only access selector')
+          s = once(s,
+              '''        <select id="{{.Agent}}-newAccess" name="newAccess">
+          <option value="all">Texts and calls</option>
+          <option value="sms">Texts only</option>
+          <option value="voice">Calls only</option>
+        </select>''',
+              '''        {{if .Voice}}<select id="{{.Agent}}-newAccess" name="newAccess">
+          <option value="all">Texts and calls</option>
+          <option value="sms">Texts only</option>
+          <option value="voice">Calls only</option>
+        </select>{{else}}<input type="hidden" name="newAccess" value="sms"><div class="input-static">Texts</div>{{end}}''',
+              'G new phone text-only')
+          caller = '''    <div class="field">
+      <label for="{{.Field "callerNames"}}">Allowed caller names</label>
+      <textarea id="{{.Field "callerNames"}}" name="{{.Field "callerNames"}}" rows="2" placeholder="Jane Appleseed">{{.CallerNames}}</textarea>
+      <p class="hint">Only for calls. Google Voice shows a contact name instead of a number when the caller is in your Google Contacts, and there is no number to match. Type the name exactly as it appears, one per line. Like a number, a caller name belongs to one agent: adding it here takes it off the other.</p>
+    </div>'''
+          s = once(s, caller, '{{if .Voice}}\n' + caller + '\n{{end}}', 'hide caller names for G')
+          s = once(s,
+              '<div class="label">Confirm receipt<span>Texts "working on it" the moment a command is accepted.</span></div>',
+              '<div class="label">{{if eq .Agent "G"}}Slow-task confirmation<span>If ChatGPT has not answered after 30 seconds, texts “working on it” once. Fast replies stay quiet.</span>{{else}}Confirm receipt<span>Texts “working on it” the moment a command is accepted.</span>{{end}}</div>',
+              'ChatGPT delayed ACK UI wording')
+          # Put one shared instruction editor above the agent selector.
+          head_marker = '''  <div class="page-actions">
+    <a class="btn" href="/activity?stage=agent">{{icon "clock"}}Agent activity</a>
+  </div>
+</div>
+
+
+<input class="agent-switch"'''
+          shared_card = '''  <div class="page-actions">
+    <a class="btn" href="/activity?stage=agent">{{icon "clock"}}Agent activity</a>
+  </div>
+</div>
+
+<form method="post" action="/agents/save" class="shared-agent-settings">
+  <section class="card">
+    <div class="card-head divided"><div><h2>SMS reply instruction</h2><p>One short instruction used by Codex, Claude and ChatGPT Chat.</p></div><div class="head-actions"><button class="btn primary" type="submit">Save instruction</button></div></div>
+    <div class="card-body">{{template "promptEditor" .SharedPrompt}}</div>
+  </section>
+</form>
+
+<input class="agent-switch"'''
+          s = once(s, head_marker, shared_card, 'shared SMS instruction card')
+          # Remove the two per-agent instruction cards.
+          s = sub1(s,
+              r'\n        <section class="card">\n          <div class="card-head divided">\n            <div><h2>SMS instruction</h2><p>The one line FlipAi adds after your text, so Codex.*?</section>\n',
+              '\n', 'remove Codex instruction card', re.S)
+          s = sub1(s,
+              r'\n        <section class="card">\n          <div class="card-head divided">\n            <div><h2>SMS instruction</h2><p>The one line FlipAi adds after your text, so Claude.*?</section>\n',
+              '\n', 'remove Claude instruction card', re.S)
+          # Build shared prompt and G access in handler.
+          marker = '\tview.CodexPrompt = promptEditorView{'
+          idx = s.index(marker)
+          cfg_idx = s.index('\n\tcfg := a.snapshotConfig()', idx)
+          old_block = s[idx:cfg_idx]
+          new_block = '''\tview.SharedPrompt = promptEditorView{
+\t\tName: "sharedReplyStyle", Title: "Instruction sent with every SMS command",
+\t\tValue: s.SharedReplyStyle, Fallback: s.DefaultReplyStyle, Custom: s.SharedReplyStyle != s.DefaultReplyStyle,
+\t\tHint: "Used by all three agents. Edit this one box to change all of them.", Max: s.ReplyStyleMaxChars,
+\t}
+'''.replace('\\t','\t').replace('\\n','\n')
+          s = s[:idx] + new_block + s[cfg_idx:]
+          s = once(s,
+              '\tview.CodexAccess = newAgentAccessView(cfg, "C", s.CodexPrefix)\n\tview.ClaudeAccess = newAgentAccessView(cfg, "A", s.ClaudePrefix)',
+              '\tview.CodexAccess = newAgentAccessView(cfg, "C", s.CodexPrefix)\n\tview.ClaudeAccess = newAgentAccessView(cfg, "A", s.ClaudePrefix)\n\tview.ChatGPTAccess = newAgentAccessView(cfg, "G", s.ChatGPTPrefix)',
+              'populate ChatGPT access view')
+          s = once(s,
+              '\tname := "Codex"\n\tif agent == "A" {\n\t\tname = "Claude"\n\t}',
+              '\tname := "Codex"\n\tswitch agent {\n\tcase "A":\n\t\tname = "Claude"\n\tcase "G":\n\t\tname = "ChatGPT Chat"\n\t}',
+              'ChatGPT access name')
+          s = once(s,
+              '\t\tInterval: interval, IsDefault: cfg.DefaultAgent == agent,\n\t}',
+              '\t\tInterval: interval, Voice: agent != "G",\n\t}',
+              'remove default agent from access view')
+          save(p, s)
+
+          # ChatGPT pane: replace the special diagnostics-heavy page with the same
+          # recognizable structure: top connection actions, routing/conversation,
+          # then the common phones/PIN/reply card.
+          p = 'zzzz_chatgpt_direct_ui.go'
+          new_file = r'''package main
+
+import "strings"
+
+// ChatGPT Chat uses FlipAi's persistent private WebView2 profile, but its
+// settings deliberately follow the same visual grammar as Codex and Claude.
+func init() {
+	registerPage("agents", chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML)))
+}
+
+func chatGPTDirectUI(body string) string {
+	const radios = `<input class="agent-switch" type="radio" name="agent-view" id="agent-codex" checked>
+<input class="agent-switch" type="radio" name="agent-view" id="agent-claude">`
+	body = replaceAgentUIOnce(body, radios, radios+`
+<input class="agent-switch" type="radio" name="agent-view" id="agent-chatgpt">`, "ChatGPT radio")
+
+	const claudeRail = `      <label class="agent-item" for="agent-claude">
+        <span class="bmark claude">{{brand "claude"}}</span>
+        <span class="agent-item-copy">
+          <b>Claude <span class="agent-chip{{if not .S.ClaudeCheck.Ready}} warn{{end}}">{{if not .S.ClaudeCheck.Known}}Untested{{else if .S.ClaudeCheck.OK}}Ready{{else}}Attention{{end}}</span></b>
+          <span>Answers {{.S.ClaudePrefix}}: messages</span>
+        </span>
+      </label>`
+	const chatRail = `
+      <label class="agent-item" for="agent-chatgpt">
+        <span class="bmark codex">{{brand "codex"}}</span>
+        <span class="agent-item-copy">
+          <b>ChatGPT Chat <span class="agent-chip warn" id="chatgpt-rail-status">Checking</span></b>
+          <span>Answers {{.S.ChatGPTPrefix}}: messages</span>
+        </span>
+      </label>`
+	body = replaceAgentUIOnce(body, claudeRail, claudeRail+chatRail, "ChatGPT rail item")
+
+	const pane = `
+
+    <!-- ------------------------- ChatGPT Chat ------------------------- -->
+    <section class="agent-pane" id="chatgpt-pane">
+      <form method="post" action="/agents/save">
+        <div class="agent-head">
+          <div class="agent-head-main">
+            <span class="bmark lg codex">{{brand "codex"}}</span>
+            <div>
+              <h2>ChatGPT Chat <span class="pill warn" id="chatgpt-head-status">Checking</span></h2>
+              <p>Regular ChatGPT in FlipAi's private saved browser session.</p>
+            </div>
+          </div>
+          <div class="agent-head-actions">
+            <button class="btn accent" id="chatgpt-connect-btn" type="submit" formaction="/chatgpt/connect" formnovalidate>{{icon "link"}}Connect</button>
+            <button class="btn" id="chatgpt-disconnect-btn" style="display:none" type="submit" formaction="/chatgpt/disconnect" formnovalidate data-confirm="Disconnect ChatGPT from FlipAi?">{{icon "x-ring"}}Disconnect</button>
+            <button class="btn" id="chatgpt-test-btn" style="display:none" type="submit" formaction="/chatgpt/test" formnovalidate>{{icon "play"}}Test</button>
+            <button class="btn primary" type="submit">Save ChatGPT</button>
+          </div>
+        </div>
+
+        <section class="card">
+          <div class="card-head divided"><div><h2>Routing &amp; conversation</h2><p>Same sticky phone behavior as Codex and Claude—select once, then keep texting.</p></div></div>
+          <div class="card-body">
+            <div class="grid-2">
+              <div class="field">
+                <label for="chatgptPrefix">SMS shortcut</label>
+                <input id="chatgptPrefix" type="text" name="chatgptPrefix" value="{{.S.ChatGPTPrefix}}" maxlength="24" required>
+                <p class="hint">Send <b>{{.S.ChatGPTPrefix}}: your message</b> once to switch this phone to ChatGPT Chat. Follow-ups stay here until C:, A:, or {{.S.ChatGPTPrefix}}: changes it.</p>
+              </div>
+              <div class="field">
+                <label>Start a new chat</label>
+                <div class="input-static"><b class="mono">{{.S.ChatGPTPrefix}} {{.S.NewSessionCommand}}</b></div>
+                <p class="hint">Starts a clean ChatGPT conversation and keeps ChatGPT selected for that phone.</p>
+              </div>
+            </div>
+            <div class="rows">
+              <div class="row"><div class="label">Connection<span>Saved across FlipAi and Windows restarts.</span></div><div class="value"><span class="pill warn" id="chatgpt-saved">Checking</span></div></div>
+              <div class="row"><div class="label">Browser session<span>Runs hidden after the one-time sign-in.</span></div><div class="value"><span class="pill" id="chatgpt-browser">Stopped</span></div></div>
+              <div class="row"><div class="label">Current conversation</div><div class="value"><span class="mono" id="chatgpt-conversation">None yet</span></div></div>
+              <div class="row" id="chatgpt-error-row" style="display:none"><div class="label">Last error</div><div class="value"><span class="pill bad" id="chatgpt-last-error"></span></div></div>
+            </div>
+          </div>
+        </section>
+
+        {{template "agentAccess" .ChatGPTAccess}}
+      </form>
+    </section>
+
+    <style>
+    #agent-chatgpt:checked~.agents-shell .agent-item[for="agent-chatgpt"]{background:var(--brand-soft);border-color:var(--brand-line)}
+    #agent-chatgpt:checked~.agents-shell .agent-item[for="agent-chatgpt"] b{color:var(--brand-ink)}
+    #agent-chatgpt:checked~.agents-shell #chatgpt-pane{display:block}
+    .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;max-width:360px;overflow-wrap:anywhere}
+    .input-static{min-height:42px;display:flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+    </style>
+    <script>
+    (function(){
+      function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}
+      function pill(id,state,label){var e=document.getElementById(id);if(!e)return;e.textContent=label;e.className='pill'+(state==='ok'?' ok':state==='bad'?' bad':state==='warn'?' warn':'')}
+      function visible(id,on){var e=document.getElementById(id);if(e)e.style.display=on?'':'none'}
+      async function refreshChatGPT(){
+        try{
+          var r=await fetch('/chatgpt/status.json',{cache:'no-store'});if(!r.ok)return;
+          var s=await r.json(), connected=!!s.connected||!!s.signedIn, live=!!s.signedIn;
+          pill('chatgpt-head-status',connected?'ok':'warn',connected?'Connected':'Not connected');
+          var rail=document.getElementById('chatgpt-rail-status');if(rail){rail.textContent=connected?'Connected':'Not connected';rail.className='agent-chip'+(connected?'':' warn')}
+          visible('chatgpt-connect-btn',!connected);visible('chatgpt-disconnect-btn',connected);visible('chatgpt-test-btn',connected);
+          pill('chatgpt-saved',connected?'ok':'warn',connected?'Connected':'Not connected');
+          var browserLabel='Stopped',browserState='';
+          if(s.loginActive){browserLabel='Sign-in window open';browserState='warn'}
+          else if(s.starting){browserLabel='Starting';browserState='warn'}
+          else if(s.running){browserLabel=live?'Ready':'Loading';browserState=live?'ok':'warn'}
+          pill('chatgpt-browser',browserState,browserLabel);
+          text('chatgpt-conversation',s.conversationId||'None yet');
+          var er=document.getElementById('chatgpt-error-row');if(er)er.style.display=s.lastError?'flex':'none';text('chatgpt-last-error',s.lastError||'');
+        }catch(e){}
+      }
+      refreshChatGPT();setInterval(refreshChatGPT,1500);
+    })();
+    </script>`
+
+	marker := "\n  </div>\n</div>\n{{end}}"
+	idx := strings.LastIndex(body, marker)
+	if idx < 0 {
+		panic("FlipAi Agents template changed around ChatGPT pane insertion")
+	}
+	return body[:idx] + pane + body[idx:]
+}
+'''
+          save(p, new_file)
+
+          # Focused regression tests for the two new behavioral contracts.
+          Path('agent_streamline_v04616_test.go').write_text(r'''package main
+
+import (
+    "strings"
+    "testing"
+    "time"
+)
+
+func TestChatGPTHasIndependentPhoneAndPINSettings(t *testing.T) {
+    cfg := defaultConfig(t.TempDir())
+    cfg.ChatGPT.Phones = []AgentPhone{{Number: "8455551212", Access: AccessSMS}}
+    cfg.Codex.Phones = nil
+    cfg.Claude.Phones = nil
+    if got := smsAgentsForSender(cfg, "8455551212"); len(got) != 1 || got[0] != "G" {
+        t.Fatalf("ChatGPT phone did not route independently: %#v", got)
+    }
+    if _, err := selectStickySMSAgent("hi", cfg, "8455551212", ""); err != nil {
+        t.Fatalf("unique ChatGPT phone should route without a default: %v", err)
+    }
+}
+
+func TestStickyRoutingHasNoDefaultForSharedPhone(t *testing.T) {
+    cfg := defaultConfig(t.TempDir())
+    p := AgentPhone{Number: "8455551212", Access: AccessSMS}
+    cfg.Codex.Phones = []AgentPhone{p}
+    cfg.ChatGPT.Phones = []AgentPhone{p}
+    if _, err := selectStickySMSAgent("hello", cfg, p.Number, ""); err == nil {
+        t.Fatal("shared phone unexpectedly got a default agent")
+    }
+    got, err := selectStickySMSAgent(configuredChatGPTPrefix(cfg)+": hello", cfg, p.Number, "")
+    if err != nil || got != "G" {
+        t.Fatalf("explicit ChatGPT selection failed: got %q err=%v", got, err)
+    }
+    got, err = selectStickySMSAgent("follow up", cfg, p.Number, "G")
+    if err != nil || got != "G" {
+        t.Fatalf("sticky ChatGPT follow-up failed: got %q err=%v", got, err)
+    }
+}
+
+func TestEveryAgentUsesOneSharedSMSInstruction(t *testing.T) {
+    cfg := defaultConfig(t.TempDir())
+    cfg.GoogleVoice.ReplyStyleHint = "Shared SMS line"
+    cfg.Codex.Instruction = "old codex override"
+    cfg.Claude.Instruction = "old claude override"
+    cfg.ChatGPT.Instruction = "old chat override"
+    for _, a := range []string{"C", "A", "G"} {
+        if got := cfg.replyStyleHintFor(a); got != "Shared SMS line" {
+            t.Fatalf("%s did not use shared instruction: %q", a, got)
+        }
+    }
+}
+
+func TestChatGPTReceiptDelayIsThirtySeconds(t *testing.T) {
+    if chatGPTReceiptDelay != 30*time.Second {
+        t.Fatalf("ChatGPT receipt delay = %v", chatGPTReceiptDelay)
+    }
+}
+
+func TestAgentPageHasUnifiedChatGPTAccessAndNoDefaultControl(t *testing.T) {
+    html := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
+    for _, want := range []string{".ChatGPTAccess", "chatgptPrefix", "Slow-task confirmation", "SMS reply instruction"} {
+        if !strings.Contains(html, want) {
+            t.Fatalf("unified agent page missing %q", want)
+        }
+    }
+    if strings.Contains(html, `name="defaultAgent"`) {
+        t.Fatal("Agents page still exposes a default agent control")
+    }
+}
+''')
+
+          # Release notes cover both fixes shipping together.
+          notes = Path('docs/RELEASE-NOTES.md').read_text()
+          notes = '''# FlipAi v0.46.16
+
+This release fixes incomplete Google Voice replies and makes Codex, Claude, and ChatGPT Chat follow one consistent agent-settings model.
+
+## Full ChatGPT answers reach Google Voice
+
+Long answers are reassembled before the Google Voice email gateway is used. FlipAi no longer sends numbered `1/2`, `2/2` fragments that can be reduced to only their first lines; the full answer is delivered as one logical reply.
+
+## Smarter ChatGPT receipt confirmation
+
+Codex and Claude keep their immediate “working on it” receipt text. ChatGPT Chat stays quiet for fast turns; only if the final reply has not arrived after 30 seconds does FlipAi send one “ChatGPT Chat working on it” confirmation. Normal long-turn progress texts can continue afterward.
+
+## One familiar settings model
+
+ChatGPT Chat now has its own allowed-phone list and optional PIN, just like the other agents. C:, A:, and ChatGPT's configurable shortcut are sticky per phone with no default agent: select an agent once and unprefixed follow-ups stay there until another shortcut is used.
+
+Connection controls are kept at the top of each agent: Connect when disconnected; Disconnect and Test when connected. The ChatGPT page no longer shows duplicate connection/action sections.
+
+## One SMS instruction
+
+Codex, Claude, and ChatGPT now use one editable SMS instruction. The default is: `This reply will be sent by SMS. Keep it short and plain text.` Changing that one field changes the framing for every agent.
+'''
+          Path('docs/RELEASE-NOTES.md').write_text(notes)
+
+          PY
+
+          gofmt -w config.go commands.go agents.go sms_sticky_chatgpt.go bridge.go ui_actions_agents.go ui_actions.go ui_status.go ui_pages.go ui_page_agents.go zzzz_chatgpt_direct_ui.go agent_streamline_v04616_test.go
+          go test ./...
+          go vet ./...
+
+          rm -f .github/workflows/finish-agent-streamline-v04616.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Streamline C A G agent settings for v0.46.16"
+          git push origin HEAD:fix/full-single-google-voice-replies-v04616
