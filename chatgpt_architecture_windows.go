@@ -195,18 +195,18 @@ foreach ($root in @('Registry::HKEY_CURRENT_USER\Software\Classes','Registry::HK
 		return fmt.Errorf("Windows ChatGPT architecture survey: %s", msg)
 	}
 	var raw struct {
-		InstallLocations  []string `json:"installLocations"`
-		ExecutablePaths   []string `json:"executablePaths"`
-		PackageIdentity   []string `json:"packageIdentity"`
-		ProcessInventory  []string `json:"processInventory"`
-		ChildInventory    []string `json:"childInventory"`
-		ModuleSignals     []string `json:"moduleSignals"`
-		WindowClasses     []string `json:"windowClasses"`
-		NetworkPeers      []string `json:"networkPeers"`
-		DNSNames          []string `json:"dnsNames"`
-		AppExtensions     []string `json:"appExtensions"`
-		ProtocolSchemes   []string `json:"protocolSchemes"`
-		PackageTopLevel   []string `json:"packageTopLevel"`
+		InstallLocations []string `json:"installLocations"`
+		ExecutablePaths  []string `json:"executablePaths"`
+		PackageIdentity  []string `json:"packageIdentity"`
+		ProcessInventory []string `json:"processInventory"`
+		ChildInventory   []string `json:"childInventory"`
+		ModuleSignals    []string `json:"moduleSignals"`
+		WindowClasses    []string `json:"windowClasses"`
+		NetworkPeers     []string `json:"networkPeers"`
+		DNSNames         []string `json:"dnsNames"`
+		AppExtensions    []string `json:"appExtensions"`
+		ProtocolSchemes  []string `json:"protocolSchemes"`
+		PackageTopLevel  []string `json:"packageTopLevel"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return fmt.Errorf("decode Windows ChatGPT architecture survey: %w", err)
@@ -429,22 +429,42 @@ func classifyChatGPTRuntime(signals, children, topLevel, windowClasses []string)
 }
 
 func assessChatGPTDirectPath(p chatGPTDirectProbeResult) string {
+	mappedIPC := strings.ToLower(strings.Join(p.ASARIPCCandidates, " "))
+	mappedProtocol := strings.ToLower(strings.Join(p.ASARMarkerSources, " "))
+	hasBridgeMap := strings.Contains(mappedIPC, "bridge exposure:") || strings.Contains(mappedIPC, "bridge method:") || strings.Contains(mappedIPC, "ipc binding:")
+	hasExternalSignal := strings.Contains(mappedIPC, "external transport signal:")
+	hasBackendRoute := strings.Contains(mappedProtocol, "backend route:")
+	hasRequestShape := strings.Contains(mappedProtocol, "request key:")
+	hasAuthFlow := strings.Contains(mappedProtocol, "auth flow:")
+
+	if hasBridgeMap && hasExternalSignal {
+		return "FlipAi mapped electronBridge/IPC and also found external-transport-related primitives in the real ChatGPT app bundle. Do not treat that as callable yet: the diagnostic reports the exact files and primitive names so we can determine whether any is actually owned by regular Chat and exposes a stable local endpoint."
+	}
+	if hasBridgeMap && hasBackendRoute {
+		if hasRequestShape && hasAuthFlow {
+			return "FlipAi mapped the internal Electron bridge, regular ChatGPT cloud backend routes, conversation request-shape key names, and desktop authentication-flow markers. The Electron bridge is renderer-to-main IPC, not an externally callable API by itself, and this PC still exposes no ChatGPT-owned local listener/debug transport. Option 2 is therefore narrowed to an independently authenticated cloud request path; the diagnostic now contains the static protocol pieces needed to decide whether that can be implemented without copying the desktop app's private session credentials."
+		}
+		return "FlipAi mapped the internal Electron bridge and regular ChatGPT cloud backend routes. The bridge is renderer-to-main IPC, not an externally callable process API, and there is still no ChatGPT-owned local listener/debug channel. The remaining Option 2 path is an independently authenticated cloud request flow; request/auth shape must be proven before any send test."
+	}
+	if hasBridgeMap {
+		return "FlipAi mapped electronBridge and Electron IPC call directions, but no externally callable regular-Chat transport is proven. Internal ipcRenderer/ipcMain channels cannot be invoked from FlipAi merely because their names are visible."
+	}
 	if len(p.ASARIPCCandidates) > 0 {
-		return "The real Electron app.asar contains IPC/bridge channel names. That is now the strongest direct-path evidence: the next build should map those exact channels to their main/preload/renderer handlers and test only a harmless background invocation if the channel is owned by regular ChatGPT Chat."
+		return "The real Electron app.asar contains IPC/bridge channel names. They are internal application evidence, not proof of an externally callable ChatGPT API."
 	}
 	if len(p.ASARMarkerSources) > 0 {
-		return "The real Electron app.asar contains attributable Chat/backend markers. FlipAi can now distinguish regular ChatGPT application code from bundled Codex/browser tooling; the next build should trace those exact app-bundle call sites before attempting any request."
+		return "The real Electron app.asar contains attributable Chat/backend markers. FlipAi can distinguish regular ChatGPT application code from bundled Codex/browser tooling, but no callable background interface is proven."
 	}
 	joinedExt := strings.ToLower(strings.Join(p.AppExtensions, " "))
 	if strings.Contains(joinedExt, "windows.appservice") {
-		return "The ChatGPT package declares a Windows AppService. That is the strongest supported-looking local backend candidate and should be protocol-tested next before any cloud/private endpoint."
+		return "The ChatGPT package declares a Windows AppService. That is the strongest supported-looking local backend candidate and should be protocol-tested before any cloud/private endpoint."
 	}
 	if p.provenTransport() {
 		return "A ChatGPT-owned live local transport exists. The next implementation should fingerprint that owned transport and test a harmless request before enabling SMS routing."
 	}
 	appSpecific := strings.ToLower(strings.Join(p.MarkerSources, " "))
 	if appSpecific != "" && strings.Contains(appSpecific, "backend-api") {
-		return "No externally callable local API is exposed, but app-specific installed code references ChatGPT backend-api/conversation machinery. This points toward a cloud-backed in-app client; a shippable direct integration would still need a supported authentication/session interface rather than copying private ChatGPT credentials."
+		return "No externally callable local API is exposed, but app-specific installed code references ChatGPT backend-api/conversation machinery. A shippable direct integration would still need a supported authentication/session interface rather than copying private ChatGPT credentials."
 	}
 	if len(p.MarkerSources) == 0 && len(p.NoisyMarkerSources) > 0 {
 		return "The protocol strings found earlier are confined to bundled browser/Codex/runtime tooling, not proven regular ChatGPT Chat code. There is still no safe direct request interface to call."
@@ -453,7 +473,7 @@ func assessChatGPTDirectPath(p chatGPTDirectProbeResult) string {
 		return "The package exposes activation protocol scheme(s), but no local chat backend. Those schemes may open/navigate the app; they are not evidence of a message-send API."
 	}
 	if len(p.OpenAIDNSNames) > 0 || len(p.NetworkPeers) > 0 {
-		return "The desktop client has cloud network activity but no owned local API/IPC endpoint was found. Option 2 is therefore not yet callable without an official local or authenticated cloud interface."
+		return "The desktop client has cloud network activity but no owned local API/IPC endpoint was found. Option 2 is therefore not yet callable without an official local or independently authenticated cloud interface."
 	}
 	return "No ChatGPT-owned local API, app service, debugging channel, or attributable regular-Chat protocol was found. Do not enable SMS routing from this evidence alone."
 }
