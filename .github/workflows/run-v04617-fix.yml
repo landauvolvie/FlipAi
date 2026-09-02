@@ -32,8 +32,6 @@ jobs:
           code = []
           in_triple = False
           for line in lines[start + 1:end]:
-              # YAML added ten spaces to Python statements. Do not remove them
-              # from the contents of Python triple-quoted Go/HTML strings.
               out = line
               if not in_triple and line.startswith('          '):
                   out = line[10:]
@@ -41,6 +39,28 @@ jobs:
               if out.count("'''") % 2:
                   in_triple = not in_triple
           script = '\n'.join(code) + '\n'
+
+          # Function replacements in the prepared script provide their own
+          # closing brace. Consume the old function's closing brace instead of
+          # leaving a duplicate one behind.
+          bstart = script.index('def between(path, start, end, replacement):')
+          bend = script.index('\n# -----------------------------------------------------------------', bstart)
+          fixed_between = '\n'.join([
+              'def between(path, start, end, replacement):',
+              '    s = read(path)',
+              '    a = s.find(start)',
+              '    if a < 0:',
+              "        raise SystemExit(f'{path}: start marker not found: {start!r}')",
+              '    b = s.find(end, a)',
+              '    if b < 0:',
+              "        raise SystemExit(f'{path}: end marker not found: {end!r}')",
+              '    suffix = b',
+              "    if replacement.rstrip().endswith('}') and end.startswith('\\n}'):",
+              '        suffix = b + 2',
+              '    write(path, s[:a] + replacement + s[suffix:])',
+              '',
+          ])
+          script = script[:bstart] + fixed_between + script[bend:]
           script = script.replace(
               r'\tif sourceAgent == "C" || sourceAgent == "A" {\n\t\treturn sourceAgent, nil\n\t}',
               r'    if sourceAgent == "C" || sourceAgent == "A" {\n        return sourceAgent, nil\n    }')
@@ -50,6 +70,15 @@ jobs:
           Path('/tmp/finish_v04617.py').write_text(script)
           PY
           python /tmp/finish_v04617.py
+          python - <<'PY'
+          from pathlib import Path
+          # Two whole-file writes in the prepared migration were raw Python
+          # strings, so unescape only the Go indentation and quotes they used.
+          for name in ('zzzz_chatgpt_direct_ui.go', 'agent_parity_v04617_test.go'):
+              p = Path(name)
+              s = p.read_text().replace('\\t', '\t').replace('\\"', '"')
+              p.write_text(s)
+          PY
           gofmt -w config.go commands.go agents.go sms_sticky_chatgpt.go bridge.go ui_actions_agents.go ui_actions.go ui_page_agents.go ui_pages.go zzzz_chatgpt_direct_ui.go agent_parity_v04617_test.go
           rm -f .github/workflows/finish-v04617.yml .github/workflows/run-v04617-fix.yml
           git config user.name "github-actions[bot]"
