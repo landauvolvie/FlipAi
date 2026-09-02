@@ -36,7 +36,11 @@ func (b *Bridge) newChatGPTWebConversation() error {
 	if b == nil {
 		return nil
 	}
-	return os.Remove(chatGPTWebConversationPath(filepath.Dir(b.statePath)))
+	err := os.Remove(chatGPTWebConversationPath(filepath.Dir(b.statePath)))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func (b *Bridge) runChatGPTWithAttachments(ctx context.Context, command, sender string, inbound []InboundAttachment) (string, error) {
