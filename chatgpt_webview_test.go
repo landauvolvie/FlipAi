@@ -62,7 +62,7 @@ func TestChatGPTJSStringEscapesPrompt(t *testing.T) {
 	if !strings.HasPrefix(got, `"`) || !strings.HasSuffix(got, `"`) {
 		t.Fatalf("not a JSON string: %s", got)
 	}
-	if strings.Contains(got, "\nnext") == false {
+	if !strings.Contains(got, `\nnext`) {
 		t.Fatalf("newline was not escaped: %s", got)
 	}
 }
