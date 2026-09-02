@@ -98,16 +98,11 @@ func TestWaitForChatGPTReadyWaitsThroughHiddenWebViewStartup(t *testing.T) {
 	}
 }
 
-func TestChatGPTAgentsPaneExplainsOneTimePersistentConnection(t *testing.T) {
+func TestChatGPTAgentsPaneKeepsPersistentConnectionStatusAvailable(t *testing.T) {
 	body := chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML))
 	for _, want := range []string{
-		"Connect only once",
-		"after FlipAi restarts",
-		"after Windows restarts",
-		"Saved connection",
-		"Live sign-in",
-		"Starting in background",
-		"Restoring",
+		"private persistent browser session", "Saved connection", "Live session",
+		"Connection details", "Restoring",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("persistent ChatGPT UI missing %q", want)

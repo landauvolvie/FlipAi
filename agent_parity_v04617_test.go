@@ -52,8 +52,10 @@ func TestChatGPTShortcutIsConfigurable(t *testing.T) {
 }
 
 func TestAgentsUIExposesSharedParityControls(t *testing.T) {
-	for _, want := range []string{"chatgptPrefix", "chatgptRequireCode", "chatgptAckDelay", "sharedReplyStyle", "No default agent."} {
-		if !strings.Contains(chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML)), want) {
+	a := newTestApp(t)
+	body := a.do(t, "GET", "/agents", nil).Body.String()
+	for _, want := range []string{`name="chatgptPrefix"`, `name="chatgptRequireCode"`, `name="chatgptAckDelay"`, `name="sharedReplyStyle"`, "No default agent."} {
+		if !strings.Contains(body, want) {
 			t.Fatalf("Agents UI missing %q", want)
 		}
 	}

@@ -26,6 +26,7 @@ func newTestApp(t *testing.T) *App {
 	// how a fresh install now arrives.
 	allowTestNumber(&cfg, "C", "8455551212")
 	cfg.Security.AgentsMigrated = true
+	cfg.Security.ChatGPTAgentMigrated = true
 	a := &App{
 		dataDir:    tmp,
 		configPath: tmp + "/bridge.json",
@@ -66,7 +67,7 @@ func (a *App) reloadConfig(t *testing.T) Config {
 func TestDesktopPagesRender(t *testing.T) {
 	a := newTestApp(t)
 	pages := map[string][]string{
-		"/":            {"Bridge Google Voice SMS commands", "Recent activity", "Pause FlipAi"},
+		"/": {"Bridge Google Voice SMS commands", "Recent activity", "Pause FlipAi"},
 		// The end-to-end check card was removed: it restated status the page
 		// already shows and pointed at a Phone page that no longer exists.
 		"/connections": {"Gmail / Google Voice"},
@@ -251,10 +252,10 @@ func TestAgentNumberLifecycle(t *testing.T) {
 	}
 	cfg = a.reloadConfig(t)
 	agent, phone, ok = agentForSender(cfg, "2125550147")
-	if !ok || agent != "B" || !phone.AllowsSMS() {
+	if !ok || agent != "CA" || !phone.AllowsSMS() {
 		t.Fatalf("shared number did not become an SMS-selectable sender: agent=%q phone=%+v ok=%v", agent, phone, ok)
 	}
-	rc, err := parseRemoteCommandForMessage("A: hello Claude", cfg, agent, GmailMessage{})
+	rc, err := parseRemoteCommandForMessageSticky("A: hello Claude", cfg, agent, "", GmailMessage{})
 	if err != nil || rc.Agent != "A" || rc.Text != "hello Claude" {
 		t.Fatalf("shared number did not route A: to Claude: rc=%+v err=%v", rc, err)
 	}

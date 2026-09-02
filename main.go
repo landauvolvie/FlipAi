@@ -78,6 +78,10 @@ func loadOrCreateConfig(cfgPath, dataDir string) Config {
 	cfg, err := loadConfig(cfgPath, dataDir)
 	if errors.Is(err, os.ErrNotExist) {
 		cfg = defaultConfig(dataDir)
+		// A brand-new file is already in the per-agent schema. Legacy
+		// migrations are only for an existing pre-agent bridge.json.
+		cfg.Security.AgentsMigrated = true
+		cfg.Security.ChatGPTAgentMigrated = true
 		if err := saveConfig(cfgPath, cfg); err != nil {
 			panic(err)
 		}
