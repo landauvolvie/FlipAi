@@ -231,7 +231,7 @@ const agentsPageHTML = `
           </div>
           <div class="agent-head-actions">
             <button class="btn" type="button" data-test="/codex/test" data-test-busy="Asking Codex">{{icon "play"}}Test</button>
-                        <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
+            <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Codex</button>
           </div>
         </div>
@@ -345,7 +345,7 @@ const agentsPageHTML = `
             <button class="btn accent" type="submit" formaction="/claude/connect" formnovalidate>{{icon "link"}}Connect</button>
             {{end}}
             <button class="btn" type="button" data-test="/claude/test" data-test-busy="Asking Claude">{{icon "play"}}Test</button>
-                        <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
+            <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Claude</button>
           </div>
         </div>
