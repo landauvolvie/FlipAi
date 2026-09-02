@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.10"
+const version = "0.46.11"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -66,11 +66,11 @@ type Config struct {
 // normal Settings page no longer exposes appearance, notifications or
 // close-to-tray controls; fresh installs use the light/default presentation.
 type UIConfig struct {
-	Theme      string `json:"theme"`
-	Compact    bool   `json:"compact"`
-	Alerts     bool   `json:"alerts"`
-	AlertSound bool   `json:"alertSound"`
-	CloseToTray bool  `json:"closeToTray"`
+	Theme       string `json:"theme"`
+	Compact     bool   `json:"compact"`
+	Alerts      bool   `json:"alerts"`
+	AlertSound  bool   `json:"alertSound"`
+	CloseToTray bool   `json:"closeToTray"`
 }
 
 type GmailConfig struct {
