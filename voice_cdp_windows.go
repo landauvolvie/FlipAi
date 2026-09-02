@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -24,10 +25,18 @@ type webViewDevTools struct {
 	chromium *edge.Chromium
 }
 
-// voiceDevToolsTimeout bounds one DevTools call. The page can be mid-navigation
-// or busy, and a call that never returns would stall the observation loop for
-// as long as the window lived.
-const voiceDevToolsTimeout = 8 * time.Second
+const (
+	// voiceDevToolsTimeout bounds ordinary DevTools calls. Google Voice probes
+	// must fail quickly if its page is navigating or wedged so the call observer
+	// does not disappear for a long time.
+	voiceDevToolsTimeout = 8 * time.Second
+
+	// A ChatGPT turn is intentionally one awaited Runtime.evaluate promise. The
+	// JavaScript itself may wait up to 90 seconds for the model to finish, so the
+	// generic 8-second Google Voice deadline would falsely report failure while
+	// ChatGPT continued answering in the page.
+	chatGPTTurnDevToolsTimeout = 95 * time.Second
+)
 
 func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
 	chromium := voiceChromium(view)
@@ -35,6 +44,28 @@ func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
 		return nil
 	}
 	return &webViewDevTools{view: view, chromium: chromium}
+}
+
+// webViewDevToolsCallTimeout keeps the short Google Voice timeout as the
+// default, but recognizes FlipAi's long-running ChatGPT turn driver and gives
+// only that awaited expression enough time to finish. This channel is shared by
+// both private WebViews, so a single global timeout is not correct for both.
+func webViewDevToolsCallTimeout(method string, params any) time.Duration {
+	if method != "Runtime.evaluate" {
+		return voiceDevToolsTimeout
+	}
+	m, ok := params.(map[string]any)
+	if !ok {
+		return voiceDevToolsTimeout
+	}
+	await, _ := m["awaitPromise"].(bool)
+	expression, _ := m["expression"].(string)
+	if await &&
+		strings.Contains(expression, "const deadline=Date.now()+90000;") &&
+		strings.Contains(expression, `data-message-author-role="assistant"`) {
+		return chatGPTTurnDevToolsTimeout
+	}
+	return voiceDevToolsTimeout
 }
 
 func (d *webViewDevTools) Call(method string, params any, out any) error {
@@ -73,20 +104,21 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 		}
 	})
 
+	timeout := webViewDevToolsCallTimeout(method, params)
 	select {
 	case got := <-answered:
 		if got.err != nil {
 			return got.err
 		}
 		if got.code != 0 {
-			return fmt.Errorf("%s failed in the Google Voice page (0x%X)", method, got.code)
+			return fmt.Errorf("%s failed in the WebView page (0x%X)", method, got.code)
 		}
 		if out == nil || got.result == "" {
 			return nil
 		}
 		return json.Unmarshal([]byte(got.result), out)
-	case <-time.After(voiceDevToolsTimeout):
-		return errors.New("the Google Voice page did not answer " + method)
+	case <-time.After(timeout):
+		return errors.New("the WebView page did not answer " + method)
 	}
 }
 
