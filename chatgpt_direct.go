@@ -42,6 +42,11 @@ type chatGPTDirectProbeResult struct {
 	OpenAIDNSNames      []string `json:"openAIDNSNames,omitempty"`
 	MarkerSources       []string `json:"markerSources,omitempty"`
 	NoisyMarkerSources  []string `json:"noisyMarkerSources,omitempty"`
+	ASARArchives        []string `json:"asarArchives,omitempty"`
+	ASARCodeEntries     []string `json:"asarCodeEntries,omitempty"`
+	ASARMarkerSources   []string `json:"asarMarkerSources,omitempty"`
+	ASARIPCCandidates   []string `json:"asarIpcCandidates,omitempty"`
+	ASARScanDetail      string   `json:"asarScanDetail,omitempty"`
 	DirectAssessment    string   `json:"directAssessment,omitempty"`
 
 	Detail string `json:"detail,omitempty"`
@@ -167,6 +172,13 @@ func (p chatGPTDirectProbeResult) summary() string {
 	lines = appendSummaryList(lines, "OpenAI/ChatGPT DNS names currently cached on this PC", p.OpenAIDNSNames, 30)
 	lines = appendSummaryList(lines, "App-specific protocol marker sources", p.MarkerSources, 30)
 	lines = appendSummaryList(lines, "Generic/runtime marker sources ignored for connection decisions", p.NoisyMarkerSources, 20)
+	lines = appendSummaryList(lines, "Electron ASAR archives opened", p.ASARArchives, 10)
+	lines = appendSummaryList(lines, "ASAR app-code entries indexed", p.ASARCodeEntries, 40)
+	lines = appendSummaryList(lines, "ASAR app-code protocol marker sources", p.ASARMarkerSources, 40)
+	lines = appendSummaryList(lines, "ASAR IPC/bridge candidates", p.ASARIPCCandidates, 40)
+	if strings.TrimSpace(p.ASARScanDetail) != "" {
+		lines = append(lines, "ASAR scan note: "+strings.TrimSpace(p.ASARScanDetail))
+	}
 	if strings.TrimSpace(p.DirectAssessment) != "" {
 		lines = append(lines, "Direct-backend assessment: "+strings.TrimSpace(p.DirectAssessment))
 	}
@@ -193,6 +205,10 @@ func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
 	if err := augmentChatGPTDirectProbe(ctx, &probe); err != nil {
 		probe.RuntimeSignals = append(probe.RuntimeSignals, "architecture add-on could not complete: "+truncate(err.Error(), 180))
 	}
+	if err := augmentChatGPTASARProbe(ctx, &probe); err != nil {
+		probe.ASARScanDetail = "ASAR add-on could not complete: " + truncate(err.Error(), 180)
+	}
+	probe.DirectAssessment = assessChatGPTDirectPath(probe)
 	probe.LoopbackPorts = uniqueSortedInts(probe.LoopbackPorts)
 	probe.CDPPorts = uniqueSortedInts(probe.CDPPorts)
 	probe.ProcessNames = uniqueSortedStrings(probe.ProcessNames)
@@ -212,6 +228,10 @@ func (a *App) chatGPTDirectProbe(w http.ResponseWriter, r *http.Request) {
 	probe.OpenAIDNSNames = uniqueSortedStrings(probe.OpenAIDNSNames)
 	probe.MarkerSources = uniqueSortedStrings(probe.MarkerSources)
 	probe.NoisyMarkerSources = uniqueSortedStrings(probe.NoisyMarkerSources)
+	probe.ASARArchives = uniqueSortedStrings(probe.ASARArchives)
+	probe.ASARCodeEntries = uniqueSortedStrings(probe.ASARCodeEntries)
+	probe.ASARMarkerSources = uniqueSortedStrings(probe.ASARMarkerSources)
+	probe.ASARIPCCandidates = uniqueSortedStrings(probe.ASARIPCCandidates)
 	message := probe.summary()
 	level := "info"
 	if probe.ProcessCount == 0 || (!probe.provenTransport() && len(probe.ProtocolMarkers) == 0 && probe.RuntimeArchitecture == "") {

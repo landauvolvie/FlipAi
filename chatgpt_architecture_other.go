@@ -9,3 +9,8 @@ func augmentChatGPTDirectProbe(ctx context.Context, p *chatGPTDirectProbeResult)
 	_ = p
 	return nil
 }
+
+func assessChatGPTDirectPath(p chatGPTDirectProbeResult) string {
+	_ = p
+	return "Direct ChatGPT architecture assessment is only available on Windows."
+}

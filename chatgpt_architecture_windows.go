@@ -429,6 +429,12 @@ func classifyChatGPTRuntime(signals, children, topLevel, windowClasses []string)
 }
 
 func assessChatGPTDirectPath(p chatGPTDirectProbeResult) string {
+	if len(p.ASARIPCCandidates) > 0 {
+		return "The real Electron app.asar contains IPC/bridge channel names. That is now the strongest direct-path evidence: the next build should map those exact channels to their main/preload/renderer handlers and test only a harmless background invocation if the channel is owned by regular ChatGPT Chat."
+	}
+	if len(p.ASARMarkerSources) > 0 {
+		return "The real Electron app.asar contains attributable Chat/backend markers. FlipAi can now distinguish regular ChatGPT application code from bundled Codex/browser tooling; the next build should trace those exact app-bundle call sites before attempting any request."
+	}
 	joinedExt := strings.ToLower(strings.Join(p.AppExtensions, " "))
 	if strings.Contains(joinedExt, "windows.appservice") {
 		return "The ChatGPT package declares a Windows AppService. That is the strongest supported-looking local backend candidate and should be protocol-tested next before any cloud/private endpoint."
