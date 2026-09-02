@@ -41,7 +41,112 @@ type imapReplyCacheKey struct {
 var gmailReplyMetaCache sync.Map
 var imapReplyMetaCache sync.Map
 
+// splitReply numbers a long agent answer before it reaches this delivery
+// layer. That was useful when each chunk was sent as a separate email, but the
+// Google Voice email reply gateway only forwards the first logical line of an
+// email body. A multi-line answer therefore arrived as tiny fragments such as
+// "1/2 Today's notable Gmail:" and "2/2 on the way." while the middle of the
+// answer disappeared.
+//
+// Keep the old splitter for compatibility with the bridge, but join its parts
+// back together here before anything leaves FlipAi. The map is keyed by the
+// original inbound Google Voice email, so simultaneous conversations cannot
+// contaminate one another.
+type voiceReplyAssembly struct {
+	total int
+	parts map[int]string
+}
+
+var voiceReplyAssemblyMu sync.Mutex
+var voiceReplyAssemblies = map[string]*voiceReplyAssembly{}
+
+func parseNumberedVoiceReply(body string) (part, total int, piece string, ok bool) {
+	body = strings.TrimSpace(body)
+	space := strings.IndexByte(body, ' ')
+	if space <= 0 {
+		return 0, 0, "", false
+	}
+	prefix := body[:space]
+	slash := strings.IndexByte(prefix, '/')
+	if slash <= 0 || slash == len(prefix)-1 {
+		return 0, 0, "", false
+	}
+	part, errPart := strconv.Atoi(prefix[:slash])
+	total, errTotal := strconv.Atoi(prefix[slash+1:])
+	if errPart != nil || errTotal != nil || total < 2 || total > 10 || part < 1 || part > total {
+		return 0, 0, "", false
+	}
+	return part, total, strings.TrimSpace(body[space+1:]), true
+}
+
+func assembleNumberedVoiceReply(original GmailMessage, body string) (string, bool) {
+	part, total, piece, numbered := parseNumberedVoiceReply(body)
+	if !numbered {
+		return body, true
+	}
+	key := strings.TrimSpace(original.ID)
+	if key == "" {
+		// Without a stable message id there is no safe way to associate later
+		// parts, so prefer delivering the text over accidentally swallowing it.
+		return body, true
+	}
+
+	voiceReplyAssemblyMu.Lock()
+	defer voiceReplyAssemblyMu.Unlock()
+
+	assembly := voiceReplyAssemblies[key]
+	if part == 1 {
+		// A normal short answer could itself begin with text such as "1/2 cup".
+		// A real first chunk produced by the bridge's default 300-character
+		// splitter is much longer, so do not buffer a tiny natural-language line.
+		if len([]rune(body)) < 120 {
+			return body, true
+		}
+		assembly = &voiceReplyAssembly{total: total, parts: make(map[int]string, total)}
+		voiceReplyAssemblies[key] = assembly
+	} else if assembly == nil {
+		// An unexpected "2/2 ..." should still be delivered rather than held
+		// forever. Only a first part is allowed to start an assembly.
+		return body, true
+	}
+	if assembly.total != total {
+		delete(voiceReplyAssemblies, key)
+		return body, true
+	}
+	assembly.parts[part] = piece
+	if len(assembly.parts) < total {
+		return "", false
+	}
+
+	pieces := make([]string, 0, total)
+	for i := 1; i <= total; i++ {
+		p, exists := assembly.parts[i]
+		if !exists {
+			return "", false
+		}
+		pieces = append(pieces, p)
+	}
+	delete(voiceReplyAssemblies, key)
+	return strings.TrimSpace(strings.Join(pieces, " ")), true
+}
+
+// Google Voice's @txt.voice.google.com reply gateway treats a newline as the
+// end of the SMS text. Flatten formatting only at the transport boundary so a
+// complete multi-line ChatGPT answer becomes one logical outbound message.
+// Bullets and punctuation remain in the text; only whitespace is collapsed.
+func googleVoiceGatewayBody(body string) string {
+	return strings.Join(strings.Fields(body), " ")
+}
+
 func sendThreadedVoiceReply(ctx context.Context, client MailClient, original GmailMessage, body string) error {
+	assembled, ready := assembleNumberedVoiceReply(original, body)
+	if !ready {
+		return nil
+	}
+	body = googleVoiceGatewayBody(assembled)
+	if body == "" {
+		return errors.New("empty Google Voice reply")
+	}
 	if sender, ok := client.(threadedReplySender); ok {
 		return sender.SendReply(ctx, original, body)
 	}
@@ -115,7 +220,10 @@ func buildThreadedReplyMessage(from, to string, meta replyThreadMeta, body strin
 	if err != nil {
 		return "", err
 	}
-	body = strings.TrimSpace(body)
+	// The gateway stops at the first newline. Normalize again here because the
+	// image-delivery fallback can append a notice after sendThreadedVoiceReply
+	// has already done its transport normalization.
+	body = googleVoiceGatewayBody(body)
 	if body == "" {
 		return "", errors.New("empty reply")
 	}
