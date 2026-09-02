@@ -1,0 +1,208 @@
+name: patch-v04615-chatgpt-timeout
+
+on:
+  push:
+    branches:
+      - fix/chatgpt-runtime-evaluate-timeout-v04615
+    paths:
+      - .github/workflows/patch-v04615-chatgpt-timeout.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch ChatGPT long-turn DevTools timeout
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('voice_cdp_windows.go')
+          s = p.read_text(encoding='utf-8')
+          start = s.index('func (d *webViewDevTools) Call(method string, params any, out any) error {')
+          end = s.index('// webViewVoicePermissions', start)
+          replacement = r'''func (d *webViewDevTools) Call(method string, params any, out any) error {
+	return d.CallWithTimeout(method, params, out, voiceDevToolsTimeout)
+}
+
+// CallWithTimeout lets a caller opt into a longer wait without weakening the
+// short Google Voice probe timeout. ChatGPT uses this only for the one awaited
+// turn script, which legitimately remains pending while the model answers.
+func (d *webViewDevTools) CallWithTimeout(method string, params any, out any, timeout time.Duration) error {
+	if d == nil || d.view == nil || d.chromium == nil {
+		return errNoVoiceControlChannel
+	}
+	if timeout <= 0 {
+		timeout = voiceDevToolsTimeout
+	}
+	body := "{}"
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		body = string(b)
+	}
+
+	type reply struct {
+		code   uintptr
+		result string
+		err    error
+	}
+	// Buffered so a reply arriving after the timeout below does not block the
+	// window's message loop forever.
+	answered := make(chan reply, 1)
+	d.view.Dispatch(func() {
+		err := d.chromium.CallDevToolsProtocolMethod(method, body, func(code uintptr, result string) {
+			select {
+			case answered <- reply{code: code, result: result}:
+			default:
+			}
+		})
+		if err != nil {
+			select {
+			case answered <- reply{err: err}:
+			default:
+			}
+		}
+	})
+
+	select {
+	case got := <-answered:
+		if got.err != nil {
+			return got.err
+		}
+		if got.code != 0 {
+			return fmt.Errorf("%s failed in the WebView page (0x%X)", method, got.code)
+		}
+		if out == nil || got.result == "" {
+			return nil
+		}
+		return json.Unmarshal([]byte(got.result), out)
+	case <-time.After(timeout):
+		return errors.New("the WebView page did not answer " + method)
+	}
+}
+
+'''
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('chatgpt_webview_windows.go')
+          s = p.read_text(encoding='utf-8')
+          marker = 'const chatGPTPageMonitorJS = `'
+          if marker not in s:
+              raise SystemExit('chatGPT page monitor marker not found')
+          s = s.replace(marker, 'const chatGPTTurnDevToolsTimeout = 95 * time.Second\n\n' + marker, 1)
+
+          old = '''func chatGPTEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
+\tif d == nil {
+\t\treturn errors.New("the ChatGPT WebView has no in-process control channel")
+\t}
+\tvar got voiceDevToolsEval
+\tparams := map[string]any{
+\t\t"expression":    expression,
+\t\t"returnByValue": true,
+\t\t"awaitPromise":  awaitPromise,
+\t}
+\tif err := d.Call("Runtime.evaluate", params, &got); err != nil {
+\t\treturn fmt.Errorf("the ChatGPT WebView did not answer Runtime.evaluate: %w", err)
+\t}
+\tif len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
+\t\treturn errors.New("the ChatGPT page script failed")
+\t}
+\tif out == nil {
+\t\treturn nil
+\t}
+\tif len(got.Result.Value) == 0 {
+\t\treturn errors.New("the ChatGPT page returned no value")
+\t}
+\tif err := json.Unmarshal(got.Result.Value, out); err != nil {
+\t\treturn fmt.Errorf("the ChatGPT page returned an unreadable value: %w", err)
+\t}
+\treturn nil
+}
+'''
+          new = '''type chatGPTTimedDevTools interface {
+\tvoiceDevTools
+\tCallWithTimeout(method string, params any, out any, timeout time.Duration) error
+}
+
+func chatGPTEvalWithTimeout(d voiceDevTools, expression string, awaitPromise bool, timeout time.Duration, out any) error {
+\tif d == nil {
+\t\treturn errors.New("the ChatGPT WebView has no in-process control channel")
+\t}
+\tvar got voiceDevToolsEval
+\tparams := map[string]any{
+\t\t"expression":    expression,
+\t\t"returnByValue": true,
+\t\t"awaitPromise":  awaitPromise,
+\t}
+\tvar err error
+\tif timeout > 0 {
+\t\tif timed, ok := d.(chatGPTTimedDevTools); ok {
+\t\t\terr = timed.CallWithTimeout("Runtime.evaluate", params, &got, timeout)
+\t\t} else {
+\t\t\terr = d.Call("Runtime.evaluate", params, &got)
+\t\t}
+\t} else {
+\t\terr = d.Call("Runtime.evaluate", params, &got)
+\t}
+\tif err != nil {
+\t\treturn fmt.Errorf("the ChatGPT WebView did not answer Runtime.evaluate: %w", err)
+\t}
+\tif len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
+\t\treturn errors.New("the ChatGPT page script failed")
+\t}
+\tif out == nil {
+\t\treturn nil
+\t}
+\tif len(got.Result.Value) == 0 {
+\t\treturn errors.New("the ChatGPT page returned no value")
+\t}
+\tif err := json.Unmarshal(got.Result.Value, out); err != nil {
+\t\treturn fmt.Errorf("the ChatGPT page returned an unreadable value: %w", err)
+\t}
+\treturn nil
+}
+
+func chatGPTEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
+\treturn chatGPTEvalWithTimeout(d, expression, awaitPromise, 0, out)
+}
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one chatGPTEval block, got {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old_call = 'if err := chatGPTEval(dev, expr, true, &got); err != nil {'
+          new_call = 'if err := chatGPTEvalWithTimeout(dev, expr, true, chatGPTTurnDevToolsTimeout, &got); err != nil {'
+          if s.count(old_call) != 1:
+              raise SystemExit(f'expected one long ChatGPT turn eval call, got {s.count(old_call)}')
+          s = s.replace(old_call, new_call, 1)
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('chatgpt_webview_windows_test.go')
+          s = p.read_text(encoding='utf-8')
+          anchor = '\t\t`data-testid="send-button"`,\n'
+          additions = '\t\t`data-testid="send-button"`,\n\t\t`chatGPTTurnDevToolsTimeout = 95 * time.Second`,\n\t\t`CallWithTimeout("Runtime.evaluate", params, &got, timeout)`,\n\t\t`chatGPTEvalWithTimeout(dev, expr, true, chatGPTTurnDevToolsTimeout, &got)`,\n'
+          if s.count(anchor) != 1:
+              raise SystemExit(f'expected one ChatGPT static-test anchor, got {s.count(anchor)}')
+          s = s.replace(anchor, additions, 1)
+          p.write_text(s, encoding='utf-8')
+
+          Path('.github/workflows/patch-v04615-chatgpt-timeout.yml').unlink()
+          PY
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix ChatGPT WebView long-turn timeout"
+          git push
