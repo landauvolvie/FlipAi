@@ -23,7 +23,7 @@ The diagnostic does not use Windows accessibility, move the mouse, type, focus C
 
 After this diagnostic runs on the real PC, the result should be specific enough to stop guessing. If ChatGPT exposes a real local/AppService/IPC path, the next build can protocol-test it. If the evidence shows only a cloud-backed private session path, FlipAi can stop pursuing an unsafe credential-copying design and choose a supported alternative instead.
 
-This release remains diagnostic-only and does not enable ChatGPT SMS routing until an actual usable request path is proven.
+This release remains diagnostic-only and does not enable ChatGPT SMS routing until an actual usable request path is proven. Keep ChatGPT desktop open and signed in, run the diagnostic once, and copy the full result including the final **Direct-backend assessment**.
 
 ## Verified
 
