@@ -1,6 +1,12 @@
 # FlipAi v0.46.17
 
-This release combines the pending full Google Voice reply fix with a streamlined three-agent SMS setup.
+This release combines the pending full Google Voice reply fix with a streamlined three-agent SMS setup and a critical ChatGPT WebView memory fix.
+
+## Critical ChatGPT memory fix
+
+FlipAi could mistake a busy ChatGPT WebView for a dead one because its 500 ms liveness check also ran JavaScript inside the ChatGPT renderer. When that page check was slow, the supervisor cleared the worker state and launched another hidden WebView while the original was still alive. Repeated false failures could leave many OpenAI/Chromium/WebView2 process trees and consume most of the PC's RAM.
+
+v0.46.17 separates cheap process liveness from ChatGPT page readiness. The supervisor now probes the local worker without touching the renderer, and Windows enforces a hard single-instance mutex for the hidden ChatGPT worker so a second WebView cannot be created even if state becomes confused. The hidden worker also watches FlipAi's quit flag and exits during Quit, update, or uninstall so it is not left orphaned.
 
 ## Complete ChatGPT replies
 
