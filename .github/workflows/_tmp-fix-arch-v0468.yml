@@ -1,0 +1,39 @@
+name: temporary-v0468-arch-fix
+
+on:
+  push:
+    branches: [feature/chatgpt-runtime-shape-diagnostic-v0468]
+    paths:
+      - .github/workflows/_tmp-fix-arch-v0468.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/chatgpt-runtime-shape-diagnostic-v0468
+      - name: Fix runtime classifier and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('chatgpt_architecture_windows.go')
+          s=p.read_text()
+          old='\tjoined := strings.ToLower(strings.Join(append(append(append([]string{}, signals...), children...), append(topLevel, windowClasses...)...), " ")\n'
+          new='\tall := make([]string, 0, len(signals)+len(children)+len(topLevel)+len(windowClasses))\n\tall = append(all, signals...)\n\tall = append(all, children...)\n\tall = append(all, topLevel...)\n\tall = append(all, windowClasses...)\n\tjoined := strings.ToLower(strings.Join(all, " "))\n'
+          if old not in s:
+              raise SystemExit('expected classifier line not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+          rm .github/workflows/_tmp-fix-arch-v0468.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add chatgpt_architecture_windows.go .github/workflows/_tmp-fix-arch-v0468.yml
+          git commit -m "Fix ChatGPT runtime classifier syntax"
+          git push origin HEAD:feature/chatgpt-runtime-shape-diagnostic-v0468
