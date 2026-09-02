@@ -1,31 +1,36 @@
-# FlipAi v0.46.12
+# FlipAi v0.46.13
 
-This is the first live regular-ChatGPT browser connection in FlipAi. It replaces the diagnostic-only ChatGPT pane with a dedicated persistent WebView2 session that can sign in, run a real test turn, continue a normal ChatGPT conversation, and start a new one without controlling the visible ChatGPT desktop app.
+This release makes the dedicated ChatGPT Chat connection persistent and always-on after the one-time sign-in.
 
-## ChatGPT Chat connection
+## Connect once, then stay connected
 
-- **Connect ChatGPT** opens a one-time sign-in window using a FlipAi-owned WebView2 profile.
-- The signed-in profile persists in FlipAi and is separate from the normal ChatGPT desktop/browser profile.
-- **Test ChatGPT** sends a real harmless prompt and waits for the completed assistant answer.
-- The Agents page includes a real ChatGPT message box for end-to-end conversation testing.
-- Normal messages continue the current ChatGPT conversation; **Start a new ChatGPT chat** creates a new saved chat first.
-- FlipAi records the ChatGPT conversation id from the normal conversation URL after a successful turn.
-- **Disconnect** stops the dedicated browser and removes only FlipAi's ChatGPT profile.
+- A successful ChatGPT sign-in is stored as a durable connection state separate from the currently loading page state.
+- Existing v0.46.12 signed-in profiles migrate automatically.
+- Closing the one-time ChatGPT sign-in window is safe; FlipAi restores the same profile off-screen.
+- The FlipAi tray automatically restores a connected ChatGPT WebView after the sign-in window closes, after FlipAi restarts, and after Windows restarts.
+- Closing the normal FlipAi control window does not stop the ChatGPT background browser. Explicit Disconnect still removes only FlipAi's dedicated ChatGPT profile.
 
-## No Windows accessibility or focus automation
+## Readiness race fixed
 
-The ChatGPT browser runs through WebView2 owned by FlipAi. Sending uses the page's own composer and Send control inside that WebView, and receiving reads the completed assistant message inside the same page. It does not use Windows accessibility, SendKeys, global mouse input, coordinates, focus the normal ChatGPT app, copy its cookies/tokens, or enable a remote DevTools port.
+v0.46.12 treated “the WebView control endpoint exists” as “ChatGPT is signed in and ready.” A fresh hidden WebView exposes its control endpoint before chatgpt.com finishes restoring the persisted account session. That is why Activity could show a failed turn followed by a successful sign-in verification in the same second.
 
-## Activity diagnostics
+v0.46.13 waits for the current ChatGPT page to verify the saved session before a test or chat turn is sent. New-chat navigation also waits for the restored session before using the composer.
 
-The existing Activity tab now records ChatGPT browser open, verified sign-in, background worker start, test turns, chat turns, disconnects, failures, and end-to-end durations. Activity intentionally does not store ChatGPT prompts, assistant replies, cookies, or tokens.
+## Better recovery and diagnostics
 
-## Reliability tests
+- Background worker launch state prevents intentional duplicate starts when the tray supervisor and a turn notice a missing worker together.
+- Activity records saved-session restore, background startup, readiness, and failures with timing.
+- ChatGPT `Runtime.evaluate` failures now identify the ChatGPT WebView instead of using the old Google Voice wording inherited from a shared helper.
+- Agents separates **Saved connection**, **Live sign-in**, and **Browser session** so a normal restore delay is visible without looking disconnected.
 
-The release suite covers the persistent-profile/runtime contract, private loopback authentication, no-global-UI-automation regression rules, conversation-id handling, Activity privacy, installer lifecycle, and the exact ChatGPT page driver in a real headless Chromium page that streams a changing assistant answer before completion.
+## Privacy and desktop behavior
 
-## What to do
+The integration still uses FlipAi's own persistent WebView2 profile. It does not copy cookies or tokens out of that profile, does not use Windows accessibility, SendKeys, global mouse/keyboard input, coordinates, or the visible ChatGPT desktop app, and does not open a remote DevTools port.
 
-Install v0.46.12, open **Agents -> ChatGPT Chat**, press **Connect ChatGPT**, sign in to your normal ChatGPT account, then press **Test ChatGPT**. A successful test returns the real ChatGPT reply and conversation id. You can then use the message box on the same page to continue that chat or start a new one. If anything fails, open **Activity** and send the ChatGPT-related entries.
+## Testing
 
-This release proves and exposes the live ChatGPT browser connection inside FlipAi. SMS routing to ChatGPT remains separate from Codex/Claude routing in this release and is not silently enabled until the browser connection has been proven on the user's real account.
+The suite covers v0.46.12 profile migration, durable connection state across temporary page loading, tray-only automatic background startup, ChatGPT-specific control errors, the exact ChatGPT page driver in real Chromium, Windows race tests, installer lifecycle, Google Voice regressions, and the existing full Linux/Windows suites.
+
+## What to test
+
+Install v0.46.13 over v0.46.12. If ChatGPT already shows **Connected**, close the ChatGPT sign-in window and send another test/chat message. Then restart FlipAi or Windows and try again without pressing **Connect ChatGPT**. Activity should show the saved session restoring invisibly and then becoming ready.
