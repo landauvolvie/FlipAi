@@ -153,6 +153,11 @@ func extractChatGPTProtocolMap(path string, data []byte) chatGPTProtocolMapScan 
 				out.RequestShapeKeys = append(out.RequestShapeKeys, path+" -> "+m[1])
 			}
 		}
+		for _, m := range chatGPTObjectKeyRegex.FindAllStringSubmatch(window, 500) {
+			if len(m) >= 2 && chatGPTInterestingRequestKeys[m[1]] {
+				out.RequestShapeKeys = append(out.RequestShapeKeys, path+" -> "+m[1])
+			}
+		}
 	}
 
 	low := strings.ToLower(text)
