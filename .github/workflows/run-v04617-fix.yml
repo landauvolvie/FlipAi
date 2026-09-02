@@ -1,0 +1,44 @@
+name: run-v04617-fix
+
+on:
+  push:
+    branches:
+      - fix/full-single-google-voice-replies-v04616
+    paths:
+      - .github/workflows/run-v04617-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Extract and apply the prepared migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/finish-v04617.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'")
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'PY')
+          code = []
+          for line in lines[start + 1:end]:
+              code.append(line[10:] if line.startswith('          ') else line)
+          Path('/tmp/finish_v04617.py').write_text('\n'.join(code) + '\n')
+          PY
+          python /tmp/finish_v04617.py
+          gofmt -w config.go commands.go agents.go sms_sticky_chatgpt.go bridge.go ui_actions_agents.go ui_actions.go ui_page_agents.go ui_pages.go zzzz_chatgpt_direct_ui.go agent_parity_v04617_test.go
+          rm -f .github/workflows/finish-v04617.yml .github/workflows/run-v04617-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Unify agent SMS settings and delay ChatGPT receipts"
+          git push origin HEAD:fix/full-single-google-voice-replies-v04616
