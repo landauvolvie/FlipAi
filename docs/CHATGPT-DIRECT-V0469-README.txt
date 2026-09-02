@@ -1,0 +1,1 @@
+v0.46.9: run Agents > ChatGPT Chat > Run app bundle deep scan, then copy the full ASAR sections and Direct-backend assessment.
