@@ -32,7 +32,14 @@ jobs:
           code = []
           for line in lines[start + 1:end]:
               code.append(line[10:] if line.startswith('          ') else line)
-          Path('/tmp/finish_v04617.py').write_text('\n'.join(code) + '\n')
+          script = '\n'.join(code) + '\n'
+          script = script.replace(
+              r'\tif sourceAgent == "C" || sourceAgent == "A" {\n\t\treturn sourceAgent, nil\n\t}',
+              r'    if sourceAgent == "C" || sourceAgent == "A" {\n        return sourceAgent, nil\n    }')
+          script = script.replace(
+              r'\tif sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" {\n\t\treturn sourceAgent, nil\n\t}',
+              r'    if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" {\n        return sourceAgent, nil\n    }')
+          Path('/tmp/finish_v04617.py').write_text(script)
           PY
           python /tmp/finish_v04617.py
           gofmt -w config.go commands.go agents.go sms_sticky_chatgpt.go bridge.go ui_actions_agents.go ui_actions.go ui_page_agents.go ui_pages.go zzzz_chatgpt_direct_ui.go agent_parity_v04617_test.go
