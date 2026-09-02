@@ -96,6 +96,15 @@ func (a *App) removeAgentNumber(w http.ResponseWriter, r *http.Request) {
 // Agents form into the configuration. It is called from saveAgents so one Save
 // covers everything on the pane.
 func applyAgentAccessForm(cfg *Config, r *http.Request, agent string) error {
+	// Keep accepting the retired defaultAgent field for upgrade/test compatibility.
+	// v0.46.14 no longer uses DefaultAgent for SMS routing and exposes no control
+	// for it; sticky per-sender C/A/G selection remains authoritative.
+	if agent == "C" && r.Form.Has("defaultAgent") {
+		if v := strings.ToUpper(strings.TrimSpace(r.FormValue("defaultAgent"))); v == "A" || v == "C" {
+			cfg.DefaultAgent = v
+		}
+	}
+
 	s := agentSettings(*cfg, agent)
 
 	// Per-number access selects, named access-<agent>-<number>.

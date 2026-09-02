@@ -25,7 +25,6 @@ func replaceAgentUIOnce(body, old, replacement, label string) string {
 func agentConnectFirstRunHTML(body string) string {
 	const oldCodex = `          <div class="agent-head-actions">
             <button class="btn" type="button" data-test="/codex/test" data-test-busy="Asking Codex">{{icon "play"}}Test</button>
-            {{if not .CodexAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="C" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Codex</button>
           </div>`
@@ -36,7 +35,6 @@ func agentConnectFirstRunHTML(body string) string {
             {{else}}
             <button class="btn accent" type="button" data-test="/codex/test" data-test-busy="Connecting Codex">{{icon "link"}}Connect</button>
             {{end}}
-            {{if not .CodexAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="C" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=codex">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Codex</button>
           </div>`
@@ -49,7 +47,6 @@ func agentConnectFirstRunHTML(body string) string {
             <button class="btn accent" type="submit" formaction="/claude/connect" formnovalidate>{{icon "link"}}Connect</button>
             {{end}}
             <button class="btn" type="button" data-test="/claude/test" data-test-busy="Asking Claude">{{icon "play"}}Test</button>
-            {{if not .ClaudeAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="A" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Claude</button>
           </div>`
@@ -61,7 +58,6 @@ func agentConnectFirstRunHTML(body string) string {
             <button class="btn accent" type="submit" formaction="/claude/connect" formnovalidate name="agent" value="A">{{icon "link"}}Connect</button>
             <button hidden aria-hidden="true" tabindex="-1" class="btn" type="button" data-test="/claude/test" data-test-busy="Asking Claude">{{icon "play"}}Test</button>
             {{end}}
-            {{if not .ClaudeAccess.IsDefault}}<button class="btn" type="submit" name="defaultAgent" value="A" formnovalidate>{{icon "check"}}Make default</button>{{end}}
             <a class="btn" href="/open/folder?which=claude">{{icon "folder"}}Folder</a>
             <button class="btn primary" type="submit">Save Claude</button>
           </div>`

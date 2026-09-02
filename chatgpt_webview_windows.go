@@ -428,6 +428,32 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		rw.WriteHeader(status)
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
 	}
+	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var ignored bool
+		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT did not restore the saved sign-in after opening a new chat"})
+			return
+		}
+		mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
+			s.Connected = true; s.SignedIn = true; s.ConversationID = ""
+			s.LastEvent = "new-chat-ready"; s.LastError = ""
+		})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
+	})
 	mux.HandleFunc("/test", func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(rw, "POST required", http.StatusMethodNotAllowed)

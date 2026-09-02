@@ -20,5 +20,6 @@ func init() {
 	if err != nil {
 		return
 	}
+	prepareChatGPTRuntimeForTray(dataDir)
 	go runChatGPTBackgroundSupervisor(context.Background(), dataDir)
 }
