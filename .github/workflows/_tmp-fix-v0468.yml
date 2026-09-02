@@ -1,0 +1,41 @@
+name: temporary-v0468-config-fix
+
+on:
+  push:
+    branches: [feature/chatgpt-runtime-shape-diagnostic-v0468]
+    paths:
+      - .github/workflows/_tmp-fix-v0468.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/chatgpt-runtime-shape-diagnostic-v0468
+      - name: Restore config from main and bump only version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git show origin/main:config.go > config.go
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('config.go')
+          s=p.read_text()
+          old='const version = "0.46.7"'
+          new='const version = "0.46.8"'
+          if old not in s:
+              raise SystemExit('expected version line not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+          rm .github/workflows/_tmp-fix-v0468.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config.go .github/workflows/_tmp-fix-v0468.yml
+          git commit -m "Restore config and bump only in-app version to 0.46.8"
+          git push origin HEAD:feature/chatgpt-runtime-shape-diagnostic-v0468
