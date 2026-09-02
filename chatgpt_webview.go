@@ -72,6 +72,23 @@ func chatGPTActivity(dataDir, level, stage, message string, took time.Duration) 
 	log.AddTimed(level, stage, message, "", chatGPTAgentName, "", took)
 }
 
+func chatGPTJSString(v string) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func chatGPTConversationID(href string) string {
+	i := strings.Index(href, "/c/")
+	if i < 0 {
+		return ""
+	}
+	v := href[i+3:]
+	if j := strings.IndexAny(v, "?#/"); j >= 0 {
+		v = v[:j]
+	}
+	return strings.TrimSpace(v)
+}
+
 func waitForChatGPTControl(ctx context.Context, dataDir string) (ChatGPTWebRuntime, error) {
 	t := time.NewTicker(150 * time.Millisecond)
 	defer t.Stop()
@@ -88,6 +105,16 @@ func waitForChatGPTControl(ctx context.Context, dataDir string) (ChatGPTWebRunti
 			return s, ctx.Err()
 		case <-t.C:
 		}
+	}
+}
+
+func waitForChatGPTStopped(dataDir string, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if !loadChatGPTRuntime(dataDir).Running {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -120,7 +147,7 @@ func (a *App) chatGPTConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chatGPTActivity(a.dataDir, "info", "chatgpt-connect", "Opened the dedicated ChatGPT sign-in window. FlipAi is waiting for a signed-in ChatGPT page.", time.Since(started))
-	renderResult(w, r, 200, true, "ChatGPT sign-in opened", "Sign in to ChatGPT in the window FlipAi opened. This uses FlipAi's own persistent browser profile, separate from your normal ChatGPT desktop app. When ChatGPT is open, close the sign-in window and press Test ChatGPT.")
+	renderResult(w, r, 200, true, "ChatGPT sign-in opened", "Sign in to ChatGPT in the window FlipAi opened. This uses FlipAi's own persistent browser profile, separate from your normal ChatGPT desktop app. You can leave that window open while testing, or close it after sign-in; FlipAi will reuse the same private profile in the background.")
 }
 
 func (a *App) chatGPTTest(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +210,9 @@ func (a *App) chatGPTChat(w http.ResponseWriter, r *http.Request) {
 		prompt = prompt[:12000]
 	}
 	started := time.Now()
+	chatGPTActivity(a.dataDir, "info", "chatgpt-turn", "Starting a ChatGPT browser-session turn.", 0)
 	if err := platformEnsureChatGPTWorker(a.dataDir); err != nil {
+		chatGPTActivity(a.dataDir, "error", "chatgpt-turn", "Could not start the ChatGPT background browser: "+err.Error(), time.Since(started))
 		renderResult(w, r, 500, false, "ChatGPT background session could not start", err.Error())
 		return
 	}
@@ -191,6 +220,7 @@ func (a *App) chatGPTChat(w http.ResponseWriter, r *http.Request) {
 	s, err := waitForChatGPTControl(ctx, a.dataDir)
 	cancel()
 	if err != nil {
+		chatGPTActivity(a.dataDir, "error", "chatgpt-turn", "ChatGPT background browser did not become ready: "+err.Error(), time.Since(started))
 		renderResult(w, r, 500, false, "ChatGPT browser did not become ready", err.Error())
 		return
 	}
@@ -222,6 +252,7 @@ func (a *App) chatGPTChat(w http.ResponseWriter, r *http.Request) {
 func (a *App) chatGPTDisconnect(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	_ = platformStopChatGPTWorker(a.dataDir)
+	waitForChatGPTStopped(a.dataDir, 5*time.Second)
 	if err := os.RemoveAll(chatGPTProfilePath(a.dataDir)); err != nil {
 		chatGPTActivity(a.dataDir, "error", "chatgpt-disconnect", "Could not remove the dedicated ChatGPT browser profile: "+err.Error(), time.Since(started))
 		renderResult(w, r, 500, false, "Could not disconnect ChatGPT", err.Error())
