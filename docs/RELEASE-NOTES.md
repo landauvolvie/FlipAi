@@ -24,4 +24,4 @@ v0.46.14 verifies the private worker at tray startup, discards only stale proces
 
 ## Diagnostics and tests
 
-Activity records stale-state recovery, invisible restore attempts, liveness failures, auth restore and worker recycling without logging prompts, replies, cookies or tokens. Tests cover G routing, sticky follow-ups and switching, persistence by sender, no-default UI, reboot-stale-state recovery, the existing real Chromium ChatGPT driver, Windows race/lifecycle checks, Google Voice regression checks, Defender, and installer smoke tests.
+Activity records stale-state recovery, invisible restore attempts, liveness failures, auth restore and worker recycling without logging prompts, replies, cookies or tokens. Tests cover G routing, sticky follow-ups and switching, persistence by sender, no-default UI, reboot-stale-state recovery, the existing real Chromium ChatGPT driver, Windows race/lifecycle checks, Google Voice regression checks, Defender, and installer smoke tests. The final release verification is run again after the strict Agents-page connection overlay is updated for the retired default-agent controls.
