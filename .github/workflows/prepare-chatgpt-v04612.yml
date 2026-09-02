@@ -10,12 +10,10 @@ permissions:
 
 jobs:
   prepare:
-    if: "${{ !contains(github.event.head_commit.message, '[v0.46.12-ready]') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Wire ChatGPT routes and release metadata
-        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -102,15 +100,12 @@ Install v0.46.12, open **Agents -> ChatGPT Chat**, press **Connect ChatGPT**, si
 
 This release proves and exposes the live ChatGPT browser connection inside FlipAi. SMS routing to ChatGPT remains separate from Codex/Claude routing in this release and is not silently enabled until the browser connection has been proven on the user's real account.
 ''', encoding='utf-8')
+          Path('.github/workflows/prepare-chatgpt-v04612.yml').unlink()
           PY
-      - name: Commit prepared release
-        shell: bash
+      - name: Commit prepared release and remove helper workflow
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add webui.go main.go config.go VERSION docs/RELEASE-NOTES.md
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "Prepare live ChatGPT WebView release v0.46.12 [v0.46.12-ready]"
+          git add -A
+          git commit -m "Prepare live ChatGPT WebView release v0.46.12"
           git push
