@@ -1,0 +1,35 @@
+name: fix-v04614-agent-markup
+on:
+  push:
+    branches:
+      - feature/chatgpt-g-sticky-routing-v04614
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[markup-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Normalize action markup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('ui_page_agents.go')
+          s=p.read_text(encoding='utf-8')
+          old='\n                        <a class="btn" href="/open/folder?which='
+          if s.count(old) != 2:
+              raise SystemExit(f'expected two leftover action indent markers, got {s.count(old)}')
+          s=s.replace(old, '\n            <a class="btn" href="/open/folder?which=')
+          p.write_text(s, encoding='utf-8')
+          Path('.github/workflows/fix-v04614-agent-markup.yml').unlink()
+          PY
+      - name: Commit markup fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Normalize Agents markup for sticky routing [markup-fixed]"
+          git push
