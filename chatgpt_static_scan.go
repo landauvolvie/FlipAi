@@ -77,14 +77,30 @@ func sanitizeChatGPTProtocolMarker(v string) string {
 	if v == "" {
 		return ""
 	}
+
+	// URLs are useful because their host/path can identify the protocol, but
+	// query strings and fragments can contain ephemeral credentials. Remove
+	// those parts before checking the remaining marker for forbidden material.
 	low := strings.ToLower(v)
+	isURL := strings.HasPrefix(low, "http://") || strings.HasPrefix(low, "https://") ||
+		strings.HasPrefix(low, "ws://") || strings.HasPrefix(low, "wss://") ||
+		strings.HasPrefix(low, "chatgpt://") || strings.HasPrefix(low, "openai://")
+	if isURL {
+		if i := strings.IndexAny(v, "?#"); i >= 0 {
+			v = v[:i]
+		}
+		low = strings.ToLower(v)
+	}
+
 	for _, forbidden := range []string{"authorization:", "bearer ", "access_token", "refresh_token", "cookie:", "set-cookie:"} {
 		if strings.Contains(low, forbidden) {
 			return ""
 		}
 	}
-	if i := strings.IndexAny(v, "?#"); i >= 0 {
-		v = v[:i]
+	if !isURL {
+		if i := strings.IndexAny(v, "?#"); i >= 0 {
+			v = v[:i]
+		}
 	}
 	v = strings.TrimRight(v, ".,;:)]}\"'")
 	if len(v) > 200 {
