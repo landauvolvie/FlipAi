@@ -1,0 +1,1 @@
+If v0.46.9 finds attributable regular-ChatGPT IPC channels, map the exact main/preload/renderer handlers next. If it finds only app-specific cloud call sites, trace those call sites without copying authentication state.
