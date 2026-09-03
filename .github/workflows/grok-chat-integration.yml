@@ -24,6 +24,22 @@ jobs:
         run: python tools/patch_grok_generator.py
       - name: Apply Grok Chat integration
         run: python tools/integrate_grok_chat.py
+      - name: Normalize Grok sticky routing
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('sms_sticky_chatgpt.go')
+          s = p.read_text(encoding='utf-8')
+          # Earlier generic six-agent normalization and the current sticky-router
+          # adapter can both append X. Collapse only exact adjacent duplicates.
+          for duplicate, single in [
+              (' || target == "X" || target == "X"', ' || target == "X"'),
+              (' || sourceAgent == "X" || sourceAgent == "X"', ' || sourceAgent == "X"'),
+              (' && agent != "X" && agent != "X"', ' && agent != "X"'),
+          ]:
+              s = s.replace(duplicate, single)
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Format intended source files
         run: |
           gofmt -w \
