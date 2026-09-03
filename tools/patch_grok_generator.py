@@ -3,9 +3,8 @@ from pathlib import Path
 p = Path('tools/integrate_grok_chat.py')
 s = p.read_text(encoding='utf-8')
 
-# The current config.go uses compact one-line wrapper structs and aligned fields.
-# Rewrite only the generator's expected/replacement literals; doing this without
-# per-step assertions keeps overlapping replacements idempotent.
+# Adapt the temporary generator to the exact compact/aligned Config layout on
+# v0.46.21. Top-level agent config wrappers intentionally do not use omitempty.
 changes = [
     (
         'GeminiChatPrefix string `json:"geminiChatPrefix,omitempty"`\\n\\tNewSessionCommand',
@@ -17,11 +16,11 @@ changes = [
     ),
     (
         '\\tGeminiChat GeminiChatConfig `json:"geminiChat,omitempty"`\\n\\tGmail',
-        '\\tGeminiChat  GeminiChatConfig  `json:"geminiChat,omitempty"`\\n\\tSecurity',
+        '\\tGeminiChat  GeminiChatConfig  `json:"geminiChat"`\\n\\tSecurity',
     ),
     (
         '\\tGeminiChat GeminiChatConfig `json:"geminiChat,omitempty"`\\n\\tGrokChat   GrokChatConfig   `json:"grokChat,omitempty"`\\n\\tGmail',
-        '\\tGeminiChat  GeminiChatConfig  `json:"geminiChat,omitempty"`\\n\\tGrokChat    GrokChatConfig    `json:"grokChat,omitempty"`\\n\\tSecurity',
+        '\\tGeminiChat  GeminiChatConfig  `json:"geminiChat"`\\n\\tGrokChat    GrokChatConfig    `json:"grokChat"`\\n\\tSecurity',
     ),
     (
         'type GeminiChatConfig struct {\\n\\tAgentSettings\\n}\\n',
@@ -50,9 +49,9 @@ for old, new in changes:
 required = [
     'GeminiChatPrefix   string `json:"geminiChatPrefix,omitempty"`',
     'GrokChatPrefix     string `json:"grokChatPrefix,omitempty"`',
+    '\\tGeminiChat  GeminiChatConfig  `json:"geminiChat"`\\n\\tGrokChat    GrokChatConfig    `json:"grokChat"`\\n\\tSecurity',
     'type GeminiChatConfig struct{ AgentSettings }',
     'type GrokChatConfig struct{ AgentSettings }',
-    'GrokChatConfig',
 ]
 for token in required:
     if token not in s:
