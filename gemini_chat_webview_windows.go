@@ -49,6 +49,13 @@ const geminiChatTurnJS = `(async(input)=>{
     return candidates.find(b=>!b.disabled && b.offsetParent!==null)||candidates.find(b=>!b.disabled)||null;
   };
   const stop=()=>{const xs=unique([...all('button[aria-label*="Stop" i]'),...all('button[mattooltip*="Stop" i]'),...all('button[data-test-id*="stop" i]'),...all('button[data-testid*="stop" i]')]);return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
+  const responseFinishedChrome=node=>{
+    if(!node)return false;
+    const root=node.closest('model-response,[data-test-id="model-response"],[data-testid="model-response"]')||node;
+    const scope=root.parentElement||root;
+    const buttons=unique([...Array.from(root.querySelectorAll('button')),...Array.from(scope.querySelectorAll('button'))]);
+    return buttons.some(b=>/good response|bad response|regenerate|copy response|more options|share/i.test(((b.getAttribute('aria-label')||'')+' '+(b.getAttribute('mattooltip')||'')+' '+(b.innerText||'')).trim()));
+  };
   let c=null;
   for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Gemini is loaded but FlipAi could not find the prompt box. The Gemini site layout may have changed.',href:location.href};
@@ -82,7 +89,14 @@ const geminiChatTurnJS = `(async(input)=>{
   while(Date.now()<deadline){
     await sleep(250);
     const node=responseForTurn();
-    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:now||'Gemini completed the turn.',href:location.href}}
+    if(node){
+      started=true;
+      const now=text(node);
+      if(now===last)stable++;else{last=now;stable=0}
+      if(now&&responseFinishedChrome(node)&&stable>=2)return {ok:true,reply:now,href:location.href};
+      if(now&&!stop()&&stable>=5)return {ok:true,reply:now,href:location.href};
+      if(now&&stable>=16)return {ok:true,reply:now,href:location.href};
+    }
   }
   return {ok:false,detail:started?'Gemini started answering but did not finish within 90 seconds.':'Gemini did not produce a new response within 90 seconds.',href:location.href};
 })(%s)`
