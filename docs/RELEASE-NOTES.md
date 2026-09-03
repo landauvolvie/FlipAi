@@ -1,23 +1,17 @@
-# FlipAi v0.46.18
+# FlipAi v0.46.19
 
-This hotfix fixes two regular ChatGPT SMS regressions visible in the ChatGPT and Google Voice screenshots.
+This release adds regular Claude Chat as a separate browser-backed FlipAi agent, alongside Claude Code and regular ChatGPT Chat.
 
-## Only the new ChatGPT turn is returned
+## Claude Chat agent
 
-FlipAi previously identified a new ChatGPT answer by checking whether the text of the last assistant element had changed. ChatGPT can update an older assistant element while it renders controls or an image, so a later SMS could accidentally reuse the previous turn's answer. That is why an image request could return the earlier Gmail summary followed by FlipAi's image-delivery notice.
+Claude Chat signs into claude.ai through its own persistent FlipAi WebView2 profile. It has Connect, Test, and Disconnect controls, an independent H: SMS shortcut, sticky follow-up routing, NEW conversation support, its own allowed-phone list and security code, and the same receipt/progress controls as the other agents. Claude Code remains a separate agent and is not replaced.
 
-v0.46.18 records the user and assistant message boundaries before sending the SMS and accepts only an assistant node created for the new turn. Mutations to older assistant messages are ignored. Image-only turns are also recognized as the new turn even when their assistant node has no text.
+Existing phone-number permissions are not silently copied into Claude Chat. Add a number under Claude Chat before H: can receive texts. This keeps Claude Chat authorization independent from Codex, Claude Code, and ChatGPT Chat.
 
-## Clean SMS prompts in ChatGPT
+## RAM and lifecycle protection
 
-Regular ChatGPT no longer sees the internal `<sms_command>` wrapper. The web chat now shows only the user's message, followed by the shared short SMS instruction, for example:
-
-`Generate me an image of a nice waterfall`
-
-`Reply for SMS. Keep it brief and plain text.`
-
-The same shared instruction remains editable in FlipAi settings.
+Claude Chat uses one process-level WebView2 owner protected by a Windows named mutex, cheap worker liveness checks, a persistent browser profile, controlled restart behavior, and explicit shutdown/update cleanup. A slow Claude renderer therefore cannot cause FlipAi to spawn repeated hidden browser trees and consume unbounded RAM.
 
 ## Verification
 
-The real Chromium browser test now deliberately mutates an old assistant response before creating the new response. The test fails with the old extraction rule and passes only when FlipAi returns the new turn. A Go regression test also verifies that ChatGPT SMS prompts contain no internal wrapper.
+The release is gated by the normal Linux and Windows Go tests, vet/race checks, Windows x64 build, Google Voice embedded-browser checks, installer build/smoke test, Defender scan when available, and the release workflow before the installer is published.
