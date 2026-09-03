@@ -22,6 +22,15 @@ jobs:
           go-version-file: go.mod
       - name: Apply Gemini Chat integration
         run: python tools/integrate_gemini_chat.py
+      - name: Normalize generated Go indentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('zzzzzz_gemini_chat_ui.go')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('\n\\t', '\n\t')
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Format
         run: gofmt -w *.go
       - name: Test
