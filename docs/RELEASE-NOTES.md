@@ -1,13 +1,15 @@
-# FlipAi v0.46.20
+# FlipAi v0.46.21
 
-This hotfix fixes the Claude Chat **Connect** screen showing `404 page not found`.
+Gemini Chat is now a fifth independent FlipAi agent, using the user's regular Gemini account in a dedicated persistent browser session at gemini.google.com. It does not use the Gemini API or require Gemini CLI.
 
-## Claude Chat Connect works
+## Gemini Chat
 
-The v0.46.19 Agents page correctly posted Connect, Test, and Disconnect to Claude Chat-specific URLs, and the Claude Chat handlers already existed, but those three URLs were accidentally omitted from FlipAi's local HTTP router. The embedded FlipAi window therefore received a local 404 before Claude sign-in could open.
+The Agents page now includes Gemini Chat with Connect, Test, Disconnect, routing, access, security, and shared SMS settings. The default SMS shortcut is `M:`. Once selected for a phone, unprefixed follow-up texts stay with Gemini Chat until another agent is selected.
 
-v0.46.20 registers all three Claude Chat action routes. Pressing **Connect** now reaches the Claude Chat sign-in handler and opens the dedicated persistent Claude browser session as intended. Test and Disconnect are wired through the same authenticated POST-only route table.
+Gemini Chat has its own WebView2 profile and its own phone/PIN security boundary. A saved sign-in is restored invisibly after FlipAi or Windows restarts, while the singleton browser owner prevents duplicate hidden Gemini browser trees.
 
-## Regression protection
+## Connection and regression protection
 
-A route-level test now requests all three Claude Chat action URLs and verifies that they reach FlipAi's POST-only action guard instead of falling through to 404. The normal Linux, Windows, race, browser, lifecycle, installer, and release gates still run before publishing.
+Connect opens the dedicated Gemini sign-in window at gemini.google.com. Test performs a real turn through that browser session. Connect, Test, and Disconnect are all registered in FlipAi's authenticated POST action router, with route-level regression coverage so they cannot fall through to a local 404 like the Claude Chat v0.46.19 issue.
+
+The release continues to run Linux/browser tests plus Windows unit, vet, race, build, lifecycle, Google Voice, Defender, installer, and real install/uninstall smoke gates before publishing.
