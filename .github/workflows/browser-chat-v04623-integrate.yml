@@ -6,6 +6,7 @@ on:
       - fix/browser-chat-runtime-v04623
     paths:
       - scripts/apply_browser_chat_v04623.py
+      - scripts/repair_browser_chat_patcher_v04623.py
       - .github/workflows/browser-chat-v04623-integrate.yml
 
 permissions:
@@ -24,6 +25,9 @@ jobs:
         with:
           go-version: '1.23.x'
 
+      - name: Repair formatting-sensitive patch step
+        run: python3 scripts/repair_browser_chat_patcher_v04623.py
+
       - name: Apply focused browser-chat fixes
         run: python3 scripts/apply_browser_chat_v04623.py
 
@@ -40,6 +44,7 @@ jobs:
       - name: Remove temporary integration files
         run: |
           rm -f scripts/apply_browser_chat_v04623.py
+          rm -f scripts/repair_browser_chat_patcher_v04623.py
           rm -f .github/workflows/browser-chat-v04623-integrate.yml
 
       - name: Commit integrated source
