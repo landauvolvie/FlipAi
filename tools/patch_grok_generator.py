@@ -3,7 +3,10 @@ from pathlib import Path
 p = Path('tools/integrate_grok_chat.py')
 s = p.read_text(encoding='utf-8')
 
-patches = [
+# The current config.go uses compact one-line wrapper structs and aligned fields.
+# Rewrite only the generator's expected/replacement literals; doing this without
+# per-step assertions keeps overlapping replacements idempotent.
+changes = [
     (
         'GeminiChatPrefix string `json:"geminiChatPrefix,omitempty"`\\n\\tNewSessionCommand',
         'GeminiChatPrefix   string `json:"geminiChatPrefix,omitempty"`\\n\\tNewSessionCommand',
@@ -25,8 +28,8 @@ patches = [
         'type GeminiChatConfig struct{ AgentSettings }\\n',
     ),
     (
-        'type GeminiChatConfig struct {\\n\\tAgentSettings\\n}\\n\\ntype GrokChatConfig struct {\\n\\tAgentSettings\\n}\\n',
-        'type GeminiChatConfig struct{ AgentSettings }\\n\\ntype GrokChatConfig struct{ AgentSettings }\\n',
+        'type GrokChatConfig struct {\\n\\tAgentSettings\\n}\\n',
+        'type GrokChatConfig struct{ AgentSettings }\\n',
     ),
     (
         '// values are "C", "A", "G", "H", or "M".',
@@ -41,11 +44,19 @@ patches = [
         "'GrokChatConfig'",
     ),
 ]
-
-for old, new in patches:
-    if old not in s:
-        raise SystemExit(f'generator patch target missing: {old!r}')
+for old, new in changes:
     s = s.replace(old, new)
+
+required = [
+    'GeminiChatPrefix   string `json:"geminiChatPrefix,omitempty"`',
+    'GrokChatPrefix     string `json:"grokChatPrefix,omitempty"`',
+    'type GeminiChatConfig struct{ AgentSettings }',
+    'type GrokChatConfig struct{ AgentSettings }',
+    'GrokChatConfig',
+]
+for token in required:
+    if token not in s:
+        raise SystemExit(f'adapted generator is still missing {token!r}')
 
 p.write_text(s, encoding='utf-8')
 print('Grok generator adapted to current compact Config layout')
