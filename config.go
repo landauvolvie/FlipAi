@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.19"
+const version = "0.46.20"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
