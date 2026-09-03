@@ -10,6 +10,14 @@ def replace_once(path, old, new):
     p.write_text(s.replace(old, new, 1))
 
 
+def replace_first(path, old, new):
+    p = Path(path)
+    s = p.read_text()
+    if old not in s:
+        raise SystemExit(f"{path}: expected a match: {old[:100]!r}")
+    p.write_text(s.replace(old, new, 1))
+
+
 # Claude Chat is a new independent agent. Existing phone/PIN permissions must
 # not be copied into it automatically; users explicitly opt a number into H:.
 replace_once('agents.go', '''func migrateClaudeChatAgent(cfg *Config) {
@@ -31,13 +39,13 @@ replace_once('agents.go', '''func migrateClaudeChatAgent(cfg *Config) {
 }''')
 
 # Update the existing three-agent UI regressions for the fourth independent pane.
-replace_once('ui_page_agents_test.go', '`name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`,', '`name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="claudeChatPrefix"`,')
+replace_first('ui_page_agents_test.go', '`name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`,', '`name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="claudeChatPrefix"`,')
 replace_once('ui_page_agents_test.go', '`name="codexRequireCode"`, `name="claudeRequireCode"`, `name="chatgptRequireCode"`,', '`name="codexRequireCode"`, `name="claudeRequireCode"`, `name="chatgptRequireCode"`, `name="claudeChatRequireCode"`,')
 replace_once('ui_page_agents_test.go', '`name="codexAckDelay"`, `name="claudeAckDelay"`, `name="chatgptAckDelay"`,', '`name="codexAckDelay"`, `name="claudeAckDelay"`, `name="chatgptAckDelay"`, `name="claudeChatAckDelay"`,')
 replace_once('ui_page_agents_test.go', 'if strings.Count(body, `name="sharedReplyStyle"`) != 3 {\n\t\tt.Fatalf("shared SMS instruction should be available from all three panes")\n\t}', 'if strings.Count(body, `name="sharedReplyStyle"`) != 4 {\n\t\tt.Fatalf("shared SMS instruction should be available from all four panes")\n\t}')
 replace_once('ui_page_agents_test.go', '`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`, `name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="sharedReplyStyle"`', '`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`, `name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="claudeChatPrefix"`, `name="sharedReplyStyle"`')
 replace_once('ui_page_agents_test.go', 'if cfg.Codex.Instruction != "" || cfg.Claude.Instruction != "" || cfg.ChatGPT.Instruction != "" {', 'if cfg.Codex.Instruction != "" || cfg.Claude.Instruction != "" || cfg.ChatGPT.Instruction != "" || cfg.ClaudeChat.Instruction != "" {')
-replace_once('ui_page_agents_test.go', 'for _, agent := range []string{"C", "A", "G"} {', 'for _, agent := range []string{"C", "A", "G", "H"} {')
+replace_first('ui_page_agents_test.go', 'for _, agent := range []string{"C", "A", "G"} {', 'for _, agent := range []string{"C", "A", "G", "H"} {')
 replace_once('ui_page_agents_test.go', '// FlipAi has one SMS instruction for all three agents.', '// FlipAi has one SMS instruction for all four agents.')
 
 # Release metadata must stay in lockstep with the compiled version constant.
