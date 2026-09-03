@@ -9,20 +9,9 @@ import (
 	"time"
 )
 
-// Everything that belongs to one agent lives on that agent.
-//
-// FlipAi used to keep a single allowlist of phone numbers, one security code,
-// and one set of reply preferences, all shared. Each agent now owns its own
-// allowlist, access kind, security code and reply behaviour. The same real phone
-// may deliberately appear on both agents; in that case C:/A: selects the SMS
-// destination and an unprefixed SMS uses the configured default agent.
-
 const (
-	// AccessAll lets a number both text the agent and call it.
-	AccessAll = "all"
-	// AccessSMS lets a number text the agent only.
-	AccessSMS = "sms"
-	// AccessVoice lets a number call the agent only.
+	AccessAll   = "all"
+	AccessSMS   = "sms"
 	AccessVoice = "voice"
 )
 
@@ -48,7 +37,6 @@ func normalizeAccess(access string) string {
 	}
 }
 
-// AgentPhone is one number allowed to reach one agent.
 type AgentPhone struct {
 	Number string    `json:"number"`
 	Label  string    `json:"label,omitempty"`
@@ -61,30 +49,16 @@ func (p AgentPhone) AccessLabel() string { return accessLabel(p.Access) }
 func (p AgentPhone) AllowsSMS() bool     { return p.Access == AccessAll || p.Access == AccessSMS }
 func (p AgentPhone) AllowsVoice() bool   { return p.Access == AccessAll || p.Access == AccessVoice }
 
-// AgentSettings is the part of an agent's configuration that is the same shape
-// for every agent. It is embedded, so the stored JSON stays flat and the keys
-// that already existed keep their meaning.
 type AgentSettings struct {
-	// Phones is this agent's allowlist. The same number may also be present on
-	// the other agent; each copy keeps its own SMS/voice access policy.
-	Phones []AgentPhone `json:"phones,omitempty"`
+	Phones      []AgentPhone `json:"phones,omitempty"`
+	CallerNames string       `json:"callerNames,omitempty"`
 
-	// CallerNames are the contact names Google Voice displays for callers who
-	// have no number FlipAi can read. Opt-in, exact matches.
-	CallerNames string `json:"callerNames,omitempty"`
-
-	// RequireCode makes this agent refuse a text that does not begin with its
-	// own code. Off for a new install; each agent decides for itself.
 	RequireCode bool   `json:"requireCode,omitempty"`
 	CodeSalt    string `json:"codeSalt,omitempty"`
 	CodeHash    string `json:"codeHash,omitempty"`
 
-	// Instruction is the single line of framing appended to a text before it
-	// reaches this agent. Empty means FlipAi's built-in wording.
 	Instruction string `json:"replyStyleHint,omitempty"`
 
-	// ReplyAck and ProgressUpdates are per agent. A nil pointer means the agent
-	// has never been configured and follows the built-in default.
 	ReplyAck                *bool `json:"replyAck,omitempty"`
 	AckDelaySeconds         int   `json:"ackDelaySeconds,omitempty"`
 	ProgressUpdates         *bool `json:"progressUpdates,omitempty"`
@@ -114,38 +88,55 @@ func (s AgentSettings) ackDelay() time.Duration {
 	return time.Duration(s.AckDelaySeconds) * time.Second
 }
 
-// agentSettings returns reply behavior for an SMS destination. ChatGPT Chat
-// deliberately reuses the shared Google Voice reply/progress defaults; phone
-// authorization and optional security-code checking are resolved from the
-// sender's existing Codex/Claude allowlist entry before G: is accepted.
 func agentSettings(cfg Config, agent string) AgentSettings {
-	switch agent {
+	switch strings.ToUpper(strings.TrimSpace(agent)) {
 	case "A":
 		return cfg.Claude.AgentSettings
 	case "G":
 		return cfg.ChatGPT.AgentSettings
+	case "H":
+		return cfg.ClaudeChat.AgentSettings
 	default:
 		return cfg.Codex.AgentSettings
 	}
 }
 
-func agentDisplayName(agent string) string {
+func putAgentSettingsConfig(cfg *Config, agent string, s AgentSettings) {
 	switch strings.ToUpper(strings.TrimSpace(agent)) {
 	case "A":
-		return "Claude"
+		cfg.Claude.AgentSettings = s
 	case "G":
-		return "ChatGPT Chat"
-	case "B", "CA", "AC":
-		return "Codex and Claude"
-	case "CG", "GC":
-		return "Codex and ChatGPT Chat"
-	case "AG", "GA":
-		return "Claude and ChatGPT Chat"
-	case "CAG", "CGA", "ACG", "AGC", "GCA", "GAC":
-		return "Codex, Claude, and ChatGPT Chat"
+		cfg.ChatGPT.AgentSettings = s
+	case "H":
+		cfg.ClaudeChat.AgentSettings = s
 	default:
+		cfg.Codex.AgentSettings = s
+	}
+}
+
+func agentDisplayName(agent string) string {
+	marker := strings.ToUpper(strings.TrimSpace(agent))
+	if marker == "B" {
+		marker = "CA"
+	}
+	var names []string
+	for _, item := range []struct{ key, name string }{
+		{"C", "Codex"}, {"A", "Claude"}, {"G", "ChatGPT Chat"}, {"H", "Claude Chat"},
+	} {
+		if strings.Contains(marker, item.key) {
+			names = append(names, item.name)
+		}
+	}
+	if len(names) == 0 {
 		return "Codex"
 	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	if len(names) == 2 {
+		return names[0] + " and " + names[1]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1]
 }
 
 func agentPhoneForSender(cfg Config, agent, raw string) (AgentPhone, bool) {
@@ -161,9 +152,6 @@ func agentPhoneForSender(cfg Config, agent, raw string) (AgentPhone, bool) {
 	return AgentPhone{}, false
 }
 
-// combinedAgentPhone is used only while admitting a message from a number that
-// exists on both agents. The actual per-agent permissions stay separate; this
-// synthetic value tells the transport whether either copy permits the transport.
 func combinedAgentPhone(a, b AgentPhone) AgentPhone {
 	p := a
 	sms := a.AllowsSMS() || b.AllowsSMS()
@@ -179,15 +167,14 @@ func combinedAgentPhone(a, b AgentPhone) AgentPhone {
 	return p
 }
 
-// agentForSender resolves a unique number directly. "B" is an internal marker
-// meaning the number is allowed to text both agents, so the SMS shortcut must
-// choose the destination. If only one copy permits SMS, that agent remains the
-// only SMS destination even though the number may also call the other agent.
+// agentForSender returns a marker containing every SMS-capable destination for
+// the number. Browser chat agents are SMS-only and therefore never widen call
+// permissions.
 func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok bool) {
 	var marker strings.Builder
 	found := false
 	sms, voice := false, false
-	for _, candidate := range []string{"C", "A", "G"} {
+	for _, candidate := range []string{"C", "A", "G", "H"} {
 		p, exists := agentPhoneForSender(cfg, candidate, raw)
 		if !exists {
 			continue
@@ -218,19 +205,14 @@ func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok 
 	return marker.String(), phone, true
 }
 
-// allAgentPhones lists every allowed number across agents, newest agent order
-// first, for the places that need to show or check the whole set.
 func allAgentPhones(cfg Config) []AgentPhone {
 	var out []AgentPhone
-	for _, agent := range []string{"C", "A", "G"} {
+	for _, agent := range []string{"C", "A", "G", "H"} {
 		out = append(out, agentSettings(cfg, agent).Phones...)
 	}
 	return out
 }
 
-// smsAllowedFrom is the newline list the Google Voice email parser checks. It is
-// derived from the per-agent lists so there is still exactly one source of
-// truth for who may reach FlipAi.
 func smsAllowedFrom(cfg Config) string {
 	seen := map[string]bool{}
 	var numbers []string
@@ -245,8 +227,6 @@ func smsAllowedFrom(cfg Config) string {
 	return strings.Join(numbers, "\n")
 }
 
-// normalizeAgentPhones cleans one agent's list. Duplicates inside the same
-// list collapse, while the same number on the other agent is intentionally valid.
 func normalizeAgentPhones(list []AgentPhone, _ map[string]string) ([]AgentPhone, error) {
 	seen := map[string]bool{}
 	out := make([]AgentPhone, 0, len(list))
@@ -273,18 +253,16 @@ func normalizeAgentPhones(list []AgentPhone, _ map[string]string) ([]AgentPhone,
 	return out, nil
 }
 
-// normalizeAgents cleans each phone list independently. Caller names remain
-// exclusive because a phone call has no C:/A: shortcut with which to resolve the
-// same displayed contact name on two agents.
 func normalizeAgents(cfg *Config) error {
 	claimedNames := map[string]string{}
-	for _, agent := range []string{"C", "A", "G"} {
+	for _, agent := range []string{"C", "A", "G", "H"} {
 		settings := agentSettings(*cfg, agent)
 		cleaned, err := normalizeAgentPhones(settings.Phones, nil)
 		if err != nil {
 			return fmt.Errorf("%s numbers: %w", agentDisplayName(agent), err)
 		}
-		if agent == "G" {
+		browserChat := agent == "G" || agent == "H"
+		if browserChat {
 			for i := range cleaned {
 				cleaned[i].Access = AccessSMS
 			}
@@ -304,38 +282,23 @@ func normalizeAgents(cfg *Config) error {
 			settings.CallerNames = strings.Join(names, "\n")
 		}
 		settings.Phones = cleaned
-		settings.Instruction = "" // retained only for old bridge.json compatibility
+		settings.Instruction = ""
 		if settings.RequireCode && settings.CodeHash == "" {
 			return fmt.Errorf("%s: set a security code before requiring one", agentDisplayName(agent))
 		}
-		switch agent {
-		case "A":
-			cfg.Claude.AgentSettings = settings
-		case "G":
-			cfg.ChatGPT.AgentSettings = settings
-		default:
-			cfg.Codex.AgentSettings = settings
-		}
+		putAgentSettingsConfig(cfg, agent, settings)
 	}
 	return nil
 }
 
-// migrateAgentSettings moves a pre-agent configuration onto the agents.
-//
-// The old shape had one shared allowlist and one shared security code, with the
-// agent picked per message by a prefix. There is no way to split a shared list
-// by intent after the fact, so every number moves to the default agent -- the
-// one an unprefixed text already went to -- and the user can move any of them.
 func migrateAgentSettings(cfg *Config) {
 	if cfg.Security.AgentsMigrated {
-		// Already moved. Running it again would refill a list the user has since
-		// emptied, or hand one agent's code back to the other.
 		ensureAgentReplyDefaults(cfg)
 		migrateChatGPTAgent(cfg)
+		migrateClaudeChatAgent(cfg)
 		return
 	}
 	cfg.Security.AgentsMigrated = true
-	migrated := false
 	if len(cfg.Codex.Phones) == 0 && len(cfg.Claude.Phones) == 0 {
 		numbers, err := normalizeAllowedPhoneList(cfg.GoogleVoice.AllowedFrom)
 		if err == nil && len(numbers) > 0 {
@@ -354,11 +317,8 @@ func migrateAgentSettings(cfg *Config) {
 			} else {
 				cfg.Codex.Phones = phones
 			}
-			migrated = true
 		}
 	}
-	// A shared security code applied to every message, so both agents inherit it
-	// rather than one of them silently losing the protection.
 	if cfg.Security.RequireCode && cfg.Security.CodeHash != "" {
 		for _, agent := range []string{"C", "A"} {
 			s := agentSettings(*cfg, agent)
@@ -368,65 +328,60 @@ func migrateAgentSettings(cfg *Config) {
 			s.RequireCode = true
 			s.CodeSalt = cfg.Security.CodeSalt
 			s.CodeHash = cfg.Security.CodeHash
-			if agent == "A" {
-				cfg.Claude.AgentSettings = s
-			} else {
-				cfg.Codex.AgentSettings = s
-			}
-			migrated = true
+			putAgentSettingsConfig(cfg, agent, s)
 		}
 	}
-	// A framing line the user actually wrote becomes each agent's own starting
-	// point. The built-in wording is not copied: an empty box has to keep
-	// meaning "use FlipAi's own wording", or clearing one would silently refill
-	// it on the next load.
 	if hint := strings.TrimSpace(cfg.GoogleVoice.ReplyStyleHint); hint != "" && hint != defaultReplyStyleHint {
 		for _, agent := range []string{"C", "A"} {
 			s := agentSettings(*cfg, agent)
-			if s.Instruction != "" {
-				continue
-			}
-			s.Instruction = hint
-			if agent == "A" {
-				cfg.Claude.AgentSettings = s
-			} else {
-				cfg.Codex.AgentSettings = s
+			if s.Instruction == "" {
+				s.Instruction = hint
+				putAgentSettingsConfig(cfg, agent, s)
 			}
 		}
 	}
 	ensureAgentReplyDefaults(cfg)
 	migrateChatGPTAgent(cfg)
-	if migrated {
-		// The old shared fields stay readable so a downgrade still works, but
-		// nothing reads them for authorization any more.
-		_ = migrated
-	}
+	migrateClaudeChatAgent(cfg)
 }
 
-// migrateChatGPTAgent gives G: its own allowlist without breaking upgraded
-// installs that already used G through a Codex/Claude phone permission.
 func migrateChatGPTAgent(cfg *Config) {
 	if cfg.Security.ChatGPTAgentMigrated {
 		return
 	}
 	cfg.Security.ChatGPTAgentMigrated = true
-	if len(cfg.ChatGPT.Phones) == 0 {
+	migrateBrowserChatAgent(cfg, "G", []string{"C", "A"})
+}
+
+func migrateClaudeChatAgent(cfg *Config) {
+	if cfg.Security.ClaudeChatAgentMigrated {
+		return
+	}
+	cfg.Security.ClaudeChatAgentMigrated = true
+	// Existing installs already had C/A/G phone permissions. Giving the new
+	// browser agent the same SMS-capable numbers preserves the user's current
+	// remote access while still keeping Claude Chat independently editable.
+	migrateBrowserChatAgent(cfg, "H", []string{"C", "A", "G"})
+}
+
+func migrateBrowserChatAgent(cfg *Config, target string, sources []string) {
+	t := agentSettings(*cfg, target)
+	if len(t.Phones) == 0 {
 		seen := map[string]bool{}
-		for _, agent := range []string{"C", "A"} {
+		for _, agent := range sources {
 			for _, p := range agentSettings(*cfg, agent).Phones {
 				if !p.AllowsSMS() || seen[p.Number] {
 					continue
 				}
 				seen[p.Number] = true
 				p.Access = AccessSMS
-				cfg.ChatGPT.Phones = append(cfg.ChatGPT.Phones, p)
+				t.Phones = append(t.Phones, p)
 			}
 		}
 	}
-	// Preserve an existing PIN only when the existing SMS agents agree on it.
-	if cfg.ChatGPT.CodeHash == "" {
+	if t.CodeHash == "" {
 		var secure []AgentSettings
-		for _, agent := range []string{"C", "A"} {
+		for _, agent := range sources {
 			s := agentSettings(*cfg, agent)
 			if s.RequireCode && s.CodeHash != "" {
 				secure = append(secure, s)
@@ -437,22 +392,21 @@ func migrateChatGPTAgent(cfg *Config) {
 			for _, s := range secure[1:] {
 				if s.CodeHash != first.CodeHash || s.CodeSalt != first.CodeSalt {
 					same = false
+					break
 				}
 			}
 			if same {
-				cfg.ChatGPT.RequireCode = true
-				cfg.ChatGPT.CodeHash = first.CodeHash
-				cfg.ChatGPT.CodeSalt = first.CodeSalt
+				t.RequireCode = true
+				t.CodeHash = first.CodeHash
+				t.CodeSalt = first.CodeSalt
 			}
 		}
 	}
+	putAgentSettingsConfig(cfg, target, t)
 }
 
-// ensureAgentReplyDefaults gives every destination the same controls. Codex and
-// Claude acknowledge immediately; ChatGPT's default config supplies a 30-second
-// delay so quick conversational answers do not generate a redundant receipt.
 func ensureAgentReplyDefaults(cfg *Config) {
-	for _, agent := range []string{"C", "A", "G"} {
+	for _, agent := range []string{"C", "A", "G", "H"} {
 		s := agentSettings(*cfg, agent)
 		if s.ReplyAck == nil {
 			s.ReplyAck = boolPtr(true)
@@ -466,18 +420,15 @@ func ensureAgentReplyDefaults(cfg *Config) {
 		if s.AckDelaySeconds < 0 {
 			s.AckDelaySeconds = 0
 		}
-		switch agent {
-		case "A":
-			cfg.Claude.AgentSettings = s
-		case "G":
-			cfg.ChatGPT.AgentSettings = s
-		default:
-			cfg.Codex.AgentSettings = s
+		// Browser-chat agents wait a little before sending a receipt so quick
+		// conversational responses do not create a redundant extra SMS.
+		if (agent == "G" || agent == "H") && s.AckDelaySeconds == 0 {
+			s.AckDelaySeconds = 30
 		}
+		putAgentSettingsConfig(cfg, agent, s)
 	}
 }
 
-// setAgentCode stores a per-agent security code. An empty code clears it.
 func setAgentCode(cfg *Config, agent, code string) error {
 	s := agentSettings(*cfg, agent)
 	code = strings.TrimSpace(code)
@@ -493,18 +444,10 @@ func setAgentCode(cfg *Config, agent, code string) error {
 		}
 		s.CodeSalt, s.CodeHash = salt, hashSecurityCode(code, salt)
 	}
-	switch agent {
-	case "A":
-		cfg.Claude.AgentSettings = s
-	case "G":
-		cfg.ChatGPT.AgentSettings = s
-	default:
-		cfg.Codex.AgentSettings = s
-	}
+	putAgentSettingsConfig(cfg, agent, s)
 	return nil
 }
 
-// verifyAgentCode checks a code against one agent's own stored code.
 func verifyAgentCode(s AgentSettings, code string) bool {
 	if s.CodeSalt == "" || s.CodeHash == "" {
 		return false
@@ -513,16 +456,13 @@ func verifyAgentCode(s AgentSettings, code string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(s.CodeHash)) == 1
 }
 
-// salvageAgents keeps FlipAi startable when a stored configuration has bad
-// entries. A shared number is valid and is preserved on both agents; only invalid
-// or duplicate entries inside the same agent are dropped. Caller names remain
-// exclusive because calls have no SMS shortcut.
 func salvageAgents(cfg *Config) {
 	claimedNames := map[string]bool{}
-	for _, agent := range []string{"C", "A", "G"} {
+	for _, agent := range []string{"C", "A", "G", "H"} {
 		s := agentSettings(*cfg, agent)
 		seenNumbers := map[string]bool{}
 		kept := make([]AgentPhone, 0, len(s.Phones))
+		browserChat := agent == "G" || agent == "H"
 		for _, p := range s.Phones {
 			number := normalizeUSPhone(p.Number)
 			if number == "" || seenNumbers[number] {
@@ -531,14 +471,14 @@ func salvageAgents(cfg *Config) {
 			seenNumbers[number] = true
 			p.Number = number
 			p.Access = normalizeAccess(p.Access)
-			if agent == "G" {
+			if browserChat {
 				p.Access = AccessSMS
 			}
 			kept = append(kept, p)
 		}
 		sort.Slice(kept, func(i, j int) bool { return kept[i].Number < kept[j].Number })
 		s.Phones = kept
-		if agent == "G" {
+		if browserChat {
 			s.CallerNames = ""
 		} else {
 			names, _ := normalizeAllowedCallerLabels(s.CallerNames, false)
@@ -557,13 +497,6 @@ func salvageAgents(cfg *Config) {
 			s.RequireCode = false
 		}
 		s.Instruction = ""
-		switch agent {
-		case "A":
-			cfg.Claude.AgentSettings = s
-		case "G":
-			cfg.ChatGPT.AgentSettings = s
-		default:
-			cfg.Codex.AgentSettings = s
-		}
+		putAgentSettingsConfig(cfg, agent, s)
 	}
 }
