@@ -1,9 +1,9 @@
-# FlipAi v0.46.24
+# FlipAi v0.46.25
 
-Gemini Chat completion detection now finishes the SMS turn when Gemini has visibly completed its response, even if Gemini leaves a stale Stop-like control in the page.
+Gemini Chat SMS replies no longer include Gemini's hidden accessibility speaker label.
 
 ## Gemini Chat
 
-The browser driver now recognizes Gemini's finished-response action controls as a strong completion signal. It still keeps the existing no-Stop fast path, and adds a stable-text fallback so an obsolete or unrelated Stop element can never hold an already-finished reply for the full 90-second timeout.
+Gemini's page can expose response text to automation as `Gemini said ...` even though the visible answer does not show that label. FlipAi now strips that provider-only accessibility prefix before sending the reply through Google Voice.
 
-This fixes the case where Gemini visibly answered immediately but FlipAi later texted `Gemini started answering but did not finish within 90 seconds.`
+The SMS therefore starts directly with the model's actual answer, matching the behavior of ChatGPT Chat.
