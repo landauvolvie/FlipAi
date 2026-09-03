@@ -31,6 +31,7 @@ func explicitSMSAgent(raw string, cfg Config) string {
 			{"C", configuredCodexPrefix(cfg)},
 			{"A", configuredClaudePrefix(cfg)},
 			{"G", configuredChatGPTPrefix(cfg)},
+			{"H", configuredClaudeChatPrefix(cfg)},
 		} {
 			if _, ok := stripAgentCommandPrefix(v, x.prefix); ok || isAgentNewSession(v, x.prefix, newWord) {
 				return x.agent
@@ -43,8 +44,8 @@ func explicitSMSAgent(raw string, cfg Config) string {
 func smsTargetAllowed(sourceAgent, target string) bool {
 	sourceAgent = strings.ToUpper(strings.TrimSpace(sourceAgent))
 	target = strings.ToUpper(strings.TrimSpace(target))
-	if sourceAgent == "B" { // old test/config compatibility
-		return target == "C" || target == "A" || target == "G"
+	if sourceAgent == "B" {
+		return target == "C" || target == "A" || target == "G" || target == "H"
 	}
 	return target != "" && strings.Contains(sourceAgent, target)
 }
@@ -60,16 +61,12 @@ func selectStickySMSAgent(raw string, cfg Config, sourceAgent, sticky string) (s
 	if smsTargetAllowed(sourceAgent, sticky) {
 		return sticky, nil
 	}
-	// A phone that can reach only one CLI agent has no ambiguity. Shared phones
-	// have no default: the first conversation must name C:, A:, or G: once.
-	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" {
+	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" {
 		return sourceAgent, nil
 	}
-	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, or G: for ChatGPT Chat")
+	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, or H: for Claude Chat")
 }
 
-// authorizeChatGPTRaw uses ChatGPT Chat's own PIN policy. G no longer
-// borrows whichever Codex/Claude permission happened to admit the phone.
 func authorizeChatGPTRaw(raw string, cfg Config, _ string) (string, error) {
 	s := agentSettings(cfg, "G")
 	if !s.RequireCode {
@@ -114,13 +111,17 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 		return remoteCommand{}, err
 	}
 	if strings.TrimSpace(raw) != "" {
-		if target == "G" {
+		switch target {
+		case "G":
 			return parseChatGPTSMSCommand(raw, cfg, sourceAgent)
+		case "H":
+			return parseClaudeChatSMSCommand(raw, cfg)
+		default:
+			return parseRemoteCommand(raw, cfg, target)
 		}
-		return parseRemoteCommand(raw, cfg, target)
 	}
-	if target == "G" {
-		return remoteCommand{}, errors.New("ChatGPT Chat over Google Voice supports text messages in this release; switch to C: or A: for an attachment")
+	if target == "G" || target == "H" {
+		return remoteCommand{}, fmt.Errorf("%s over Google Voice supports text messages in this release; switch to C: or A: for an attachment", agentDisplayName(target))
 	}
 	return parseRemoteCommandForMessage(raw, cfg, target, m)
 }
@@ -144,7 +145,7 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 
 func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
 	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "C" && agent != "A" && agent != "G" {
+	if agent != "C" && agent != "A" && agent != "G" && agent != "H" {
 		return fmt.Errorf("unknown sticky SMS agent %q", agent)
 	}
 	key := stickySMSKey(sender)
