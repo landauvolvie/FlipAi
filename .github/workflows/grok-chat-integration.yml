@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Adapt generator to current compact config layout
+        run: python tools/patch_grok_generator.py
       - name: Apply Grok Chat integration
         run: python tools/integrate_grok_chat.py
       - name: Format intended source files
@@ -35,7 +37,7 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Remove integration scaffolding
-        run: git rm tools/integrate_grok_chat.py .github/workflows/grok-chat-integration.yml
+        run: git rm tools/integrate_grok_chat.py tools/patch_grok_generator.py .github/workflows/grok-chat-integration.yml
       - name: Commit integrated source
         shell: bash
         run: |
