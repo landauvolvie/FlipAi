@@ -84,6 +84,7 @@ func loadOrCreateConfig(cfgPath, dataDir string) Config {
 		cfg.Security.ChatGPTAgentMigrated = true
 		cfg.Security.ClaudeChatAgentMigrated = true
 		cfg.Security.GeminiChatAgentMigrated = true
+		cfg.Security.GrokChatAgentMigrated = true
 		if err := saveConfig(cfgPath, cfg); err != nil {
 			panic(err)
 		}
@@ -139,7 +140,7 @@ func waitForShutdown(dataDir, cfgPath string, d time.Duration) {
 	}
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() && !chatGPTBrowserStillOpen(dataDir) && !claudeChatBrowserStillOpen(dataDir) && !geminiChatBrowserStillOpen(dataDir) {
+		if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() && !chatGPTBrowserStillOpen(dataDir) && !claudeChatBrowserStillOpen(dataDir) && !geminiChatBrowserStillOpen(dataDir) && !grokChatBrowserStillOpen(dataDir) {
 			// WebView2 keeps helper processes and open handles inside the data
 			// folder for a moment after its window goes; Setup deletes that
 			// folder next, so give them time to let go.

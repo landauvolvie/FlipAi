@@ -758,7 +758,7 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	var cleanupInbound func()
 	var prepErr error
 	if !rc.Status && !rc.New && len(m.Attachments) > 0 {
-		if rc.Agent == "G" || rc.Agent == "H" || rc.Agent == "M" {
+		if rc.Agent == "G" || rc.Agent == "H" || rc.Agent == "M" || rc.Agent == "X" {
 			prepErr = fmt.Errorf("%s over Google Voice supports text messages in this release; switch to C: or A: for an attachment", agentDisplayName(rc.Agent))
 		} else {
 			inbound, cleanupInbound, prepErr = prepareInboundAttachments(m.Attachments)
@@ -790,6 +790,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		case "M":
 			err = b.newGeminiChatConversation(ctx)
 			final = "New Gemini Chat conversation started."
+		case "X":
+			err = b.newGrokChatConversation(ctx)
+			final = "New Grok Chat conversation started."
 		default:
 			// Claude sessions are created by the CLI on the turn that uses them.
 			b.startNewClaudeSession()
@@ -807,6 +810,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	} else if rc.Agent == "M" {
 		b.event("info", "agent", "Gemini Chat command started", rc.Sender, "M", m.ID)
 		final, err = b.runGeminiChatSMS(ctx, rc.Text)
+	} else if rc.Agent == "X" {
+		b.event("info", "agent", "Grok Chat command started", rc.Sender, "X", m.ID)
+		final, err = b.runGrokChatSMS(ctx, rc.Text)
 	} else {
 		b.event("info", "agent", "Codex command started", rc.Sender, "C", m.ID)
 		final, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
