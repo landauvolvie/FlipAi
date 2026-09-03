@@ -23,15 +23,15 @@ const grokChatPageMonitorJS = `(function(){
   if(window.__flipAiGrokChatMonitor)return;
   window.__flipAiGrokChatMonitor=true;
   const composer=()=>document.querySelector('div.ProseMirror[contenteditable="true"][role="textbox"],div.tiptap.ProseMirror[contenteditable="true"],[data-testid="grokInput"][contenteditable="true"],[data-testid="grokInput"],[contenteditable="true"][role="textbox"],textarea[placeholder],textarea');
-  const signIn=()=>Array.from(document.querySelectorAll('a,button')).find(n=>/sign in|log in/i.test(((n.getAttribute('aria-label')||'')+' '+(n.innerText||'')).trim()));
-  const signed=()=>location.hostname==='grok.com' && !!composer() && !signIn();
+  const loginPage=()=>/\/(?:login|sign-?in)(?:\/|$)/i.test(location.pathname)||!!document.querySelector('form input[type="email"],form input[name="username"],form input[autocomplete="username"]');
+  const signed=()=>/(^|\.)grok\.com$/i.test(location.hostname) && !!composer() && !loginPage();
   async function tick(){
     try{ if(window.flipGrokChatStatus) await window.flipGrokChatStatus(signed(), location.href); }catch(e){}
   }
   setInterval(tick,1000); addEventListener('load',tick); setTimeout(tick,350);
 })();`
 
-const grokChatSignedInJS = `(()=>{const c=document.querySelector('rich-textarea .ql-editor[contenteditable="true"],rich-textarea [contenteditable="true"],div.ql-editor[contenteditable="true"],[contenteditable="true"][role="textbox"],[contenteditable="true"][aria-label*="prompt" i],textarea[aria-label*="prompt" i],textarea');const signIn=Array.from(document.querySelectorAll('a,button')).find(n=>/sign in|log in/i.test(((n.getAttribute('aria-label')||'')+' '+(n.innerText||'')).trim()));return location.hostname==='grok.com'&&!!c&&!signIn})()`
+const grokChatSignedInJS = `(()=>{const c=document.querySelector('div.ProseMirror[contenteditable="true"][role="textbox"],div.tiptap.ProseMirror[contenteditable="true"],[data-testid="grokInput"][contenteditable="true"],[data-testid="grokInput"],[contenteditable="true"][role="textbox"],textarea[placeholder],textarea');const loginPage=/\/(?:login|sign-?in)(?:\/|$)/i.test(location.pathname)||!!document.querySelector('form input[type="email"],form input[name="username"],form input[autocomplete="username"]');return /(^|\.)grok\.com$/i.test(location.hostname)&&!!c&&!loginPage})()`
 
 const grokChatTurnJS = `(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -48,13 +48,14 @@ const grokChatTurnJS = `(async(input)=>{
     const candidates=unique([...all('button[data-testid="chat-submit"]'),...all('button[data-testid="grokSend"]'),...all('button[aria-label*="send" i]'),...all('button[type="submit"]')]);
     return candidates.find(b=>!b.disabled && b.offsetParent!==null)||candidates.find(b=>!b.disabled)||null;
   };
-  const stop=()=>document.querySelector('button[data-testid*="stop" i],button[aria-label*="stop" i]');
+  const stop=()=>{const xs=unique([...all('button[data-testid*="stop" i]'),...all('button[aria-label*="stop" i]')]);return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
   let c=null;
   for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Grok is loaded but FlipAi could not find the prompt box. The Grok site layout may have changed.',href:location.href};
   const before=assistants();
-  const beforeSet=new Set(before);
-  const responseForTurn=()=>{const current=assistants();for(let i=current.length-1;i>=0;i--){if(!beforeSet.has(current[i]))return current[i]}return null};
+  const beforeCount=before.length;
+  const beforeLast=beforeCount?text(before[beforeCount-1]):'';
+  const responseForTurn=()=>{const current=assistants();if(!current.length)return null;const last=current[current.length-1];if(current.length>beforeCount)return last;return text(last)&&text(last)!==beforeLast?last:null};
   c.focus();
   try{
     if(c instanceof HTMLTextAreaElement || c instanceof HTMLInputElement){

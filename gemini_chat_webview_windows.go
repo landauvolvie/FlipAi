@@ -48,7 +48,7 @@ const geminiChatTurnJS = `(async(input)=>{
     const candidates=unique([...all('button[aria-label*="Send" i]'),...all('button[mattooltip*="Send" i]'),...all('button[data-test-id*="send" i]'),...all('button[data-testid*="send" i]'),...all('button.send-button')]);
     return candidates.find(b=>!b.disabled && b.offsetParent!==null)||candidates.find(b=>!b.disabled)||null;
   };
-  const stop=()=>document.querySelector('button[aria-label*="Stop" i],button[mattooltip*="Stop" i],button[data-test-id*="stop" i],button[data-testid*="stop" i]');
+  const stop=()=>{const xs=unique([...all('button[aria-label*="Stop" i]'),...all('button[mattooltip*="Stop" i]'),...all('button[data-test-id*="stop" i]'),...all('button[data-testid*="stop" i]')]);return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
   let c=null;
   for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Gemini is loaded but FlipAi could not find the prompt box. The Gemini site layout may have changed.',href:location.href};
@@ -63,7 +63,12 @@ const geminiChatTurnJS = `(async(input)=>{
       c.dispatchEvent(new Event('input',{bubbles:true}));c.dispatchEvent(new Event('change',{bubbles:true}));
     }else{
       const sel=getSelection(),range=document.createRange();range.selectNodeContents(c);sel.removeAllRanges();sel.addRange(range);
-      document.execCommand('delete',false,null);document.execCommand('insertText',false,input);
+      document.execCommand('delete',false,null);
+      const lines=String(input).replace(/\r\n?/g,'\n').split('\n');
+      for(let i=0;i<lines.length;i++){
+        if(i>0)document.execCommand('insertLineBreak',false,null);
+        if(lines[i])document.execCommand('insertText',false,lines[i]);
+      }
       c.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:input}));c.dispatchEvent(new Event('change',{bubbles:true}));
     }
   }catch(e){c.textContent=input;c.dispatchEvent(new Event('input',{bubbles:true}))}
