@@ -1,17 +1,13 @@
-# FlipAi v0.46.19
+# FlipAi v0.46.20
 
-This release adds regular Claude Chat as a separate browser-backed FlipAi agent, alongside Claude Code and regular ChatGPT Chat.
+This hotfix fixes the Claude Chat **Connect** screen showing `404 page not found`.
 
-## Claude Chat agent
+## Claude Chat Connect works
 
-Claude Chat signs into claude.ai through its own persistent FlipAi WebView2 profile. It has Connect, Test, and Disconnect controls, an independent H: SMS shortcut, sticky follow-up routing, NEW conversation support, its own allowed-phone list and security code, and the same receipt/progress controls as the other agents. Claude Code remains a separate agent and is not replaced.
+The v0.46.19 Agents page correctly posted Connect, Test, and Disconnect to Claude Chat-specific URLs, and the Claude Chat handlers already existed, but those three URLs were accidentally omitted from FlipAi's local HTTP router. The embedded FlipAi window therefore received a local 404 before Claude sign-in could open.
 
-Existing phone-number permissions are not silently copied into Claude Chat. Add a number under Claude Chat before H: can receive texts. This keeps Claude Chat authorization independent from Codex, Claude Code, and ChatGPT Chat.
+v0.46.20 registers all three Claude Chat action routes. Pressing **Connect** now reaches the Claude Chat sign-in handler and opens the dedicated persistent Claude browser session as intended. Test and Disconnect are wired through the same authenticated POST-only route table.
 
-## RAM and lifecycle protection
+## Regression protection
 
-Claude Chat uses one process-level WebView2 owner protected by a Windows named mutex, cheap worker liveness checks, a persistent browser profile, controlled restart behavior, and explicit shutdown/update cleanup. A slow Claude renderer therefore cannot cause FlipAi to spawn repeated hidden browser trees and consume unbounded RAM.
-
-## Verification
-
-The release is gated by the normal Linux and Windows Go tests, vet/race checks, Windows x64 build, Google Voice embedded-browser checks, installer build/smoke test, Defender scan when available, and the release workflow before the installer is published.
+A route-level test now requests all three Claude Chat action URLs and verifies that they reach FlipAi's POST-only action guard instead of falling through to 404. The normal Linux, Windows, race, browser, lifecycle, installer, and release gates still run before publishing.
