@@ -1,5 +1,6 @@
 name: claude-chat-integrate
 
+# Final integration retry after four-agent test and permission-migration fixes.
 on:
   push:
     branches:
