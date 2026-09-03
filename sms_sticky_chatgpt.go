@@ -33,6 +33,7 @@ func explicitSMSAgent(raw string, cfg Config) string {
 			{"G", configuredChatGPTPrefix(cfg)},
 			{"H", configuredClaudeChatPrefix(cfg)},
 			{"M", configuredGeminiChatPrefix(cfg)},
+			{"X", configuredGrokChatPrefix(cfg)},
 		} {
 			if _, ok := stripAgentCommandPrefix(v, x.prefix); ok || isAgentNewSession(v, x.prefix, newWord) {
 				return x.agent
@@ -46,7 +47,7 @@ func smsTargetAllowed(sourceAgent, target string) bool {
 	sourceAgent = strings.ToUpper(strings.TrimSpace(sourceAgent))
 	target = strings.ToUpper(strings.TrimSpace(target))
 	if sourceAgent == "B" {
-		return target == "C" || target == "A" || target == "G" || target == "H" || target == "M"
+		return target == "C" || target == "A" || target == "G" || target == "H" || target == "M" || target == "X"
 	}
 	return target != "" && strings.Contains(sourceAgent, target)
 }
@@ -62,10 +63,10 @@ func selectStickySMSAgent(raw string, cfg Config, sourceAgent, sticky string) (s
 	if smsTargetAllowed(sourceAgent, sticky) {
 		return sticky, nil
 	}
-	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" || sourceAgent == "M" {
+	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" || sourceAgent == "M" || sourceAgent == "X" {
 		return sourceAgent, nil
 	}
-	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, H: for Claude Chat, or M: for Gemini Chat")
+	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, H: for Claude Chat, M: for Gemini Chat, or X: for Grok Chat")
 }
 
 func authorizeChatGPTRaw(raw string, cfg Config, _ string) (string, error) {
@@ -119,6 +120,8 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 			return parseClaudeChatSMSCommand(raw, cfg)
 		case "M":
 			return parseGeminiChatSMSCommand(raw, cfg)
+		case "X":
+			return parseGrokChatSMSCommand(raw, cfg)
 		default:
 			return parseRemoteCommand(raw, cfg, target)
 		}
@@ -148,7 +151,7 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 
 func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
 	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" {
+	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" {
 		return fmt.Errorf("unknown sticky SMS agent %q", agent)
 	}
 	key := stickySMSKey(sender)
