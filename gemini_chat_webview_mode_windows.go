@@ -1,0 +1,64 @@
+//go:build windows
+
+package main
+
+import (
+	"context"
+	"os"
+	"time"
+)
+
+var geminiChatWorkerInstanceRelease func()
+
+func init() {
+	if len(os.Args) < 2 {
+		return
+	}
+	mode := os.Args[1]
+	if mode == "--gemini-chat-worker" || mode == "--gemini-chat-login" {
+		release, owner, err := acquireNamedInstance(`Local\FlipAi-GeminiChat-WebView`, "Gemini Chat WebView owner")
+		if err == nil {
+			if !owner {
+				os.Exit(0)
+			}
+			geminiChatWorkerInstanceRelease = release
+		}
+	}
+	if mode != "--gemini-chat-login" && mode != "--gemini-chat-worker" {
+		return
+	}
+	dataDir, _, _, _, err := appPaths()
+	if err != nil {
+		os.Exit(2)
+	}
+	if err := ensureDataDir(dataDir); err != nil {
+		os.Exit(2)
+	}
+	go func() {
+		t := time.NewTicker(250 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
+			if quitRequested(dataDir) {
+				_ = platformStopGeminiChatWorker(dataDir)
+				return
+			}
+		}
+	}()
+	geminiChatWorkerMain(dataDir, mode == "--gemini-chat-login")
+	os.Exit(0)
+}
+
+// The tray is guaranteed to live in the signed-in desktop session. Keeping the
+// supervisor here means a saved Gemini login is restored after app/Windows
+// restart without making the service/session-0 host own a WebView2 process.
+func init() {
+	if len(os.Args) < 2 || os.Args[1] != "--tray" {
+		return
+	}
+	dataDir, _, _, _, err := appPaths()
+	if err != nil {
+		return
+	}
+	prepareGeminiChatRuntimeForTray(dataDir)
+	go runGeminiChatBackgroundSupervisor(context.Background(), dataDir)
+}

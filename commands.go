@@ -12,6 +12,7 @@ const (
 	defaultClaudePrefix      = "A"
 	defaultChatGPTPrefix     = "G"
 	defaultClaudeChatPrefix  = "H"
+	defaultGeminiChatPrefix  = "M"
 	defaultNewSessionCommand = "NEW"
 )
 
@@ -59,6 +60,10 @@ func configuredChatGPTPrefix(cfg Config) string {
 
 func configuredClaudeChatPrefix(cfg Config) string {
 	return normalizeCommandToken(cfg.ClaudeChatPrefix, defaultClaudeChatPrefix)
+}
+
+func configuredGeminiChatPrefix(cfg Config) string {
+	return normalizeCommandToken(cfg.GeminiChatPrefix, defaultGeminiChatPrefix)
 }
 
 func configuredNewSessionCommand(cfg Config) string {
