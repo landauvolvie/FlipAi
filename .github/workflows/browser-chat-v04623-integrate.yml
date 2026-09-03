@@ -1,0 +1,53 @@
+name: browser-chat-v04623-integrate
+
+on:
+  push:
+    branches:
+      - fix/browser-chat-runtime-v04623
+    paths:
+      - scripts/apply_browser_chat_v04623.py
+      - .github/workflows/browser-chat-v04623-integrate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/browser-chat-runtime-v04623
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Apply focused browser-chat fixes
+        run: python3 scripts/apply_browser_chat_v04623.py
+
+      - name: Format changed Go files
+        run: |
+          gofmt -w config.go voice_cdp_windows.go voice_cdp_chatgpt_timeout_windows_test.go gemini_chat_webview_windows.go grok_chat_webview_windows.go browser_chat_provider_regression_test.go
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Remove temporary integration files
+        run: |
+          rm -f scripts/apply_browser_chat_v04623.py
+          rm -f .github/workflows/browser-chat-v04623-integrate.yml
+
+      - name: Commit integrated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Gemini and Grok browser chat turns"
+          git push origin HEAD:fix/browser-chat-runtime-v04623
