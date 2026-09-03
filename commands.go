@@ -11,6 +11,7 @@ const (
 	defaultCodexPrefix       = "C"
 	defaultClaudePrefix      = "A"
 	defaultChatGPTPrefix     = "G"
+	defaultClaudeChatPrefix  = "H"
 	defaultNewSessionCommand = "NEW"
 )
 
@@ -54,6 +55,10 @@ func configuredClaudePrefix(cfg Config) string {
 
 func configuredChatGPTPrefix(cfg Config) string {
 	return normalizeCommandToken(cfg.ChatGPTPrefix, defaultChatGPTPrefix)
+}
+
+func configuredClaudeChatPrefix(cfg Config) string {
+	return normalizeCommandToken(cfg.ClaudeChatPrefix, defaultClaudeChatPrefix)
 }
 
 func configuredNewSessionCommand(cfg Config) string {
