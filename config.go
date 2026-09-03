@@ -131,12 +131,12 @@ type CodexConfig struct {
 // ChatGPTConfig gives regular ChatGPT Chat the same SMS-facing shape as the
 // CLI agents. Its browser connection remains separate because the underlying
 // connection mechanism is different.
-type ChatGPTConfig struct { AgentSettings }
+type ChatGPTConfig struct{ AgentSettings }
 
 // ClaudeChatConfig is intentionally separate from ClaudeConfig. Claude is the
 // local Claude Code CLI; Claude Chat is the user's regular claude.ai account in
 // FlipAi's dedicated WebView2 profile.
-type ClaudeChatConfig struct { AgentSettings }
+type ClaudeChatConfig struct{ AgentSettings }
 
 type ClaudeConfig struct {
 	AgentSettings
@@ -188,11 +188,19 @@ func (u UpdateConfig) checkInterval() time.Duration {
 
 func (u UpdateConfig) normalizedCheckMinutes() int {
 	m := u.CheckMinutes
-	if m == 10 { m = updateCheckMinutesDefault }
-	if m == 0 && u.CheckHours > 0 {
-		if u.CheckHours == retiredUpdateCheckHoursDefault { m = updateCheckMinutesDefault } else { m = u.CheckHours * 60 }
+	if m == 10 {
+		m = updateCheckMinutesDefault
 	}
-	if m < updateCheckMinutesMin || m > updateCheckMinutesMax { m = updateCheckMinutesDefault }
+	if m == 0 && u.CheckHours > 0 {
+		if u.CheckHours == retiredUpdateCheckHoursDefault {
+			m = updateCheckMinutesDefault
+		} else {
+			m = u.CheckHours * 60
+		}
+	}
+	if m < updateCheckMinutesMin || m > updateCheckMinutesMax {
+		m = updateCheckMinutesDefault
+	}
 	return m
 }
 
@@ -220,7 +228,7 @@ type State struct {
 	CodexThreadID   string `json:"codexThreadId,omitempty"`
 	ClaudeSessionID string `json:"claudeSessionId,omitempty"`
 
-	ClaudeSessionName string `json:"claudeSessionName,omitempty"`
+	ClaudeSessionName   string `json:"claudeSessionName,omitempty"`
 	ClaudeLiveSessionID string `json:"claudeLiveSessionId,omitempty"`
 
 	GmailBaselineUnix   int64     `json:"gmailBaselineUnix,omitempty"`
@@ -247,9 +255,13 @@ func (c Check) Known() bool { return !c.At.IsZero() }
 func (c Check) Ready() bool { return c.Known() && c.OK }
 
 func secureRandomToken(n int) (string, error) {
-	if n < 16 { n = 16 }
+	if n < 16 {
+		n = 16
+	}
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil { return "", fmt.Errorf("secure randomness: %w", err) }
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("secure randomness: %w", err)
+	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
@@ -258,20 +270,32 @@ func hashSecurityCode(code, salt string) string {
 	sum := sha256.Sum256(v)
 	b := sum[:]
 	for i := 0; i < 120000; i++ {
-		h := sha256.New(); h.Write([]byte(salt)); h.Write(b); b = h.Sum(nil)
+		h := sha256.New()
+		h.Write([]byte(salt))
+		h.Write(b)
+		b = h.Sum(nil)
 	}
 	return hex.EncodeToString(b)
 }
 
 func setSecurityCode(cfg *Config, code string) error {
 	code = strings.TrimSpace(code)
-	if len(code) < 6 || strings.ContainsAny(code, " \t\r\n") { return errors.New("SMS security code must be at least 6 characters with no spaces") }
-	salt, err := secureRandomToken(18); if err != nil { return err }
-	cfg.Security.CodeSalt = salt; cfg.Security.CodeHash = hashSecurityCode(code, salt); return nil
+	if len(code) < 6 || strings.ContainsAny(code, " \t\r\n") {
+		return errors.New("SMS security code must be at least 6 characters with no spaces")
+	}
+	salt, err := secureRandomToken(18)
+	if err != nil {
+		return err
+	}
+	cfg.Security.CodeSalt = salt
+	cfg.Security.CodeHash = hashSecurityCode(code, salt)
+	return nil
 }
 
 func verifySecurityCode(cfg Config, code string) bool {
-	if cfg.Security.CodeSalt == "" || cfg.Security.CodeHash == "" { return false }
+	if cfg.Security.CodeSalt == "" || cfg.Security.CodeHash == "" {
+		return false
+	}
 	got := hashSecurityCode(code, cfg.Security.CodeSalt)
 	return subtle.ConstantTimeCompare([]byte(got), []byte(cfg.Security.CodeHash)) == 1
 }
@@ -279,7 +303,10 @@ func verifySecurityCode(cfg Config, code string) bool {
 func appPaths() (dataDir, configFile, stateFile, tokenFile string, err error) {
 	base := os.Getenv("LOCALAPPDATA")
 	if base == "" {
-		home, e := os.UserHomeDir(); if e != nil { return "", "", "", "", e }
+		home, e := os.UserHomeDir()
+		if e != nil {
+			return "", "", "", "", e
+		}
 		base = filepath.Join(home, ".local", "share")
 	}
 	dataDir = filepath.Join(base, "AISMSBridge")
@@ -290,21 +317,22 @@ func appPaths() (dataDir, configFile, stateFile, tokenFile string, err error) {
 }
 
 func defaultConfig(dataDir string) Config {
-	home, _ := os.UserHomeDir(); tok, _ := secureRandomToken(24)
+	home, _ := os.UserHomeDir()
+	tok, _ := secureRandomToken(24)
 	browserDefaults := AgentSettings{ReplyAck: boolPtr(true), ProgressUpdates: boolPtr(true), ProgressIntervalSeconds: 120, AckDelaySeconds: 30}
 	return Config{
 		CodexPath: "codex", ClaudePath: "claude", Cwd: home,
 		Listen: "127.0.0.1:8765", LocalToken: tok, TurnTimeoutMinutes: 90,
 		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, ChatGPTPrefix: defaultChatGPTPrefix, ClaudeChatPrefix: defaultClaudeChatPrefix, NewSessionCommand: defaultNewSessionCommand,
-		Gmail: GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
+		Gmail:       GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
 		GoogleVoice: GoogleVoiceConfig{RequiredSubjectPhrase: "new text message from", ReplyMaxChars: 300, ReplyStyleHint: defaultReplyStyleHint, MaxReplyParts: 4, ReplyAck: true, ProgressUpdates: true, ProgressIntervalSeconds: 120},
-		Updates: UpdateConfig{Automatic: false},
-		Codex: CodexConfig{ApprovalPolicy: "never"},
-		Claude: ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
-		ChatGPT: ChatGPTConfig{AgentSettings: browserDefaults},
-		ClaudeChat: ClaudeChatConfig{AgentSettings: browserDefaults},
-		Security: SecurityConfig{RequireCode: false},
-		UI: UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
+		Updates:     UpdateConfig{Automatic: false},
+		Codex:       CodexConfig{ApprovalPolicy: "never"},
+		Claude:      ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
+		ChatGPT:     ChatGPTConfig{AgentSettings: browserDefaults},
+		ClaudeChat:  ClaudeChatConfig{AgentSettings: browserDefaults},
+		Security:    SecurityConfig{RequireCode: false},
+		UI:          UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
 	}
 }
 
@@ -315,77 +343,124 @@ const (
 )
 
 func (c Config) codexWorkingDir() string {
-	if v := strings.TrimSpace(c.CodexCwd); v != "" { return v }
+	if v := strings.TrimSpace(c.CodexCwd); v != "" {
+		return v
+	}
 	return c.Cwd
 }
 
 func (c Config) progressIntervalFor(agent string) time.Duration {
 	seconds := agentSettings(c, agent).ProgressIntervalSeconds
-	if seconds <= 0 { seconds = c.GoogleVoice.ProgressIntervalSeconds }
-	if seconds < 30 { seconds = 120 }
+	if seconds <= 0 {
+		seconds = c.GoogleVoice.ProgressIntervalSeconds
+	}
+	if seconds < 30 {
+		seconds = 120
+	}
 	return time.Duration(seconds) * time.Second
 }
 
 func (c Config) replyStyleHintFor(agent string) string {
 	_ = agent
-	if shared := strings.TrimSpace(c.GoogleVoice.ReplyStyleHint); shared != "" { return shared }
+	if shared := strings.TrimSpace(c.GoogleVoice.ReplyStyleHint); shared != "" {
+		return shared
+	}
 	return defaultReplyStyleHint
 }
 
 func normalizeReplyStyleHint(v string) string {
 	v = strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
-	if len(v) > replyStyleHintMaxChars { v = strings.TrimSpace(v[:replyStyleHintMaxChars]) }
+	if len(v) > replyStyleHintMaxChars {
+		v = strings.TrimSpace(v[:replyStyleHintMaxChars])
+	}
 	return v
 }
 
 func (c Config) claudeWorkingDir() string {
-	if v := strings.TrimSpace(c.ClaudeCwd); v != "" { return v }
+	if v := strings.TrimSpace(c.ClaudeCwd); v != "" {
+		return v
+	}
 	return c.Cwd
 }
 
 func normalizeTheme(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case ThemeDark: return ThemeDark
-	case ThemeSystem: return ThemeSystem
-	default: return ThemeLight
+	case ThemeDark:
+		return ThemeDark
+	case ThemeSystem:
+		return ThemeSystem
+	default:
+		return ThemeLight
 	}
 }
 
 func loadConfig(path, dataDir string) (Config, error) {
 	cfg := defaultConfig(dataDir)
 	b, err := os.ReadFile(path)
-	if err != nil { return cfg, err }
-	if err := json.Unmarshal(b, &cfg); err != nil { return cfg, err }
-	if cfg.Listen == "" { cfg.Listen = "127.0.0.1:8765" }
-	if !strings.HasPrefix(cfg.Listen, "127.0.0.1:") && !strings.HasPrefix(cfg.Listen, "localhost:") { cfg.Listen = "127.0.0.1:8765" }
-	if cfg.Gmail.PollSeconds < 1 { cfg.Gmail.PollSeconds = 1 }
-	if cfg.Gmail.SubjectPhrase == "" { cfg.Gmail.SubjectPhrase = "new text message from" }
-	if cfg.Gmail.Method == "" {
-		if _, statErr := os.Stat(cfg.Gmail.CredentialsFile); statErr == nil { cfg.Gmail.Method = GmailMethodOAuth }
+	if err != nil {
+		return cfg, err
 	}
-	if cfg.Gmail.Method != "" && cfg.Gmail.Method != GmailMethodOAuth && cfg.Gmail.Method != GmailMethodAppPassword { cfg.Gmail.Method = "" }
-	if cfg.GoogleVoice.ReplyMaxChars < 80 { cfg.GoogleVoice.ReplyMaxChars = 300 }
-	if strings.TrimSpace(cfg.GoogleVoice.ReplyStyleHint) == "" { cfg.GoogleVoice.ReplyStyleHint = defaultReplyStyleHint }
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return cfg, err
+	}
+	if cfg.Listen == "" {
+		cfg.Listen = "127.0.0.1:8765"
+	}
+	if !strings.HasPrefix(cfg.Listen, "127.0.0.1:") && !strings.HasPrefix(cfg.Listen, "localhost:") {
+		cfg.Listen = "127.0.0.1:8765"
+	}
+	if cfg.Gmail.PollSeconds < 1 {
+		cfg.Gmail.PollSeconds = 1
+	}
+	if cfg.Gmail.SubjectPhrase == "" {
+		cfg.Gmail.SubjectPhrase = "new text message from"
+	}
+	if cfg.Gmail.Method == "" {
+		if _, statErr := os.Stat(cfg.Gmail.CredentialsFile); statErr == nil {
+			cfg.Gmail.Method = GmailMethodOAuth
+		}
+	}
+	if cfg.Gmail.Method != "" && cfg.Gmail.Method != GmailMethodOAuth && cfg.Gmail.Method != GmailMethodAppPassword {
+		cfg.Gmail.Method = ""
+	}
+	if cfg.GoogleVoice.ReplyMaxChars < 80 {
+		cfg.GoogleVoice.ReplyMaxChars = 300
+	}
+	if strings.TrimSpace(cfg.GoogleVoice.ReplyStyleHint) == "" {
+		cfg.GoogleVoice.ReplyStyleHint = defaultReplyStyleHint
+	}
 	cfg.GoogleVoice.ReplyStyleHint = normalizeReplyStyleHint(cfg.GoogleVoice.ReplyStyleHint)
 	cfg.Codex.Instruction = normalizeReplyStyleHint(cfg.Codex.Instruction)
 	cfg.Claude.Instruction = normalizeReplyStyleHint(cfg.Claude.Instruction)
 	cfg.ChatGPT.Instruction = normalizeReplyStyleHint(cfg.ChatGPT.Instruction)
 	cfg.ClaudeChat.Instruction = normalizeReplyStyleHint(cfg.ClaudeChat.Instruction)
-	if cfg.GoogleVoice.MaxReplyParts < 1 { cfg.GoogleVoice.MaxReplyParts = 4 }
-	if cfg.GoogleVoice.MaxReplyParts > 10 { cfg.GoogleVoice.MaxReplyParts = 10 }
-	if cfg.GoogleVoice.ProgressIntervalSeconds < 30 { cfg.GoogleVoice.ProgressIntervalSeconds = 120 }
+	if cfg.GoogleVoice.MaxReplyParts < 1 {
+		cfg.GoogleVoice.MaxReplyParts = 4
+	}
+	if cfg.GoogleVoice.MaxReplyParts > 10 {
+		cfg.GoogleVoice.MaxReplyParts = 10
+	}
+	if cfg.GoogleVoice.ProgressIntervalSeconds < 30 {
+		cfg.GoogleVoice.ProgressIntervalSeconds = 120
+	}
 	cfg.GoogleVoice.SendReplyViaAgentBrowser = false
 	cfg.GoogleVoice.GmailReplyFallback = true
 	cfg.Codex.ApprovalPolicy = "never"
 	if !cfg.Security.RequireCode && cfg.Security.CodeHash == "" {
-		if placeholder, e := secureRandomToken(24); e == nil { _ = setSecurityCode(&cfg, placeholder) }
+		if placeholder, e := secureRandomToken(24); e == nil {
+			_ = setSecurityCode(&cfg, placeholder)
+		}
 	}
-	if strings.TrimSpace(cfg.Claude.PermissionMode) == "acceptEdits" { cfg.Claude.PermissionMode = claudeFullAccess }
+	if strings.TrimSpace(cfg.Claude.PermissionMode) == "acceptEdits" {
+		cfg.Claude.PermissionMode = claudeFullAccess
+	}
 	cfg.Claude.PermissionMode = normalizeClaudePermissionMode(cfg.Claude.PermissionMode)
 	cfg.Updates.CheckMinutes = cfg.Updates.normalizedCheckMinutes()
 	cfg.Updates.CheckHours = 0
 	cfg.Updates.Automatic = false
-	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" { cfg.DefaultAgent = "C" }
+	if cfg.DefaultAgent != "A" && cfg.DefaultAgent != "C" {
+		cfg.DefaultAgent = "C"
+	}
 	cfg.CodexPrefix = normalizeCommandToken(cfg.CodexPrefix, defaultCodexPrefix)
 	cfg.ClaudePrefix = normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)
 	cfg.ChatGPTPrefix = normalizeCommandToken(cfg.ChatGPTPrefix, defaultChatGPTPrefix)
@@ -393,39 +468,70 @@ func loadConfig(path, dataDir string) (Config, error) {
 	cfg.NewSessionCommand = normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)
 	prefixes := []string{cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix}
 	dup := false
-	for i := range prefixes { for j := i + 1; j < len(prefixes); j++ { if strings.EqualFold(prefixes[i], prefixes[j]) { dup = true } } }
-	if dup { cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix, defaultClaudeChatPrefix }
-	if cfg.LocalToken == "" {
-		cfg.LocalToken, err = secureRandomToken(24); if err != nil { return cfg, err }
+	for i := range prefixes {
+		for j := i + 1; j < len(prefixes); j++ {
+			if strings.EqualFold(prefixes[i], prefixes[j]) {
+				dup = true
+			}
+		}
 	}
-	var probe struct { UI *UIConfig `json:"ui"` }
-	if json.Unmarshal(b, &probe) == nil && probe.UI == nil { cfg.UI = defaultConfig(dataDir).UI }
+	if dup {
+		cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix, defaultClaudeChatPrefix
+	}
+	if cfg.LocalToken == "" {
+		cfg.LocalToken, err = secureRandomToken(24)
+		if err != nil {
+			return cfg, err
+		}
+	}
+	var probe struct {
+		UI *UIConfig `json:"ui"`
+	}
+	if json.Unmarshal(b, &probe) == nil && probe.UI == nil {
+		cfg.UI = defaultConfig(dataDir).UI
+	}
 	cfg.UI.Theme = normalizeTheme(cfg.UI.Theme)
 	syncAllowedNumbers(&cfg.GoogleVoice)
 	migrateAgentSettings(&cfg)
-	if err := normalizeAgents(&cfg); err != nil { salvageAgents(&cfg) }
+	if err := normalizeAgents(&cfg); err != nil {
+		salvageAgents(&cfg)
+	}
 	cfg.GoogleVoice.AllowedFrom = smsAllowedFrom(cfg)
 	return cfg, nil
 }
 
 func saveConfig(path string, cfg Config) error {
 	if cfg.LocalToken == "" {
-		var err error; cfg.LocalToken, err = secureRandomToken(24); if err != nil { return err }
+		var err error
+		cfg.LocalToken, err = secureRandomToken(24)
+		if err != nil {
+			return err
+		}
 	}
-	b, err := json.MarshalIndent(cfg, "", "  "); if err != nil { return err }
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(path, b, 0600)
 }
 
 func loadState(path string) State {
 	var s State
-	if b, e := os.ReadFile(path); e == nil { _ = json.Unmarshal(b, &s) }
+	if b, e := os.ReadFile(path); e == nil {
+		_ = json.Unmarshal(b, &s)
+	}
 	return s
 }
 func saveState(path string, s State) error {
-	b, e := json.MarshalIndent(s, "", "  "); if e != nil { return e }
+	b, e := json.MarshalIndent(s, "", "  ")
+	if e != nil {
+		return e
+	}
 	return os.WriteFile(path, b, 0600)
 }
 func ensureDataDir(dir string) error {
-	if dir == "" { return errors.New("empty data directory") }
+	if dir == "" {
+		return errors.New("empty data directory")
+	}
 	return os.MkdirAll(dir, 0700)
 }

@@ -296,6 +296,7 @@ func (a *App) handler() http.Handler {
 	m.HandleFunc("/activity.json", a.requireAuth(a.activityJSON))
 	m.HandleFunc("/folders.json", a.requireAuth(a.foldersJSON))
 	m.HandleFunc("/chatgpt/status.json", a.requireAuth(a.chatGPTStatusJSON))
+	m.HandleFunc("/claude-chat/status.json", a.requireAuth(a.claudeChatStatusJSON))
 
 	// Actions.
 	for path, action := range map[string]http.HandlerFunc{

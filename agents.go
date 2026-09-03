@@ -357,11 +357,9 @@ func migrateClaudeChatAgent(cfg *Config) {
 	if cfg.Security.ClaudeChatAgentMigrated {
 		return
 	}
+	// Claude Chat is a new security boundary. Mark the migration complete but
+	// start with no phone numbers or PIN copied from any existing agent.
 	cfg.Security.ClaudeChatAgentMigrated = true
-	// Existing installs already had C/A/G phone permissions. Giving the new
-	// browser agent the same SMS-capable numbers preserves the user's current
-	// remote access while still keeping Claude Chat independently editable.
-	migrateBrowserChatAgent(cfg, "H", []string{"C", "A", "G"})
 }
 
 func migrateBrowserChatAgent(cfg *Config, target string, sources []string) {
@@ -419,11 +417,6 @@ func ensureAgentReplyDefaults(cfg *Config) {
 		}
 		if s.AckDelaySeconds < 0 {
 			s.AckDelaySeconds = 0
-		}
-		// Browser-chat agents wait a little before sending a receipt so quick
-		// conversational responses do not create a redundant extra SMS.
-		if (agent == "G" || agent == "H") && s.AckDelaySeconds == 0 {
-			s.AckDelaySeconds = 30
 		}
 		putAgentSettingsConfig(cfg, agent, s)
 	}

@@ -15,8 +15,8 @@ func init() {
 		return
 	}
 	mode := os.Args[1]
-	if mode == "--claude-chat-worker" {
-		release, owner, err := acquireNamedInstance(`Local\FlipAi-ClaudeChat-WebView`, "Claude Chat WebView worker")
+	if mode == "--claude-chat-worker" || mode == "--claude-chat-login" {
+		release, owner, err := acquireNamedInstance(`Local\FlipAi-ClaudeChat-WebView`, "Claude Chat WebView owner")
 		if err == nil {
 			if !owner {
 				os.Exit(0)

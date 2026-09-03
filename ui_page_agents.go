@@ -28,9 +28,10 @@ type agentsView struct {
 	SharedPrompt promptEditorView
 
 	// Who may reach each agent, and how it answers them.
-	CodexAccess   agentAccessView
-	ClaudeAccess  agentAccessView
-	ChatGPTAccess agentAccessView
+	CodexAccess      agentAccessView
+	ClaudeAccess     agentAccessView
+	ChatGPTAccess    agentAccessView
+	ClaudeChatAccess agentAccessView
 }
 
 // agentAccessView is everything about who may reach one agent and how it
@@ -64,6 +65,8 @@ func agentFieldName(agent, name string) string {
 		prefix = "claude"
 	case "G":
 		prefix = "chatgpt"
+	case "H":
+		prefix = "claudeChat"
 	}
 	return prefix + strings.ToUpper(name[:1]) + name[1:]
 }
@@ -544,13 +547,14 @@ func (a *App) agentsPage(w http.ResponseWriter, r *http.Request) {
 	view.SharedPrompt = promptEditorView{
 		Name: "sharedReplyStyle", Title: "SMS instruction for every agent",
 		Value: s.SharedReplyStyle, Fallback: s.DefaultReplyStyle, Custom: s.SharedReplyStyle != s.DefaultReplyStyle,
-		Hint: "Edit once. Codex, Claude, and ChatGPT Chat all receive this same line.", Max: s.ReplyStyleMaxChars,
+		Hint: "Edit once. Codex, Claude, ChatGPT Chat, and Claude Chat all receive this same line.", Max: s.ReplyStyleMaxChars,
 	}
 
 	cfg := a.snapshotConfig()
 	view.CodexAccess = newAgentAccessView(cfg, "C", configuredCodexPrefix(cfg))
 	view.ClaudeAccess = newAgentAccessView(cfg, "A", configuredClaudePrefix(cfg))
 	view.ChatGPTAccess = newAgentAccessView(cfg, "G", configuredChatGPTPrefix(cfg))
+	view.ClaudeChatAccess = newAgentAccessView(cfg, "H", configuredClaudeChatPrefix(cfg))
 	a.render(w, "agents", view)
 }
 
@@ -566,7 +570,7 @@ func newAgentAccessView(cfg Config, agent, prefix string) agentAccessView {
 		Phones: settings.Phones, CallerNames: settings.CallerNames,
 		RequireCode: settings.RequireCode, HasCode: settings.CodeHash != "",
 		Ack: settings.ackEnabled(), Progress: settings.progressEnabled(),
-		Interval: interval, AckDelay: settings.AckDelaySeconds, SMSOnly: agent == "G",
+		Interval: interval, AckDelay: settings.AckDelaySeconds, SMSOnly: agent == "G" || agent == "H",
 		IsDefault: false,
 	}
 }

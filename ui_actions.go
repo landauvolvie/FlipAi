@@ -319,8 +319,8 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		if v, ok := formFlag(r, "claudeUseChrome"); ok {
 			cfg.Claude.UseChrome = v
 		}
-		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("chatgptPrefix") || r.Form.Has("newSessionCommand") {
-			codexPrefix, claudePrefix, chatGPTPrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredChatGPTPrefix(*cfg), configuredNewSessionCommand(*cfg)
+		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("chatgptPrefix") || r.Form.Has("claudeChatPrefix") || r.Form.Has("newSessionCommand") {
+			codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredChatGPTPrefix(*cfg), configuredClaudeChatPrefix(*cfg), configuredNewSessionCommand(*cfg)
 			var err error
 			if r.Form.Has("codexPrefix") {
 				codexPrefix, err = validateCommandToken(r.FormValue("codexPrefix"), "Codex prefix")
@@ -340,8 +340,19 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			}
-			if strings.EqualFold(codexPrefix, claudePrefix) || strings.EqualFold(codexPrefix, chatGPTPrefix) || strings.EqualFold(claudePrefix, chatGPTPrefix) {
-				return fmt.Errorf("Codex, Claude, and ChatGPT shortcuts must all be different")
+			if r.Form.Has("claudeChatPrefix") {
+				claudeChatPrefix, err = validateCommandToken(r.FormValue("claudeChatPrefix"), "Claude Chat shortcut")
+				if err != nil {
+					return err
+				}
+			}
+			prefixes := []string{codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix}
+			for i := range prefixes {
+				for j := i + 1; j < len(prefixes); j++ {
+					if strings.EqualFold(prefixes[i], prefixes[j]) {
+						return fmt.Errorf("Codex, Claude, ChatGPT Chat, and Claude Chat shortcuts must all be different")
+					}
+				}
 			}
 			if r.Form.Has("newSessionCommand") {
 				newSession, err = validateCommandToken(r.FormValue("newSessionCommand"), "new-session command")
@@ -349,7 +360,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			}
-			cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, chatGPTPrefix, newSession
+			cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, newSession
 		}
 		if n, ok, err := formInt(r, "turnTimeout", 1, 600); err != nil {
 			return fmt.Errorf("turn timeout: %w", err)
@@ -375,7 +386,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		// The shared line itself falls back to the built-in default when cleared,
 		// because every turn needs some framing and a blank one would silently
 		// stop telling the agent its answer becomes a text message.
-		for _, agent := range []string{"C", "A", "G"} {
+		for _, agent := range []string{"C", "A", "G", "H"} {
 			if err := applyAgentAccessForm(cfg, r, agent); err != nil {
 				return err
 			}
@@ -412,6 +423,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		cfg.Codex.Instruction = ""
 		cfg.Claude.Instruction = ""
 		cfg.ChatGPT.Instruction = ""
+		cfg.ClaudeChat.Instruction = ""
 		if r.Form.Has("claudeSessionMode") {
 			// Anything unrecognised normalises to per-message, so a stale form
 			// post can never leave the bridge in a mode it does not implement.

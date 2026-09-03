@@ -39,8 +39,12 @@ type ClaudeChatWebRuntime struct {
 
 var claudeChatRuntimeMu sync.Mutex
 
-func claudeChatRuntimePath(dataDir string) string { return filepath.Join(dataDir, claudeChatRuntimeFile) }
-func claudeChatProfilePath(dataDir string) string { return filepath.Join(dataDir, claudeChatProfileDirName) }
+func claudeChatRuntimePath(dataDir string) string {
+	return filepath.Join(dataDir, claudeChatRuntimeFile)
+}
+func claudeChatProfilePath(dataDir string) string {
+	return filepath.Join(dataDir, claudeChatProfileDirName)
+}
 
 func migrateClaudeChatRuntime(s *ClaudeChatWebRuntime) {
 	if s.SignedIn && !s.Connected {
@@ -127,7 +131,9 @@ func waitForClaudeChatReady(ctx context.Context, dataDir string) (ClaudeChatWebR
 			b, code, err := claudeChatControlRequest(probeCtx, s, http.MethodGet, "/health", nil)
 			cancel()
 			if err == nil && code == http.StatusOK {
-				var health struct{ SignedIn bool `json:"signedIn"` }
+				var health struct {
+					SignedIn bool `json:"signedIn"`
+				}
 				if json.Unmarshal(b, &health) == nil && health.SignedIn {
 					mutateClaudeChatRuntime(dataDir, func(v *ClaudeChatWebRuntime) {
 						v.Connected, v.SignedIn, v.Starting = true, true, false
@@ -222,7 +228,8 @@ func runClaudeChatBackgroundSupervisor(ctx context.Context, dataDir string) {
 			}
 		}
 		select {
-		case <-ctx.Done(): return
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 		}
 	}
@@ -256,19 +263,25 @@ func (a *App) claudeChatTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out struct {
-		OK bool `json:"ok"`
+		OK                            bool `json:"ok"`
 		Reply, Detail, ConversationID string
 	}
 	_ = json.Unmarshal(b, &out)
 	if code != http.StatusOK || !out.OK {
-		if out.Detail == "" { out.Detail = strings.TrimSpace(string(b)) }
+		if out.Detail == "" {
+			out.Detail = strings.TrimSpace(string(b))
+		}
 		renderResult(w, r, 500, false, "Claude Chat test failed", out.Detail)
 		return
 	}
 	claudeChatActivity(a.dataDir, "info", "claude-chat-test", "Claude Chat completed a real browser turn successfully.", time.Since(started))
 	message := "Claude returned a real response through FlipAi's dedicated browser session."
-	if out.ConversationID != "" { message += "\nConversation: " + out.ConversationID }
-	if strings.TrimSpace(out.Reply) != "" { message += "\nReply: " + strings.TrimSpace(out.Reply) }
+	if out.ConversationID != "" {
+		message += "\nConversation: " + out.ConversationID
+	}
+	if strings.TrimSpace(out.Reply) != "" {
+		message += "\nReply: " + strings.TrimSpace(out.Reply)
+	}
 	renderResult(w, r, 200, true, "Claude Chat is working", message)
 }
 
