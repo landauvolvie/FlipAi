@@ -3,8 +3,9 @@ from pathlib import Path
 p = Path('tools/integrate_grok_chat.py')
 s = p.read_text(encoding='utf-8')
 
-# Adapt the temporary generator to the exact compact/aligned Config layout on
-# v0.46.21. Top-level agent config wrappers intentionally do not use omitempty.
+# Adapt the temporary generator to the exact compact/aligned source layout on
+# v0.46.21. These substitutions alter generator literals only; source changes
+# are still fail-fast in integrate_grok_chat.py.
 changes = [
     (
         'GeminiChatPrefix string `json:"geminiChatPrefix,omitempty"`\\n\\tNewSessionCommand',
@@ -42,6 +43,15 @@ changes = [
         "'GrokChat GrokChatConfig'",
         "'GrokChatConfig'",
     ),
+    # commands.go aligns the constant names before '='.
+    (
+        '\\tdefaultGeminiChatPrefix = "M"\\n',
+        '\\tdefaultGeminiChatPrefix  = "M"\\n',
+    ),
+    (
+        '\\tdefaultGeminiChatPrefix = "M"\\n\\tdefaultGrokChatPrefix   = "X"\\n',
+        '\\tdefaultGeminiChatPrefix  = "M"\\n\\tdefaultGrokChatPrefix    = "X"\\n',
+    ),
 ]
 for old, new in changes:
     s = s.replace(old, new)
@@ -52,10 +62,11 @@ required = [
     '\\tGeminiChat  GeminiChatConfig  `json:"geminiChat"`\\n\\tGrokChat    GrokChatConfig    `json:"grokChat"`\\n\\tSecurity',
     'type GeminiChatConfig struct{ AgentSettings }',
     'type GrokChatConfig struct{ AgentSettings }',
+    '\\tdefaultGeminiChatPrefix  = "M"\\n\\tdefaultGrokChatPrefix    = "X"\\n',
 ]
 for token in required:
     if token not in s:
         raise SystemExit(f'adapted generator is still missing {token!r}')
 
 p.write_text(s, encoding='utf-8')
-print('Grok generator adapted to current compact Config layout')
+print('Grok generator adapted to current compact/aligned source layout')
