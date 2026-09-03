@@ -22,13 +22,26 @@ jobs:
           go-version-file: go.mod
       - name: Apply Gemini Chat integration
         run: python tools/integrate_gemini_chat.py
-      - name: Normalize generated Go indentation
+      - name: Normalize generated UI and update five-agent regressions
         run: |
           python - <<'PY'
           from pathlib import Path
+
           p = Path('zzzzzz_gemini_chat_ui.go')
+          s = p.read_text(encoding='utf-8').replace('\n\\t', '\n\t')
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('ui_page_agents_test.go')
           s = p.read_text(encoding='utf-8')
-          s = s.replace('\n\\t', '\n\t')
+          s = s.replace('`name="chatgptPrefix"`, `name="claudeChatPrefix"`,', '`name="chatgptPrefix"`, `name="claudeChatPrefix"`, `name="geminiChatPrefix"`,')
+          s = s.replace('`name="chatgptRequireCode"`, `name="claudeChatRequireCode"`,', '`name="chatgptRequireCode"`, `name="claudeChatRequireCode"`, `name="geminiChatRequireCode"`,')
+          s = s.replace('`name="chatgptAckDelay"`, `name="claudeChatAckDelay"`,', '`name="chatgptAckDelay"`, `name="claudeChatAckDelay"`, `name="geminiChatAckDelay"`,')
+          s = s.replace('strings.Count(body, `name="sharedReplyStyle"`) != 4', 'strings.Count(body, `name="sharedReplyStyle"`) != 5')
+          s = s.replace('shared SMS instruction should be available from all four panes', 'shared SMS instruction should be available from all five panes')
+          s = s.replace('`name="chatgptPrefix"`, `name="claudeChatPrefix"`, `name="sharedReplyStyle"`', '`name="chatgptPrefix"`, `name="claudeChatPrefix"`, `name="geminiChatPrefix"`, `name="sharedReplyStyle"`')
+          s = s.replace('// FlipAi has one SMS instruction for all four agents.', '// FlipAi has one SMS instruction for all five agents.')
+          s = s.replace('cfg.ChatGPT.Instruction != "" || cfg.ClaudeChat.Instruction != "" {', 'cfg.ChatGPT.Instruction != "" || cfg.ClaudeChat.Instruction != "" || cfg.GeminiChat.Instruction != "" {')
+          s = s.replace('[]string{"C", "A", "G", "H"}', '[]string{"C", "A", "G", "H", "M"}')
           p.write_text(s, encoding='utf-8')
           PY
       - name: Format
