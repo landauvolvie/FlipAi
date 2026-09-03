@@ -79,41 +79,23 @@ func TestIMAPIdleReturnsOnExists(t *testing.T) {
 			return
 		}
 		line, err := r.ReadString('\n')
-		if err != nil {
-			serverDone <- err
-			return
-		}
+		if err != nil { serverDone <- err; return }
 		tag := strings.Fields(line)[0]
 		serverConn.Write([]byte(tag + " OK LOGIN completed\r\n"))
 		line, err = r.ReadString('\n')
-		if err != nil {
-			serverDone <- err
-			return
-		}
+		if err != nil { serverDone <- err; return }
 		tag = strings.Fields(line)[0]
 		serverConn.Write([]byte("* 1 EXISTS\r\n" + tag + " OK EXAMINE completed\r\n"))
 		line, err = r.ReadString('\n')
-		if err != nil {
-			serverDone <- err
-			return
-		}
+		if err != nil { serverDone <- err; return }
 		tag = strings.Fields(line)[0]
-		if !strings.Contains(strings.ToUpper(line), " IDLE") {
-			serverDone <- context.Canceled
-			return
-		}
+		if !strings.Contains(strings.ToUpper(line), " IDLE") { serverDone <- context.Canceled; return }
 		serverConn.Write([]byte("+ idling\r\n"))
 		time.Sleep(40 * time.Millisecond)
 		serverConn.Write([]byte("* 2 EXISTS\r\n"))
 		line, err = r.ReadString('\n')
-		if err != nil {
-			serverDone <- err
-			return
-		}
-		if strings.TrimSpace(line) != "DONE" {
-			serverDone <- context.Canceled
-			return
-		}
+		if err != nil { serverDone <- err; return }
+		if strings.TrimSpace(line) != "DONE" { serverDone <- context.Canceled; return }
 		serverConn.Write([]byte(tag + " OK IDLE terminated\r\n"))
 		line, err = r.ReadString('\n')
 		if err == nil {
@@ -126,33 +108,21 @@ func TestIMAPIdleReturnsOnExists(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	start := time.Now()
-	if err := c.WaitForChange(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if time.Since(start) > time.Second {
-		t.Fatal("IMAP IDLE wake was unexpectedly slow")
-	}
-	if err := <-serverDone; err != nil {
-		t.Fatal(err)
-	}
+	if err := c.WaitForChange(ctx); err != nil { t.Fatal(err) }
+	if time.Since(start) > time.Second { t.Fatal("IMAP IDLE wake was unexpectedly slow") }
+	if err := <-serverDone; err != nil { t.Fatal(err) }
 }
 
 type pollMail struct {
 	mu    sync.Mutex
 	lists int
 }
-
 func (m *pollMail) Authorized() bool           { return true }
 func (m *pollMail) Test(context.Context) error { return nil }
-func (m *pollMail) List(context.Context) ([]string, error) {
-	m.mu.Lock()
-	m.lists++
-	m.mu.Unlock()
-	return nil, nil
-}
+func (m *pollMail) List(context.Context) ([]string, error) { m.mu.Lock(); m.lists++; m.mu.Unlock(); return nil, nil }
 func (m *pollMail) Get(context.Context, string) (GmailMessage, error) { return GmailMessage{}, nil }
-func (m *pollMail) SendText(context.Context, string, string) error    { return nil }
-func (m *pollMail) count() int                                        { m.mu.Lock(); defer m.mu.Unlock(); return m.lists }
+func (m *pollMail) SendText(context.Context, string, string) error { return nil }
+func (m *pollMail) count() int { m.mu.Lock(); defer m.mu.Unlock(); return m.lists }
 
 func TestOAuthStylePollingChecksAboutOncePerSecond(t *testing.T) {
 	m := &pollMail{}
@@ -163,10 +133,6 @@ func TestOAuthStylePollingChecksAboutOncePerSecond(t *testing.T) {
 	defer cancel()
 	go b.Run(ctx)
 	deadline := time.Now().Add(1600 * time.Millisecond)
-	for m.count() < 2 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if m.count() < 2 {
-		t.Fatalf("expected initial + one-second mailbox checks, got %d", m.count())
-	}
+	for m.count() < 2 && time.Now().Before(deadline) { time.Sleep(20 * time.Millisecond) }
+	if m.count() < 2 { t.Fatalf("expected initial + one-second mailbox checks, got %d", m.count()) }
 }

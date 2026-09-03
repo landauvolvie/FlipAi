@@ -47,9 +47,7 @@ func (c *CodexClient) SmokeTest(ctx context.Context) error {
 		return fmt.Errorf("start Codex test turn: %w", err)
 	}
 	var turnStart struct {
-		Turn struct {
-			ID string `json:"id"`
-		} `json:"turn"`
+		Turn struct{ ID string `json:"id"` } `json:"turn"`
 	}
 	if json.Unmarshal(raw, &turnStart) != nil || turnStart.Turn.ID == "" {
 		return errors.New("Codex test turn returned no turn id")
@@ -79,9 +77,7 @@ func (c *CodexClient) SmokeTest(ctx context.Context) error {
 					Turn struct {
 						ID     string `json:"id"`
 						Status string `json:"status"`
-						Error  *struct {
-							Message string `json:"message"`
-						} `json:"error"`
+						Error  *struct{ Message string `json:"message"` } `json:"error"`
 					} `json:"turn"`
 				}
 				if json.Unmarshal(n.Params, &p) == nil && p.Turn.ID == turnStart.Turn.ID {

@@ -23,10 +23,10 @@ type VoiceAudioDevice struct {
 }
 
 type voiceCablePlan struct {
-	GoogleVoiceOutput string   `json:"googleVoiceOutput,omitempty"`
-	AgentInput        string   `json:"agentInput,omitempty"`
-	AgentOutput       string   `json:"agentOutput,omitempty"`
-	GoogleVoiceInput  string   `json:"googleVoiceInput,omitempty"`
+	GoogleVoiceOutput string `json:"googleVoiceOutput,omitempty"`
+	AgentInput        string `json:"agentInput,omitempty"`
+	AgentOutput       string `json:"agentOutput,omitempty"`
+	GoogleVoiceInput  string `json:"googleVoiceInput,omitempty"`
 	Cables            []string `json:"cables,omitempty"`
 	Warning           string   `json:"warning,omitempty"`
 }

@@ -32,9 +32,9 @@ type chatGPTCloudMapScan struct {
 }
 
 var (
-	chatGPTCloudAuthURLRegex      = regexp.MustCompile(`(?i)https://(?:auth|api)\.openai\.com/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]{0,300}`)
+	chatGPTCloudAuthURLRegex = regexp.MustCompile(`(?i)https://(?:auth|api)\.openai\.com/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]{0,300}`)
 	chatGPTCloudConversationRegex = regexp.MustCompile(`(?i)(?:https://chatgpt\.com)?/(?:backend-api/)?conversation(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]{0,260})?`)
-	chatGPTCloudClientRegexes     = []*regexp.Regexp{
+	chatGPTCloudClientRegexes = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)(?:["'\x60]?(?:client_id|clientId)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{3,220})`),
 		regexp.MustCompile(`(?i)(?:set|append)\s*\(\s*["'\x60](?:client_id|clientId)["'\x60]\s*,\s*["'\x60]([^"'\x60\r\n]{3,220})`),
 	}
@@ -46,8 +46,8 @@ var (
 		regexp.MustCompile(`(?i)(?:["'\x60]?(?:scope|scopes)["'\x60]?)\s*[:=]\s*["'\x60]([^"'\x60\r\n]{2,360})`),
 		regexp.MustCompile(`(?i)(?:set|append)\s*\(\s*["'\x60](?:scope|scopes)["'\x60]\s*,\s*["'\x60]([^"'\x60\r\n]{2,360})`),
 	}
-	chatGPTCloudHeaderRegex           = regexp.MustCompile(`(?i)["'\x60]((?:authorization|content-type|accept|cookie|origin|referer|user-agent|oai-[a-z0-9-]+|openai-[a-z0-9-]+|x-[a-z0-9-]+))["'\x60]\s*(?::|,)`)
-	chatGPTCloudActionRegex           = regexp.MustCompile(`(?i)(?:["'\x60]?action["'\x60]?)\s*:\s*["'\x60]([A-Za-z0-9_-]{1,50})["'\x60]`)
+	chatGPTCloudHeaderRegex = regexp.MustCompile(`(?i)["'\x60]((?:authorization|content-type|accept|cookie|origin|referer|user-agent|oai-[a-z0-9-]+|openai-[a-z0-9-]+|x-[a-z0-9-]+))["'\x60]\s*(?::|,)`)
+	chatGPTCloudActionRegex = regexp.MustCompile(`(?i)(?:["'\x60]?action["'\x60]?)\s*:\s*["'\x60]([A-Za-z0-9_-]{1,50})["'\x60]`)
 	chatGPTCloudNullConversationRegex = regexp.MustCompile(`(?i)(?:conversation_id|conversationId)\s*:\s*(?:null|undefined)`)
 )
 
@@ -148,12 +148,8 @@ func chatGPTCloudRelevantText(text string) string {
 			if !seen[bucket] {
 				seen[bucket] = true
 				start, end := i-7000, i+7000
-				if start < 0 {
-					start = 0
-				}
-				if end > len(text) {
-					end = len(text)
-				}
+				if start < 0 { start = 0 }
+				if end > len(text) { end = len(text) }
 				pieces = append(pieces, text[start:end])
 			}
 			from = i + len(anchor)
@@ -211,11 +207,11 @@ func extractChatGPTCloudMap(path string, data []byte) chatGPTCloudMapScan {
 	low := strings.ToLower(relevant)
 	for needle, label := range map[string]string{
 		"code_challenge_method": "PKCE code_challenge_method",
-		"code_challenge":        "PKCE code_challenge",
-		"code_verifier":         "PKCE code_verifier",
-		"response_type":         "OAuth response_type",
-		"grant_type":            "OAuth grant_type",
-		"offline_access":        "OAuth offline_access scope marker",
+		"code_challenge": "PKCE code_challenge",
+		"code_verifier": "PKCE code_verifier",
+		"response_type": "OAuth response_type",
+		"grant_type": "OAuth grant_type",
+		"offline_access": "OAuth offline_access scope marker",
 	} {
 		if strings.Contains(low, needle) {
 			out.OAuthMechanics = append(out.OAuthMechanics, path+" -> "+label)
@@ -251,35 +247,35 @@ func extractChatGPTCloudMap(path string, data []byte) chatGPTCloudMapScan {
 	}
 
 	for needle, label := range map[string]string{
-		"text/event-stream":    "SSE content type text/event-stream",
-		"eventsource":          "EventSource/SSE",
-		"websocket":            "WebSocket",
-		"wss://chatgpt.com":    "ChatGPT WSS endpoint",
+		"text/event-stream": "SSE content type text/event-stream",
+		"eventsource": "EventSource/SSE",
+		"websocket": "WebSocket",
+		"wss://chatgpt.com": "ChatGPT WSS endpoint",
 		"wss://ws.chatgpt.com": "ChatGPT ws.chatgpt.com endpoint",
-		"[done]":               "SSE [DONE] terminator marker",
-		"messageevent":         "MessageEvent",
-		"event.data":           "event.data parser",
+		"[done]": "SSE [DONE] terminator marker",
+		"messageevent": "MessageEvent",
+		"event.data": "event.data parser",
 	} {
 		if strings.Contains(low, needle) {
 			out.StreamFormats = append(out.StreamFormats, path+" -> "+label)
 		}
 	}
 	for needle, label := range map[string]string{
-		"credentials:\"include\"":                 "fetch credentials=include",
-		"credentials:'include'":                   "fetch credentials=include",
-		"withcredentials":                         "withCredentials/browser session context",
-		"oai-device-id":                           "OAI device-id header/state",
+		"credentials:\"include\"": "fetch credentials=include",
+		"credentials:'include'": "fetch credentials=include",
+		"withcredentials": "withCredentials/browser session context",
+		"oai-device-id": "OAI device-id header/state",
 		"openai-sentinel-chat-requirements-token": "Sentinel chat-requirements token header",
-		"chat-requirements":                       "chat requirements challenge",
-		"requirements_token":                      "requirements token field",
-		"arkose":                                  "Arkose challenge marker",
-		"turnstile":                               "Turnstile challenge marker",
-		"cf_clearance":                            "Cloudflare clearance cookie marker",
-		"csrf":                                    "CSRF marker",
-		"proof_token":                             "proof token field",
-		"device_id":                               "device_id field",
-		"\"cookie\"":                              "cookie/session marker near Chat/auth code",
-		"'cookie'":                                "cookie/session marker near Chat/auth code",
+		"chat-requirements": "chat requirements challenge",
+		"requirements_token": "requirements token field",
+		"arkose": "Arkose challenge marker",
+		"turnstile": "Turnstile challenge marker",
+		"cf_clearance": "Cloudflare clearance cookie marker",
+		"csrf": "CSRF marker",
+		"proof_token": "proof token field",
+		"device_id": "device_id field",
+		"\"cookie\"": "cookie/session marker near Chat/auth code",
+		"'cookie'": "cookie/session marker near Chat/auth code",
 	} {
 		if strings.Contains(low, needle) {
 			out.SessionDependencies = append(out.SessionDependencies, path+" -> "+label)
@@ -358,13 +354,9 @@ func assessChatGPTCloudMap(s chatGPTCloudMapScan) string {
 func scanOneChatGPTCloudMap(ctx context.Context, archivePath string) (chatGPTCloudMapScan, error) {
 	var out chatGPTCloudMapScan
 	_, entries, err := readChatGPTASARIndex(archivePath)
-	if err != nil {
-		return out, err
-	}
+	if err != nil { return out, err }
 	f, err := os.Open(archivePath)
-	if err != nil {
-		return out, err
-	}
+	if err != nil { return out, err }
 	defer f.Close()
 
 	var total int64
@@ -372,32 +364,20 @@ func scanOneChatGPTCloudMap(ctx context.Context, archivePath string) (chatGPTClo
 	const totalLimit = int64(256 << 20)
 	const fileLimit = int64(32 << 20)
 	for _, entry := range entries {
-		if ctx.Err() != nil || total >= totalLimit {
-			break
-		}
-		if entry.Unpacked || entry.Size <= 0 || entry.Size > fileLimit || !chatGPTASARCodePath(entry.Path) {
-			continue
-		}
+		if ctx.Err() != nil || total >= totalLimit { break }
+		if entry.Unpacked || entry.Size <= 0 || entry.Size > fileLimit || !chatGPTASARCodePath(entry.Path) { continue }
 		lowPath := strings.ToLower(entry.Path)
-		if !(strings.Contains(lowPath, ".vite/build/") || strings.Contains(lowPath, "preload") || strings.Contains(lowPath, "main") || strings.Contains(lowPath, "worker") || strings.Contains(lowPath, "webview/") || strings.Contains(lowPath, "renderer")) {
-			continue
-		}
+		if !(strings.Contains(lowPath, ".vite/build/") || strings.Contains(lowPath, "preload") || strings.Contains(lowPath, "main") || strings.Contains(lowPath, "worker") || strings.Contains(lowPath, "webview/") || strings.Contains(lowPath, "renderer")) { continue }
 		limit := entry.Size
-		if remain := totalLimit - total; remain < limit {
-			limit = remain
-		}
+		if remain := totalLimit-total; remain < limit { limit = remain }
 		b := make([]byte, int(limit))
 		n, readErr := f.ReadAt(b, entry.Offset)
-		if readErr != nil && readErr != io.EOF {
-			continue
-		}
+		if readErr != nil && readErr != io.EOF { continue }
 		b = b[:n]
 		total += int64(n)
 		inspected++
 		one := extractChatGPTCloudMap(entry.Path, b)
-		if len(one.OAuthEndpoints)+len(one.PublicClientIDs)+len(one.ConversationEndpoints)+len(one.RequestFields) > 0 {
-			matched++
-		}
+		if len(one.OAuthEndpoints)+len(one.PublicClientIDs)+len(one.ConversationEndpoints)+len(one.RequestFields) > 0 { matched++ }
 		mergeChatGPTCloudMap(&out, one)
 	}
 
@@ -422,42 +402,28 @@ func scanChatGPTCloudMaps(ctx context.Context, roots []string) chatGPTCloudMapSc
 	seen := map[string]bool{}
 	for _, root := range roots {
 		root = filepath.Clean(strings.TrimSpace(root))
-		if root == "" || root == "." || ctx.Err() != nil {
-			continue
-		}
+		if root == "" || root == "." || ctx.Err() != nil { continue }
 		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil || ctx.Err() != nil {
-				return nil
-			}
+			if err != nil || ctx.Err() != nil { return nil }
 			low := strings.ToLower(filepath.Clean(path))
 			for _, privatePart := range []string{"\\user data\\", "\\local storage\\", "\\indexeddb\\", "\\session storage\\", "\\network\\", "\\cache\\", "\\gpucache\\"} {
 				if strings.Contains(low, privatePart) {
-					if d.IsDir() {
-						return filepath.SkipDir
-					}
+					if d.IsDir() { return filepath.SkipDir }
 					return nil
 				}
 			}
-			if d.IsDir() || !strings.EqualFold(d.Name(), "app.asar") {
-				return nil
-			}
+			if d.IsDir() || !strings.EqualFold(d.Name(), "app.asar") { return nil }
 			key := strings.ToLower(filepath.Clean(path))
-			if seen[key] {
-				return nil
-			}
+			if seen[key] { return nil }
 			seen[key] = true
 			one, e := scanOneChatGPTCloudMap(ctx, path)
 			if e != nil {
-				if out.Detail == "" {
-					out.Detail = "cloud-auth ASAR parse failed: " + e.Error()
-				}
+				if out.Detail == "" { out.Detail = "cloud-auth ASAR parse failed: "+e.Error() }
 				return nil
 			}
 			mergeChatGPTCloudMap(&out, one)
 			if one.Detail != "" {
-				if out.Detail != "" {
-					out.Detail += " | "
-				}
+				if out.Detail != "" { out.Detail += " | " }
 				out.Detail += one.Detail
 			}
 			return nil

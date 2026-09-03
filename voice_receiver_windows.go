@@ -93,9 +93,7 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 	control := newVoiceControlChannel(newWebViewDevTools(w))
 
 	bridge := newVoiceBridge(dataDir, mainConfig,
-		func(cfg VoiceCallConfig, agent string) error {
-			return startAgentVoiceSessionVerified(dataDir, cfg, agent)
-		},
+		func(cfg VoiceCallConfig, agent string) error { return startAgentVoiceSessionVerified(dataDir, cfg, agent) },
 		stopAgentVoiceSession)
 	bridge.route = func(cfg VoiceCallConfig, agent string) { routeAgentAppAudio(dataDir, cfg, agent) }
 	bridge.press = control.pressAnswer

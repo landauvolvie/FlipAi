@@ -93,8 +93,8 @@ func TestReadChatGPTASARIndex(t *testing.T) {
 
 func TestScanOneChatGPTASARFindsAppMarkersAndIPC(t *testing.T) {
 	fixture := buildASARFixture(t, map[string]string{
-		"dist/main.js":                `const {ipcMain}=require("electron"); ipcMain.handle("chat-send", async () => fetch("https://chatgpt.com/backend-api/conversation"));`,
-		"dist/preload.js":             `contextBridge.exposeInMainWorld("chatgptBridge", {});`,
+		"dist/main.js": `const {ipcMain}=require("electron"); ipcMain.handle("chat-send", async () => fetch("https://chatgpt.com/backend-api/conversation"));`,
+		"dist/preload.js": `contextBridge.exposeInMainWorld("chatgptBridge", {});`,
 		"node_modules/noise/index.js": `https://chatgpt.com/backend-api should be ignored`,
 	})
 	dir := t.TempDir()

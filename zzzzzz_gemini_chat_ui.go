@@ -3,8 +3,8 @@ package main
 import "strings"
 
 // This runs after the existing ChatGPT augmentation and re-registers the Agents
-// page with a fourth, independent Gemini Chat pane. Keeping the browser agents
-// as augmentations avoids disturbing the mature Codex/Gemini CLI layout.
+// page with a fifth, independent Gemini Chat pane. Keeping the browser agents
+// as augmentations avoids disturbing the mature Codex/Claude CLI layout.
 func init() {
 	registerPage("agents", geminiChatDirectUI(claudeChatDirectUI(chatGPTDirectUI(agentConnectFirstRunHTML(agentsPageHTML)))))
 }

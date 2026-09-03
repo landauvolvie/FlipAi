@@ -178,12 +178,12 @@ func (a *App) claudeConnect(w http.ResponseWriter, r *http.Request) {
 
 	if installing {
 		renderResult(w, r, 200, true, "Claude setup started",
-			"PowerShell is installing Claude Code from Anthropic, then it will open the Claude browser sign-in. "+
+			"PowerShell is installing Claude Code from Anthropic, then it will open the Claude browser sign-in. " +
 				"Complete the authorization in the browser. FlipAi will detect it automatically; you do not need to press another connection button.")
 		return
 	}
 	renderResult(w, r, 200, true, "Finish connecting Claude",
-		"The Claude Code sign-in window is open. Complete the browser authorization it starts. "+
+		"The Claude Code sign-in window is open. Complete the browser authorization it starts. " +
 			"FlipAi will detect the completed sign-in automatically.")
 }
 
