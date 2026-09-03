@@ -56,6 +56,39 @@ type geminiChatSMSReply struct {
 	ConversationID string `json:"conversationId"`
 }
 
+// cleanGeminiChatReply removes Gemini's accessibility-only speaker label from
+// the extracted DOM text. Gemini visually renders only the answer, but its
+// response container can expose text such as "Gemini said Hello" to assistive
+// technology. That label is page chrome, not part of the model's reply, so it
+// must not be forwarded to SMS.
+func cleanGeminiChatReply(reply string) string {
+	s := strings.TrimSpace(reply)
+	lower := strings.ToLower(s)
+	const label = "gemini said"
+	if !strings.HasPrefix(lower, label) {
+		return s
+	}
+	if len(s) == len(label) {
+		return s
+	}
+	rest := s[len(label):]
+	if rest == "" {
+		return s
+	}
+	// Only strip when the label is followed by the delimiter Gemini actually
+	// exposes: whitespace or punctuation. This avoids changing genuine text
+	// that merely starts with a longer word sharing the same bytes.
+	first := rest[0]
+	if first != ':' && first != '-' && first != '\n' && first != '\r' && first != '\t' && first != ' ' {
+		return s
+	}
+	rest = strings.TrimSpace(strings.TrimLeft(rest, ":-"))
+	if rest == "" {
+		return s
+	}
+	return rest
+}
+
 func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureGeminiChatReady(readyCtx, dataDir)
@@ -78,10 +111,11 @@ func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string,
 		}
 		return "", errors.New(out.Detail)
 	}
-	if strings.TrimSpace(out.Reply) == "" {
+	cleaned := cleanGeminiChatReply(out.Reply)
+	if cleaned == "" {
 		return "", errors.New("Gemini Chat returned an empty reply")
 	}
-	return strings.TrimSpace(out.Reply), nil
+	return cleaned, nil
 }
 
 func geminiChatBrowserNewConversation(ctx context.Context, dataDir string) error {
