@@ -6,7 +6,7 @@ This release adds regular Claude Chat as a separate browser-backed FlipAi agent,
 
 Claude Chat signs into claude.ai through its own persistent FlipAi WebView2 profile. It has Connect, Test, and Disconnect controls, an independent H: SMS shortcut, sticky follow-up routing, NEW conversation support, its own allowed-phone list and security code, and the same receipt/progress controls as the other agents. Claude Code remains a separate agent and is not replaced.
 
-Existing phone-number permissions are not silently copied into Claude Chat. Add a number under Claude Chat before H: can receive texts.
+Existing phone-number permissions are not silently copied into Claude Chat. Add a number under Claude Chat before H: can receive texts. This keeps Claude Chat authorization independent from Codex, Claude Code, and ChatGPT Chat.
 
 ## RAM and lifecycle protection
 
