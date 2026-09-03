@@ -232,8 +232,11 @@ func runChatGPTBackgroundSupervisor(ctx context.Context, dataDir string) {
 			// persisted values can be stale, so verify the private loopback worker.
 			if s.Running && !chatGPTBrowserStillOpen(dataDir) {
 				mutateChatGPTRuntime(dataDir, func(v *ChatGPTWebRuntime) {
-					v.Running = false; v.Starting = false; v.SignedIn = false
-					v.ControlPort = 0; v.ControlToken = ""
+					v.Running = false
+					v.Starting = false
+					v.SignedIn = false
+					v.ControlPort = 0
+					v.ControlToken = ""
 					v.LastEvent = "background-restart-pending"
 				})
 				chatGPTActivity(dataDir, "warn", "chatgpt-session", "Saved ChatGPT browser state had no live worker; restarting it invisibly.", 0)

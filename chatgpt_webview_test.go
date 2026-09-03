@@ -10,9 +10,9 @@ import (
 
 func TestChatGPTConversationID(t *testing.T) {
 	cases := map[string]string{
-		"https://chatgpt.com/c/abc-123": "abc-123",
+		"https://chatgpt.com/c/abc-123":            "abc-123",
 		"https://chatgpt.com/c/abc-123?model=auto": "abc-123",
-		"https://chatgpt.com/": "",
+		"https://chatgpt.com/":                     "",
 	}
 	for in, want := range cases {
 		if got := chatGPTConversationID(in); got != want {

@@ -462,8 +462,11 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 			return
 		}
 		mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
-			s.Connected = true; s.SignedIn = true; s.ConversationID = ""
-			s.LastEvent = "new-chat-ready"; s.LastError = ""
+			s.Connected = true
+			s.SignedIn = true
+			s.ConversationID = ""
+			s.LastEvent = "new-chat-ready"
+			s.LastError = ""
 		})
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
 	})

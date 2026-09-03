@@ -105,7 +105,7 @@ func TestCaptureCodexImageFromTurnCompletedIgnoresTextOnlyTurn(t *testing.T) {
 		"turn": map[string]any{
 			"id":     "turn-test",
 			"status": "completed",
-			"items": []any{map[string]any{"type": "agentMessage", "text": "hello"}},
+			"items":  []any{map[string]any{"type": "agentMessage", "text": "hello"}},
 		},
 	})
 	if err != nil {

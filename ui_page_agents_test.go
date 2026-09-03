@@ -18,11 +18,11 @@ func TestAgentsPageOwnsUnifiedAgentSettings(t *testing.T) {
 
 	for _, want := range []string{
 		"agent-rail", "Routing &amp; workspace", "SMS instruction", "Conversation",
-		`name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="claudeChatPrefix"`,
+		`name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="claudeChatPrefix"`, `name="geminiChatPrefix"`,
 		`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`,
 		`name="sharedReplyStyle"`, "Allowed phone numbers", "Security code",
-		`name="codexRequireCode"`, `name="claudeRequireCode"`, `name="chatgptRequireCode"`, `name="claudeChatRequireCode"`,
-		`name="codexAckDelay"`, `name="claudeAckDelay"`, `name="chatgptAckDelay"`, `name="claudeChatAckDelay"`,
+		`name="codexRequireCode"`, `name="claudeRequireCode"`, `name="chatgptRequireCode"`, `name="claudeChatRequireCode"`, `name="geminiChatRequireCode"`,
+		`name="codexAckDelay"`, `name="claudeAckDelay"`, `name="chatgptAckDelay"`, `name="claudeChatAckDelay"`, `name="geminiChatAckDelay"`,
 		`formaction="/agents/numbers/add"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -34,11 +34,11 @@ func TestAgentsPageOwnsUnifiedAgentSettings(t *testing.T) {
 			t.Errorf("Agents page still exposes retired control %q", old)
 		}
 	}
-	if strings.Count(body, `name="sharedReplyStyle"`) != 4 {
-		t.Fatalf("shared SMS instruction should be available from all four panes")
+	if strings.Count(body, `name="sharedReplyStyle"`) != 5 {
+		t.Fatalf("shared SMS instruction should be available from all five panes")
 	}
 
-	agentFields := []string{`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`, `name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="claudeChatPrefix"`, `name="sharedReplyStyle"`}
+	agentFields := []string{`name="codexPath"`, `name="claudePath"`, `name="permissionMode"`, `name="codexPrefix"`, `name="claudePrefix"`, `name="chatgptPrefix"`, `name="claudeChatPrefix"`, `name="geminiChatPrefix"`, `name="sharedReplyStyle"`}
 	for _, page := range []string{"/settings", "/connections", "/"} {
 		other := a.do(t, http.MethodGet, page, nil).Body.String()
 		for _, forbidden := range agentFields {
@@ -61,7 +61,7 @@ func TestAgentsPageOwnsUnifiedAgentSettings(t *testing.T) {
 	}
 }
 
-// FlipAi has one SMS instruction for all four agents. Editing it in any
+// FlipAi has one SMS instruction for all five agents. Editing it in any
 // agent pane changes the one shared value used by every composePrompt call.
 func TestSharedSMSInstructionIsEditableAndUsedByEveryAgent(t *testing.T) {
 	a := newTestApp(t)
@@ -76,11 +76,11 @@ func TestSharedSMSInstructionIsEditableAndUsedByEveryAgent(t *testing.T) {
 	if cfg.GoogleVoice.ReplyStyleHint != "Answer in one line. No markdown." {
 		t.Fatalf("shared instruction was not stored trimmed: %q", cfg.GoogleVoice.ReplyStyleHint)
 	}
-	if cfg.Codex.Instruction != "" || cfg.Claude.Instruction != "" || cfg.ChatGPT.Instruction != "" || cfg.ClaudeChat.Instruction != "" {
+	if cfg.Codex.Instruction != "" || cfg.Claude.Instruction != "" || cfg.ChatGPT.Instruction != "" || cfg.ClaudeChat.Instruction != "" || cfg.GeminiChat.Instruction != "" {
 		t.Fatalf("retired per-agent overrides survived")
 	}
 	b := NewBridge(cfg, a.statePath, State{}, nil, nil, nil)
-	for _, agent := range []string{"C", "A", "G", "H"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M"} {
 		if got := b.composePrompt(agent, "ship it"); !strings.HasSuffix(got, "Answer in one line. No markdown.") {
 			t.Fatalf("%s prompt does not carry shared instruction: %q", agent, got)
 		}

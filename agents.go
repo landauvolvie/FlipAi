@@ -96,6 +96,8 @@ func agentSettings(cfg Config, agent string) AgentSettings {
 		return cfg.ChatGPT.AgentSettings
 	case "H":
 		return cfg.ClaudeChat.AgentSettings
+	case "M":
+		return cfg.GeminiChat.AgentSettings
 	default:
 		return cfg.Codex.AgentSettings
 	}
@@ -109,6 +111,8 @@ func putAgentSettingsConfig(cfg *Config, agent string, s AgentSettings) {
 		cfg.ChatGPT.AgentSettings = s
 	case "H":
 		cfg.ClaudeChat.AgentSettings = s
+	case "M":
+		cfg.GeminiChat.AgentSettings = s
 	default:
 		cfg.Codex.AgentSettings = s
 	}
@@ -121,7 +125,7 @@ func agentDisplayName(agent string) string {
 	}
 	var names []string
 	for _, item := range []struct{ key, name string }{
-		{"C", "Codex"}, {"A", "Claude"}, {"G", "ChatGPT Chat"}, {"H", "Claude Chat"},
+		{"C", "Codex"}, {"A", "Claude"}, {"G", "ChatGPT Chat"}, {"H", "Claude Chat"}, {"M", "Gemini Chat"},
 	} {
 		if strings.Contains(marker, item.key) {
 			names = append(names, item.name)
@@ -174,7 +178,7 @@ func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok 
 	var marker strings.Builder
 	found := false
 	sms, voice := false, false
-	for _, candidate := range []string{"C", "A", "G", "H"} {
+	for _, candidate := range []string{"C", "A", "G", "H", "M"} {
 		p, exists := agentPhoneForSender(cfg, candidate, raw)
 		if !exists {
 			continue
@@ -207,7 +211,7 @@ func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok 
 
 func allAgentPhones(cfg Config) []AgentPhone {
 	var out []AgentPhone
-	for _, agent := range []string{"C", "A", "G", "H"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M"} {
 		out = append(out, agentSettings(cfg, agent).Phones...)
 	}
 	return out
@@ -255,13 +259,13 @@ func normalizeAgentPhones(list []AgentPhone, _ map[string]string) ([]AgentPhone,
 
 func normalizeAgents(cfg *Config) error {
 	claimedNames := map[string]string{}
-	for _, agent := range []string{"C", "A", "G", "H"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M"} {
 		settings := agentSettings(*cfg, agent)
 		cleaned, err := normalizeAgentPhones(settings.Phones, nil)
 		if err != nil {
 			return fmt.Errorf("%s numbers: %w", agentDisplayName(agent), err)
 		}
-		browserChat := agent == "G" || agent == "H"
+		browserChat := agent == "G" || agent == "H" || agent == "M"
 		if browserChat {
 			for i := range cleaned {
 				cleaned[i].Access = AccessSMS
@@ -296,6 +300,7 @@ func migrateAgentSettings(cfg *Config) {
 		ensureAgentReplyDefaults(cfg)
 		migrateChatGPTAgent(cfg)
 		migrateClaudeChatAgent(cfg)
+		migrateGeminiChatAgent(cfg)
 		return
 	}
 	cfg.Security.AgentsMigrated = true
@@ -343,6 +348,7 @@ func migrateAgentSettings(cfg *Config) {
 	ensureAgentReplyDefaults(cfg)
 	migrateChatGPTAgent(cfg)
 	migrateClaudeChatAgent(cfg)
+	migrateGeminiChatAgent(cfg)
 }
 
 func migrateChatGPTAgent(cfg *Config) {
@@ -360,6 +366,14 @@ func migrateClaudeChatAgent(cfg *Config) {
 	// Claude Chat is a new security boundary. Mark the migration complete but
 	// start with no phone numbers or PIN copied from any existing agent.
 	cfg.Security.ClaudeChatAgentMigrated = true
+}
+
+func migrateGeminiChatAgent(cfg *Config) {
+	if cfg.Security.GeminiChatAgentMigrated {
+		return
+	}
+	// Gemini Chat is also a new security boundary: never inherit a phone or PIN.
+	cfg.Security.GeminiChatAgentMigrated = true
 }
 
 func migrateBrowserChatAgent(cfg *Config, target string, sources []string) {
@@ -404,7 +418,7 @@ func migrateBrowserChatAgent(cfg *Config, target string, sources []string) {
 }
 
 func ensureAgentReplyDefaults(cfg *Config) {
-	for _, agent := range []string{"C", "A", "G", "H"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M"} {
 		s := agentSettings(*cfg, agent)
 		if s.ReplyAck == nil {
 			s.ReplyAck = boolPtr(true)
@@ -451,11 +465,11 @@ func verifyAgentCode(s AgentSettings, code string) bool {
 
 func salvageAgents(cfg *Config) {
 	claimedNames := map[string]bool{}
-	for _, agent := range []string{"C", "A", "G", "H"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M"} {
 		s := agentSettings(*cfg, agent)
 		seenNumbers := map[string]bool{}
 		kept := make([]AgentPhone, 0, len(s.Phones))
-		browserChat := agent == "G" || agent == "H"
+		browserChat := agent == "G" || agent == "H" || agent == "M"
 		for _, p := range s.Phones {
 			number := normalizeUSPhone(p.Number)
 			if number == "" || seenNumbers[number] {

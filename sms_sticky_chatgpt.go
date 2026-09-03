@@ -32,6 +32,7 @@ func explicitSMSAgent(raw string, cfg Config) string {
 			{"A", configuredClaudePrefix(cfg)},
 			{"G", configuredChatGPTPrefix(cfg)},
 			{"H", configuredClaudeChatPrefix(cfg)},
+			{"M", configuredGeminiChatPrefix(cfg)},
 		} {
 			if _, ok := stripAgentCommandPrefix(v, x.prefix); ok || isAgentNewSession(v, x.prefix, newWord) {
 				return x.agent
@@ -45,7 +46,7 @@ func smsTargetAllowed(sourceAgent, target string) bool {
 	sourceAgent = strings.ToUpper(strings.TrimSpace(sourceAgent))
 	target = strings.ToUpper(strings.TrimSpace(target))
 	if sourceAgent == "B" {
-		return target == "C" || target == "A" || target == "G" || target == "H"
+		return target == "C" || target == "A" || target == "G" || target == "H" || target == "M"
 	}
 	return target != "" && strings.Contains(sourceAgent, target)
 }
@@ -61,10 +62,10 @@ func selectStickySMSAgent(raw string, cfg Config, sourceAgent, sticky string) (s
 	if smsTargetAllowed(sourceAgent, sticky) {
 		return sticky, nil
 	}
-	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" {
+	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" || sourceAgent == "M" {
 		return sourceAgent, nil
 	}
-	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, or H: for Claude Chat")
+	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, H: for Claude Chat, or M: for Gemini Chat")
 }
 
 func authorizeChatGPTRaw(raw string, cfg Config, _ string) (string, error) {
@@ -116,11 +117,13 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 			return parseChatGPTSMSCommand(raw, cfg, sourceAgent)
 		case "H":
 			return parseClaudeChatSMSCommand(raw, cfg)
+		case "M":
+			return parseGeminiChatSMSCommand(raw, cfg)
 		default:
 			return parseRemoteCommand(raw, cfg, target)
 		}
 	}
-	if target == "G" || target == "H" {
+	if target == "G" || target == "H" || target == "M" {
 		return remoteCommand{}, fmt.Errorf("%s over Google Voice supports text messages in this release; switch to C: or A: for an attachment", agentDisplayName(target))
 	}
 	return parseRemoteCommandForMessage(raw, cfg, target, m)
@@ -145,7 +148,7 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 
 func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
 	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "C" && agent != "A" && agent != "G" && agent != "H" {
+	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" {
 		return fmt.Errorf("unknown sticky SMS agent %q", agent)
 	}
 	key := stickySMSKey(sender)

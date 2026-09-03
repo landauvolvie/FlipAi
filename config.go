@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.20"
+const version = "0.46.21"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -47,6 +47,7 @@ type Config struct {
 	ClaudePrefix       string `json:"claudePrefix,omitempty"`
 	ChatGPTPrefix      string `json:"chatgptPrefix,omitempty"`
 	ClaudeChatPrefix   string `json:"claudeChatPrefix,omitempty"`
+	GeminiChatPrefix   string `json:"geminiChatPrefix,omitempty"`
 	NewSessionCommand  string `json:"newSessionCommand,omitempty"`
 
 	// Paused stops the bridge from picking up new texts without shutting the
@@ -62,6 +63,7 @@ type Config struct {
 	Claude      ClaudeConfig      `json:"claude"`
 	ChatGPT     ChatGPTConfig     `json:"chatgpt"`
 	ClaudeChat  ClaudeChatConfig  `json:"claudeChat"`
+	GeminiChat  GeminiChatConfig  `json:"geminiChat"`
 	Security    SecurityConfig    `json:"security"`
 	UI          UIConfig          `json:"ui"`
 }
@@ -137,6 +139,10 @@ type ChatGPTConfig struct{ AgentSettings }
 // local Claude Code CLI; Claude Chat is the user's regular claude.ai account in
 // FlipAi's dedicated WebView2 profile.
 type ClaudeChatConfig struct{ AgentSettings }
+
+// GeminiChatConfig is the user's regular gemini.google.com account in its own
+// dedicated WebView2 profile. It is intentionally independent from every CLI/API.
+type GeminiChatConfig struct{ AgentSettings }
 
 type ClaudeConfig struct {
 	AgentSettings
@@ -216,6 +222,7 @@ type SecurityConfig struct {
 	AgentsMigrated          bool `json:"agentsMigrated,omitempty"`
 	ChatGPTAgentMigrated    bool `json:"chatgptAgentMigrated,omitempty"`
 	ClaudeChatAgentMigrated bool `json:"claudeChatAgentMigrated,omitempty"`
+	GeminiChatAgentMigrated bool `json:"geminiChatAgentMigrated,omitempty"`
 
 	// MachineScopeSecrets records that stored credentials are protected for
 	// this PC rather than for the signed-in account. Starting before sign-in
@@ -323,7 +330,7 @@ func defaultConfig(dataDir string) Config {
 	return Config{
 		CodexPath: "codex", ClaudePath: "claude", Cwd: home,
 		Listen: "127.0.0.1:8765", LocalToken: tok, TurnTimeoutMinutes: 90,
-		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, ChatGPTPrefix: defaultChatGPTPrefix, ClaudeChatPrefix: defaultClaudeChatPrefix, NewSessionCommand: defaultNewSessionCommand,
+		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, ChatGPTPrefix: defaultChatGPTPrefix, ClaudeChatPrefix: defaultClaudeChatPrefix, GeminiChatPrefix: defaultGeminiChatPrefix, NewSessionCommand: defaultNewSessionCommand,
 		Gmail:       GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
 		GoogleVoice: GoogleVoiceConfig{RequiredSubjectPhrase: "new text message from", ReplyMaxChars: 300, ReplyStyleHint: defaultReplyStyleHint, MaxReplyParts: 4, ReplyAck: true, ProgressUpdates: true, ProgressIntervalSeconds: 120},
 		Updates:     UpdateConfig{Automatic: false},
@@ -331,6 +338,7 @@ func defaultConfig(dataDir string) Config {
 		Claude:      ClaudeConfig{PermissionMode: claudeFullAccess, UseChrome: true, SessionMode: claudeSessionModePrint},
 		ChatGPT:     ChatGPTConfig{AgentSettings: browserDefaults},
 		ClaudeChat:  ClaudeChatConfig{AgentSettings: browserDefaults},
+		GeminiChat:  GeminiChatConfig{AgentSettings: browserDefaults},
 		Security:    SecurityConfig{RequireCode: false},
 		UI:          UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
 	}
@@ -434,6 +442,7 @@ func loadConfig(path, dataDir string) (Config, error) {
 	cfg.Claude.Instruction = normalizeReplyStyleHint(cfg.Claude.Instruction)
 	cfg.ChatGPT.Instruction = normalizeReplyStyleHint(cfg.ChatGPT.Instruction)
 	cfg.ClaudeChat.Instruction = normalizeReplyStyleHint(cfg.ClaudeChat.Instruction)
+	cfg.GeminiChat.Instruction = normalizeReplyStyleHint(cfg.GeminiChat.Instruction)
 	if cfg.GoogleVoice.MaxReplyParts < 1 {
 		cfg.GoogleVoice.MaxReplyParts = 4
 	}
@@ -465,8 +474,9 @@ func loadConfig(path, dataDir string) (Config, error) {
 	cfg.ClaudePrefix = normalizeCommandToken(cfg.ClaudePrefix, defaultClaudePrefix)
 	cfg.ChatGPTPrefix = normalizeCommandToken(cfg.ChatGPTPrefix, defaultChatGPTPrefix)
 	cfg.ClaudeChatPrefix = normalizeCommandToken(cfg.ClaudeChatPrefix, defaultClaudeChatPrefix)
+	cfg.GeminiChatPrefix = normalizeCommandToken(cfg.GeminiChatPrefix, defaultGeminiChatPrefix)
 	cfg.NewSessionCommand = normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)
-	prefixes := []string{cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix}
+	prefixes := []string{cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix}
 	dup := false
 	for i := range prefixes {
 		for j := i + 1; j < len(prefixes); j++ {
@@ -476,7 +486,7 @@ func loadConfig(path, dataDir string) (Config, error) {
 		}
 	}
 	if dup {
-		cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix, defaultClaudeChatPrefix
+		cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix, defaultClaudeChatPrefix, defaultGeminiChatPrefix
 	}
 	if cfg.LocalToken == "" {
 		cfg.LocalToken, err = secureRandomToken(24)
