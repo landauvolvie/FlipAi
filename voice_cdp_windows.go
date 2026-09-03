@@ -62,7 +62,9 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	expression, _ := m["expression"].(string)
 	if await &&
 		strings.Contains(expression, "const deadline=Date.now()+90000;") &&
-		strings.Contains(expression, `data-message-author-role="assistant"`) {
+		(strings.Contains(expression, `data-message-author-role="assistant"`) ||
+			strings.Contains(expression, "model-response") ||
+			strings.Contains(expression, "grokResponse")) {
 		return chatGPTTurnDevToolsTimeout
 	}
 	return voiceDevToolsTimeout

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWebViewDevToolsCallTimeoutKeepsVoiceShortAndChatGPTLong(t *testing.T) {
+func TestWebViewDevToolsCallTimeoutKeepsVoiceShortAndBrowserChatsLong(t *testing.T) {
 	ordinary := map[string]any{
 		"expression":    "(()=>true)()",
 		"returnByValue": true,
@@ -17,12 +17,21 @@ func TestWebViewDevToolsCallTimeoutKeepsVoiceShortAndChatGPTLong(t *testing.T) {
 		t.Fatalf("ordinary WebView eval timeout = %v, want %v", got, voiceDevToolsTimeout)
 	}
 
-	turn := map[string]any{
-		"expression":    fmt.Sprintf(chatGPTTurnJS, chatGPTJSString("hello")),
-		"returnByValue": true,
-		"awaitPromise":  true,
+	turns := map[string]string{
+		"ChatGPT": fmt.Sprintf(chatGPTTurnJS, chatGPTJSString("hello")),
+		"Gemini":  fmt.Sprintf(geminiChatTurnJS, geminiChatJSString("hello")),
+		"Grok":    fmt.Sprintf(grokChatTurnJS, grokChatJSString("hello")),
 	}
-	if got := webViewDevToolsCallTimeout("Runtime.evaluate", turn); got != chatGPTTurnDevToolsTimeout {
-		t.Fatalf("ChatGPT turn timeout = %v, want %v", got, chatGPTTurnDevToolsTimeout)
+	for name, expression := range turns {
+		t.Run(name, func(t *testing.T) {
+			turn := map[string]any{
+				"expression":    expression,
+				"returnByValue": true,
+				"awaitPromise":  true,
+			}
+			if got := webViewDevToolsCallTimeout("Runtime.evaluate", turn); got != chatGPTTurnDevToolsTimeout {
+				t.Fatalf("%s turn timeout = %v, want %v", name, got, chatGPTTurnDevToolsTimeout)
+			}
+		})
 	}
 }
