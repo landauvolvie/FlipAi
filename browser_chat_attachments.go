@@ -1,11 +1,10 @@
 package main
 
 import (
-	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,19 +12,15 @@ import (
 	"time"
 )
 
+const (
+	browserChatAttachmentMarkerStart = "[[FLIPAI_IMAGE_ATTACHMENTS:"
+	browserChatAttachmentMarkerEnd   = "]]"
+)
+
 type browserChatAttachment struct {
 	Path      string `json:"path"`
 	Filename  string `json:"filename,omitempty"`
 	MediaType string `json:"mediaType,omitempty"`
-}
-
-type browserChatUploadRequest struct {
-	Attachments []browserChatAttachment `json:"attachments"`
-}
-
-type browserChatUploadReply struct {
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail,omitempty"`
 }
 
 var browserChatAttachmentTurnMu sync.Mutex
@@ -118,6 +113,53 @@ func validatePreparedBrowserChatImage(a browserChatAttachment) error {
 	return nil
 }
 
+func browserChatAttachmentMarker(in []browserChatAttachment) (string, error) {
+	if len(in) == 0 {
+		return "", errors.New("no image attachment was supplied")
+	}
+	for _, a := range in {
+		if err := validatePreparedBrowserChatImage(a); err != nil {
+			return "", err
+		}
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		return "", err
+	}
+	return browserChatAttachmentMarkerStart + base64.RawURLEncoding.EncodeToString(b) + browserChatAttachmentMarkerEnd, nil
+}
+
+// extractBrowserChatAttachmentMarker runs inside the provider WebView worker.
+// It removes FlipAi's private attachment metadata before the page sees the
+// prompt and returns the validated local image files for the shared CDP upload.
+func extractBrowserChatAttachmentMarker(expression string) (string, []browserChatAttachment, bool, error) {
+	start := strings.Index(expression, browserChatAttachmentMarkerStart)
+	if start < 0 {
+		return expression, nil, false, nil
+	}
+	payloadStart := start + len(browserChatAttachmentMarkerStart)
+	relEnd := strings.Index(expression[payloadStart:], browserChatAttachmentMarkerEnd)
+	if relEnd < 0 {
+		return expression, nil, true, errors.New("invalid FlipAi image attachment marker")
+	}
+	end := payloadStart + relEnd
+	raw, err := base64.RawURLEncoding.DecodeString(expression[payloadStart:end])
+	if err != nil {
+		return expression, nil, true, errors.New("invalid FlipAi image attachment metadata")
+	}
+	var attachments []browserChatAttachment
+	if err := json.Unmarshal(raw, &attachments); err != nil || len(attachments) == 0 || len(attachments) > maxInboundAttachmentCount {
+		return expression, nil, true, errors.New("invalid FlipAi image attachment list")
+	}
+	for _, a := range attachments {
+		if err := validatePreparedBrowserChatImage(a); err != nil {
+			return expression, nil, true, err
+		}
+	}
+	clean := expression[:start] + expression[end+len(browserChatAttachmentMarkerEnd):]
+	return clean, attachments, true, nil
+}
+
 const browserChatFindFileInputJS = `(()=>{
   const pick=()=>{
     const inputs=Array.from(document.querySelectorAll('input[type="file"]')).filter(n=>!n.disabled);
@@ -139,9 +181,6 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 	if d == nil {
 		return errors.New("browser chat has no in-process control channel")
 	}
-	if len(attachments) == 0 {
-		return errors.New("no image attachment was supplied")
-	}
 	paths := make([]string, 0, len(attachments))
 	for _, a := range attachments {
 		if err := validatePreparedBrowserChatImage(a); err != nil {
@@ -149,6 +188,9 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 		}
 		abs, _ := filepath.Abs(a.Path)
 		paths = append(paths, abs)
+	}
+	if len(paths) == 0 {
+		return errors.New("no image attachment was supplied")
 	}
 
 	var objectID string
@@ -169,89 +211,9 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 	if err := d.Call("DOM.setFileInputFiles", map[string]any{"files": paths, "objectId": objectID}, nil); err != nil {
 		return fmt.Errorf("could not attach the image to the chat: %w", err)
 	}
-	time.Sleep(1200 * time.Millisecond)
-	return nil
-}
-
-func registerBrowserChatUploadEndpoint(mux *http.ServeMux, authorized func(*http.Request) bool, dev voiceDevTools) {
-	mux.HandleFunc("/upload", func(rw http.ResponseWriter, r *http.Request) {
-		if authorized == nil || !authorized(r) {
-			http.Error(rw, "FlipAi token required", http.StatusForbidden)
-			return
-		}
-		if r.Method != http.MethodPost {
-			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
-			return
-		}
-		r.Body = http.MaxBytesReader(rw, r.Body, 32<<10)
-		var body browserChatUploadRequest
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(rw, "invalid upload request", http.StatusBadRequest)
-			return
-		}
-		if len(body.Attachments) == 0 || len(body.Attachments) > maxInboundAttachmentCount {
-			http.Error(rw, "invalid image attachment count", http.StatusBadRequest)
-			return
-		}
-		if err := uploadBrowserChatImages(dev, body.Attachments); err != nil {
-			rw.Header().Set("Content-Type", "application/json")
-			rw.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(rw).Encode(browserChatUploadReply{OK: false, Detail: err.Error()})
-			return
-		}
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(browserChatUploadReply{OK: true})
-	})
-}
-
-func browserChatUploadControl(ctx context.Context, dataDir, agent string, attachments []browserChatAttachment) error {
-	payload, _ := json.Marshal(browserChatUploadRequest{Attachments: attachments})
-	var body []byte
-	var code int
-	var err error
-	switch strings.ToUpper(strings.TrimSpace(agent)) {
-	case "G":
-		var s ChatGPTWebRuntime
-		s, err = ensureChatGPTReady(ctx, dataDir)
-		if err == nil {
-			body, code, err = chatGPTControlRequest(ctx, s, http.MethodPost, "/upload", strings.NewReader(string(payload)))
-		}
-	case "H":
-		var s ClaudeChatWebRuntime
-		s, err = ensureClaudeChatReady(ctx, dataDir)
-		if err == nil {
-			body, code, err = claudeChatControlRequest(ctx, s, http.MethodPost, "/upload", strings.NewReader(string(payload)))
-		}
-	case "M":
-		var s GeminiChatWebRuntime
-		s, err = ensureGeminiChatReady(ctx, dataDir)
-		if err == nil {
-			body, code, err = geminiChatControlRequest(ctx, s, http.MethodPost, "/upload", strings.NewReader(string(payload)))
-		}
-	case "X":
-		var s GrokChatWebRuntime
-		s, err = ensureGrokChatReady(ctx, dataDir)
-		if err == nil {
-			body, code, err = grokChatControlRequest(ctx, s, http.MethodPost, "/upload", strings.NewReader(string(payload)))
-		}
-	default:
-		return errors.New("unknown browser chat agent")
-	}
-	if err != nil {
-		return err
-	}
-	var reply browserChatUploadReply
-	_ = json.Unmarshal(body, &reply)
-	if code != http.StatusOK || !reply.OK {
-		detail := strings.TrimSpace(reply.Detail)
-		if detail == "" {
-			detail = strings.TrimSpace(string(body))
-		}
-		if detail == "" {
-			detail = fmt.Sprintf("image upload returned HTTP %d", code)
-		}
-		return errors.New(detail)
-	}
+	// The provider's existing turn driver waits for its Send button to become
+	// ready, so only a short handoff delay is needed here.
+	time.Sleep(350 * time.Millisecond)
 	return nil
 }
 
@@ -267,21 +229,18 @@ func (b *Bridge) runBrowserChatSMSWithAttachments(ctx context.Context, agent, co
 	if err != nil {
 		return "", err
 	}
+	marker, err := browserChatAttachmentMarker(images)
+	if err != nil {
+		return "", err
+	}
 	browserChatAttachmentTurnMu.Lock()
 	defer browserChatAttachmentTurnMu.Unlock()
-
-	dataDir := filepath.Dir(b.statePath)
-	uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err = browserChatUploadControl(uploadCtx, dataDir, agent, images)
-	cancel()
-	if err != nil {
-		return "", fmt.Errorf("attach image to %s: %w", agentDisplayName(agent), err)
-	}
 
 	command = strings.TrimSpace(command)
 	if command == "" {
 		command = browserChatImageOnlyPrompt(len(images))
 	}
+	command = marker + "\n" + command
 	switch strings.ToUpper(strings.TrimSpace(agent)) {
 	case "G":
 		return b.runChatGPTSMS(ctx, command)
