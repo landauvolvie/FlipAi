@@ -21,8 +21,6 @@ func updaterUIState(releaseVersion string) string {
 	return "waiting"
 }
 
-func currentPublishedVersion() string { return publishedVersion }
-
 func init() {
 	// Settings no longer owns updates. Keep only startup/calling controls and
 	// remove even the compatibility text that mentioned checking for updates.
@@ -44,7 +42,7 @@ func init() {
 	updatedShell := shellHTML
 	oldSidebar := `      {{if .Shell.UpdateVersion}}<a class="side-update" href="/settings#updates" title="FlipAi {{.Shell.UpdateVersion}} is available">{{icon "download"}}<span>v{{.Shell.Version}} &rarr; {{.Shell.UpdateVersion}}</span></a>{{else}}<span>v{{.Shell.Version}}</span>{{end}}`
 	newSidebar := `      <div class="side-version-row" id="flipai-version-row">
-        <span class="side-version">v{{publishedVersion}}</span>
+        <span class="side-version">v{{.Shell.Version}}</span>
         {{if .Shell.UpdateVersion}}
           {{$updateState := updaterState .Shell.UpdateVersion}}
           {{if eq $updateState "ready"}}
@@ -111,7 +109,7 @@ func init() {
 	updatedShell = strings.Replace(updatedShell, `</body>`, updaterScript+`</body>`, 1)
 
 	for _, page := range uiPages {
-		page.Funcs(template.FuncMap{"updaterState": updaterUIState, "publishedVersion": currentPublishedVersion})
+		page.Funcs(template.FuncMap{"updaterState": updaterUIState})
 		if _, err := page.Parse(updatedShell); err != nil {
 			panic(err)
 		}

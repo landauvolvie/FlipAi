@@ -24,7 +24,6 @@ const (
 	updateRepo          = "landauvolvie/FlipAi"
 	updateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"
 	updateCheckInterval = 5 * time.Minute
-	publishedVersion    = "0.46.26"
 )
 
 // updateAPIURL is a variable so tests can point the check at a local server.
@@ -69,7 +68,7 @@ type ReleaseInfo struct {
 
 // Newer reports whether the checked release is ahead of this build.
 func (r ReleaseInfo) Newer() bool {
-	return r.Version != "" && r.AssetURL != "" && versionLess(publishedVersion, r.Version)
+	return r.Version != "" && r.AssetURL != "" && versionLess(version, r.Version)
 }
 
 // Ready reports that the verified installer for the currently offered release
@@ -140,7 +139,7 @@ func fetchLatestRelease(ctx context.Context) (ReleaseInfo, error) {
 		return ReleaseInfo{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "FlipAi/"+publishedVersion)
+	req.Header.Set("User-Agent", "FlipAi/"+version)
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -397,7 +396,7 @@ func download(ctx context.Context, url, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "FlipAi/"+publishedVersion)
+	req.Header.Set("User-Agent", "FlipAi/"+version)
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {

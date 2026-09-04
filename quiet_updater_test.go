@@ -33,7 +33,7 @@ func TestSidebarDownloadsQuietlyThenOffersInstall(t *testing.T) {
 	}
 	saveUpdateState(a.statePath, waiting)
 	body := a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, "side-update-downloading") {
+	if !strings.Contains(body, `title="Downloading FlipAi 99.0.0"`) {
 		t.Fatal("available update should show the quiet download indicator")
 	}
 	if strings.Contains(body, `id="flipai-update-install"`) {
