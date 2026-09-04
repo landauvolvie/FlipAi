@@ -1,0 +1,1 @@
+SBOM generation and publication are handled by .github/workflows/release.yml.
