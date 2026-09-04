@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ !contains(github.event.head_commit.message, '[patch-done]') }}
+    if: "${{ !contains(github.event.head_commit.message, '[patch-done]') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import base64
 
           def replace(path, old, new):
               p = Path(path)
@@ -30,160 +31,29 @@ jobs:
                   raise SystemExit(f'missing expected text in {path}: {old!r}')
               p.write_text(text.replace(old, new), encoding='utf-8')
 
-          replace('update.go',
-              '// FlipAi ships as a GitHub release. Updates are intentionally quiet: the host\n// checks every five minutes, downloads a newer installer in the background,\n// and leaves installation to the small button beside the version in the app.\nconst (\n\tupdateRepo          = "landauvolvie/FlipAi"\n\tupdateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"\n\tupdateCheckInterval = 5 * time.Minute\n)\n\n// updateAPIURL is a variable so tests can point the check at a local server.\nvar updateAPIURL = updateAPI',
-              '// FlipAi ships as a GitHub release. Updates are intentionally quiet: the host\n// checks a tiny version marker every 30 seconds, downloads a newer installer\n// in the background, and leaves installation to the small button beside the\n// version in the app. The heavier GitHub release API is only queried after the\n// marker says a newer version exists.\nconst (\n\tupdateRepo          = "landauvolvie/FlipAi"\n\tupdateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"\n\tupdateVersionFeed   = "https://raw.githubusercontent.com/" + updateRepo + "/main/VERSION"\n\tupdateCheckInterval = 30 * time.Second\n)\n\n// These are variables so tests can point both network checks at local servers.\nvar (\n\tupdateAPIURL         = updateAPI\n\tupdateVersionFeedURL = updateVersionFeed\n)')
+          replace('update.go', '// FlipAi ships as a GitHub release. Updates are intentionally quiet: the host\n// checks every five minutes, downloads a newer installer in the background,\n// and leaves installation to the small button beside the version in the app.\nconst (\n\tupdateRepo          = "landauvolvie/FlipAi"\n\tupdateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"\n\tupdateCheckInterval = 5 * time.Minute\n)\n\n// updateAPIURL is a variable so tests can point the check at a local server.\nvar updateAPIURL = updateAPI', '// FlipAi ships as a GitHub release. Updates are intentionally quiet: the host\n// checks a tiny version marker every 30 seconds, downloads a newer installer\n// in the background, and leaves installation to the small button beside the\n// version in the app. The heavier GitHub release API is only queried after the\n// marker says a newer version exists.\nconst (\n\tupdateRepo          = "landauvolvie/FlipAi"\n\tupdateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"\n\tupdateVersionFeed   = "https://raw.githubusercontent.com/" + updateRepo + "/main/VERSION"\n\tupdateCheckInterval = 30 * time.Second\n)\n\n// These are variables so tests can point both network checks at local servers.\nvar (\n\tupdateAPIURL         = updateAPI\n\tupdateVersionFeedURL = updateVersionFeed\n)')
 
-          marker_fn = r'''
-// fetchLatestVersionMarker reads the tiny VERSION file from GitHub's raw CDN.
-// This is the frequent 30-second check; it avoids spending GitHub API quota
-// when nothing changed. The release API is queried only after this marker is
-// newer than the running build.
-func fetchLatestVersionMarker(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateVersionFeedURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "FlipAi/"+version)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("version marker returned HTTP %d", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 128))
-	if err != nil {
-		return "", err
-	}
-	v := strings.TrimPrefix(strings.TrimSpace(string(raw)), "v")
-	if len(versionParts(v)) == 0 {
-		return "", errors.New("version marker did not contain a valid version")
-	}
-	return v, nil
-}
-
-'''
-          replace('update.go', 'type githubRelease struct {', 'type githubRelease struct {')
+          marker_fn = base64.b64decode('Ly8gZmV0Y2hMYXRlc3RWZXJzaW9uTWFya2VyIHJlYWRzIHRoZSB0aW55IFZFUlNJT04gZmlsZSBmcm9tIEdpdEh1YidzIHJhdyBDRE4uCi8vIFRoaXMgaXMgdGhlIGZyZXF1ZW50IDMwLXNlY29uZCBjaGVjazsgaXQgYXZvaWRzIHNwZW5kaW5nIEdpdEh1YiBBUEkgcXVvdGEKLy8gd2hlbiBub3RoaW5nIGNoYW5nZWQuIFRoZSByZWxlYXNlIEFQSSBpcyBxdWVyaWVkIG9ubHkgYWZ0ZXIgdGhpcyBtYXJrZXIgaXMKLy8gbmV3ZXIgdGhhbiB0aGUgcnVubmluZyBidWlsZC4KZnVuYyBmZXRjaExhdGVzdFZlcnNpb25NYXJrZXIoY3R4IGNvbnRleHQuQ29udGV4dCkgKHN0cmluZywgZXJyb3IpIHsKCXJlcSwgZXJyIDo9IGh0dHAuTmV3UmVxdWVzdFdpdGhDb250ZXh0KGN0eCwgaHR0cC5NZXRob2RHZXQsIHVwZGF0ZVZlcnNpb25GZWVkVVJMLCBuaWwpCglpZiBlcnIgIT0gbmlsIHsKCQlyZXR1cm4gIiIsIGVycgoJfQoJcmVxLkhlYWRlci5TZXQoIlVzZXItQWdlbnQiLCAiRmxpcEFpLyIrdmVyc2lvbikKCWNsaWVudCA6PSAmaHR0cC5DbGllbnR7VGltZW91dDogMTAgKiB0aW1lLlNlY29uZH0KCXJlc3AsIGVyciA6PSBjbGllbnQuRG8ocmVxKQoJaWYgZXJyICE9IG5pbCB7CgkJcmV0dXJuICIiLCBlcnIKCX0KCWRlZmVyIHJlc3AuQm9keS5DbG9zZSgpCglpZiByZXNwLlN0YXR1c0NvZGUgIT0gaHR0cC5TdGF0dXNPSyB7CgkJcmV0dXJuICIiLCBmbXQuRXJyb3JmKCJ2ZXJzaW9uIG1hcmtlciByZXR1cm5lZCBIVFRQICVkIiwgcmVzcC5TdGF0dXNDb2RlKQoJfQoJcmF3LCBlcnIgOj0gaW8uUmVhZEFsbChpby5MaW1pdFJlYWRlcihyZXNwLkJvZHksIDEyOCkpCglpZiBlcnIgIT0gbmlsIHsKCQlyZXR1cm4gIiIsIGVycgoJfQoJdiA6PSBzdHJpbmdzLlRyaW1QcmVmaXgoc3RyaW5ncy5UcmltU3BhY2Uoc3RyaW5nKHJhdykpLCAidiIpCglpZiBsZW4odmVyc2lvblBhcnRzKHYpKSA9PSAwIHsKCQlyZXR1cm4gIiIsIGVycm9ycy5OZXcoInZlcnNpb24gbWFya2VyIGRpZCBub3QgY29udGFpbiBhIHZhbGlkIHZlcnNpb24iKQoJfQoJcmV0dXJuIHYsIG5pbAp9Cgo=').decode()
           p = Path('update.go')
           text = p.read_text(encoding='utf-8')
           anchor = '// fetchLatestRelease asks GitHub for the newest published release. It sends no\n'
           if marker_fn.strip() not in text:
               if anchor not in text:
                   raise SystemExit('missing fetchLatestRelease anchor')
-              text = text.replace(anchor, marker_fn + anchor, 1)
-              p.write_text(text, encoding='utf-8')
+              p.write_text(text.replace(anchor, marker_fn + anchor, 1), encoding='utf-8')
 
-          replace('update.go',
-              '\tinfo, err := fetchLatestRelease(ctx)\n',
-              '\tif !force {\n\t\tmarker, err := fetchLatestVersionMarker(ctx)\n\t\tif err != nil {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = truncate(err.Error(), 200)\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t\tif !versionLess(version, marker) {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = ""\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t\t// If we already resolved this exact newer release, keep using the saved\n\t\t// asset metadata. Download retries can proceed without another API call.\n\t\tif current.Version == marker && current.AssetURL != "" {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = ""\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t}\n\tinfo, err := fetchLatestRelease(ctx)\n')
+          replace('update.go', '\tinfo, err := fetchLatestRelease(ctx)\n', '\tif !force {\n\t\tmarker, err := fetchLatestVersionMarker(ctx)\n\t\tif err != nil {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = truncate(err.Error(), 200)\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t\tif !versionLess(version, marker) {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = ""\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t\tif current.Version == marker && current.AssetURL != "" {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = ""\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t}\n\tinfo, err := fetchLatestRelease(ctx)\n')
+          replace('update.go', '// watchForUpdates performs an early check after startup and then checks exactly\n// every five minutes. A newer release is downloaded and verified immediately,', '// watchForUpdates performs an early check after startup and then checks exactly\n// every 30 seconds. A newer release is downloaded and verified immediately,')
 
-          replace('update.go',
-              '// watchForUpdates performs an early check after startup and then checks exactly\n// every five minutes. A newer release is downloaded and verified immediately,',
-              '// watchForUpdates performs an early check after startup and then checks exactly\n// every 30 seconds. A newer release is downloaded and verified immediately,')
+          replace('quiet_updater_test.go', 'func TestAppUpdateCheckIsAlwaysFiveMinutes(t *testing.T) {', 'func TestAppUpdateCheckIsAlwaysThirtySeconds(t *testing.T) {')
+          replace('quiet_updater_test.go', 'if got := a.updateInterval(); got != 5*time.Minute {\n\t\tt.Fatalf("update interval = %v, want 5m", got)\n\t}', 'if got := a.updateInterval(); got != 30*time.Second {\n\t\tt.Fatalf("update interval = %v, want 30s", got)\n\t}')
 
-          replace('quiet_updater_test.go',
-              'func TestAppUpdateCheckIsAlwaysFiveMinutes(t *testing.T) {',
-              'func TestAppUpdateCheckIsAlwaysThirtySeconds(t *testing.T) {')
-          replace('quiet_updater_test.go',
-              'if got := a.updateInterval(); got != 5*time.Minute {\n\t\tt.Fatalf("update interval = %v, want 5m", got)\n\t}',
-              'if got := a.updateInterval(); got != 30*time.Second {\n\t\tt.Fatalf("update interval = %v, want 30s", got)\n\t}')
-
-          Path('update_marker_test.go').write_text(r'''package main
-
-import (
-	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
-	"testing"
-)
-
-func TestUpdateMarkerKeepsReleaseAPIQuietWhenVersionIsCurrent(t *testing.T) {
-	oldMarker, oldAPI := updateVersionFeedURL, updateAPIURL
-	defer func() { updateVersionFeedURL, updateAPIURL = oldMarker, oldAPI }()
-
-	var apiCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/VERSION":
-			fmt.Fprint(w, version)
-		case "/release":
-			apiCalls.Add(1)
-			http.Error(w, "release API should not be called", http.StatusInternalServerError)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	updateVersionFeedURL = server.URL + "/VERSION"
-	updateAPIURL = server.URL + "/release"
-
-	a := newTestApp(t)
-	info := a.checkForUpdate(context.Background(), false)
-	if got := apiCalls.Load(); got != 0 {
-		t.Fatalf("release API calls = %d, want 0 when VERSION is current", got)
-	}
-	if info.CheckedAt.IsZero() {
-		t.Fatal("30-second marker check did not record CheckedAt")
-	}
-}
-
-func TestUpdateMarkerEscalatesToReleaseAPIWhenVersionAdvances(t *testing.T) {
-	oldMarker, oldAPI := updateVersionFeedURL, updateAPIURL
-	defer func() { updateVersionFeedURL, updateAPIURL = oldMarker, oldAPI }()
-
-	var apiCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/VERSION":
-			fmt.Fprint(w, "99.0.0")
-		case "/release":
-			apiCalls.Add(1)
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"tag_name":"v99.0.0","name":"FlipAi 99.0.0","html_url":"https://example.invalid/release","draft":false,"prerelease":false,"assets":[{"name":"FlipAi-Setup-v99.0.0.exe","browser_download_url":"https://example.invalid/FlipAi-Setup-v99.0.0.exe"}]}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	updateVersionFeedURL = server.URL + "/VERSION"
-	updateAPIURL = server.URL + "/release"
-
-	a := newTestApp(t)
-	info := a.checkForUpdate(context.Background(), false)
-	if got := apiCalls.Load(); got != 1 {
-		t.Fatalf("release API calls = %d, want 1 after newer VERSION marker", got)
-	}
-	if !info.Newer() || info.Version != "99.0.0" {
-		t.Fatalf("resolved update = %+v, want newer 99.0.0 release", info)
-	}
-}
-''', encoding='utf-8')
+          Path('update_marker_test.go').write_text(base64.b64decode('cGFja2FnZSBtYWluCgppbXBvcnQgKAoJImNvbnRleHQiCgkiZm10IgoJIm5ldC9odHRwIgoJIm5ldC9odHRwL2h0dHB0ZXN0IgoJInN5bmMvYXRvbWljIgoJInRlc3RpbmciCikKCmZ1bmMgVGVzdFVwZGF0ZU1hcmtlcktlZXBzUmVsZWFzZUFQSVF1aWV0V2hlblZlcnNpb25Jc0N1cnJlbnQodCAqdGVzdGluZy5UKSB7CglvbGRNYXJrZXIsIG9sZEFQSSA6PSB1cGRhdGVWZXJzaW9uRmVlZFVSTCwgdXBkYXRlQVBJVVJMCglkZWZlciBmdW5jKCkgeyB1cGRhdGVWZXJzaW9uRmVlZFVSTCwgdXBkYXRlQVBJVVJMID0gb2xkTWFya2VyLCBvbGRBUEkgfSgpCgoJdmFyIGFwaUNhbGxzIGF0b21pYy5JbnQzMgoJc2VydmVyIDo9IGh0dHB0ZXN0Lk5ld1NlcnZlcihodHRwLkhhbmRsZXJGdW5jKGZ1bmModyBodHRwLlJlc3BvbnNlV3JpdGVyLCByICpodHRwLlJlcXVlc3QpIHsKCQlzd2l0Y2ggci5VUkwuUGF0aCB7CgkJY2FzZSAiL1ZFUlNJT04iOgoJCQlmbXQuRnByaW50KHcsIHZlcnNpb24pCgkJY2FzZSAiL3JlbGVhc2UiOgoJCQlhcGlDYWxscy5BZGQoMSkKCQkJaHR0cC5FcnJvcih3LCAicmVsZWFzZSBBUEkgc2hvdWxkIG5vdCBiZSBjYWxsZWQiLCBodHRwLlN0YXR1c0ludGVybmFsU2VydmVyRXJyb3IpCgkJZGVmYXVsdDoKCQkJaHR0cC5Ob3RGb3VuZCh3LCByKQoJCX0KCX0pKQoJZGVmZXIgc2VydmVyLkNsb3NlKCkKCXVwZGF0ZVZlcnNpb25GZWVkVVJMID0gc2VydmVyLlVSTCArICIvVkVSU0lPTiIKCXVwZGF0ZUFQSVVSTCA9IHNlcnZlci5VUkwgKyAiL3JlbGVhc2UiCgoJYSA6PSBuZXdUZXN0QXBwKHQpCglpbmZvIDo9IGEuY2hlY2tGb3JVcGRhdGUoY29udGV4dC5CYWNrZ3JvdW5kKCksIGZhbHNlKQoJaWYgZ290IDo9IGFwaUNhbGxzLkxvYWQoKTsgZ290ICE9IDAgewoJCXQuRmF0YWxmKCJyZWxlYXNlIEFQSSBjYWxscyA9ICVkLCB3YW50IDAgd2hlbiBWRVJTSU9OIGlzIGN1cnJlbnQiLCBnb3QpCgl9CglpZiBpbmZvLkNoZWNrZWRBdC5Jc1plcm8oKSB7CgkJdC5GYXRhbCgiMzAtc2Vjb25kIG1hcmtlciBjaGVjayBkaWQgbm90IHJlY29yZCBDaGVja2VkQXQiKQoJfQp9CgpmdW5jIFRlc3RVcGRhdGVNYXJrZXJFc2NhbGF0ZXNUb1JlbGVhc2VBUElXaGVuVmVyc2lvbkFkdmFuY2VzKHQgKnRlc3RpbmcuVCkgewoJb2xkTWFya2VyLCBvbGRBUEkgOj0gdXBkYXRlVmVyc2lvbkZlZWRVUkwsIHVwZGF0ZUFQSVVSTAoJZGVmZXIgZnVuYygpIHsgdXBkYXRlVmVyc2lvbkZlZWRVUkwsIHVwZGF0ZUFQSVVSTCA9IG9sZE1hcmtlciwgb2xkQVBJIH0oKQoKCXZhciBhcGlDYWxscyBhdG9taWMuSW50MzIKCXNlcnZlciA6PSBodHRwdGVzdC5OZXdTZXJ2ZXIoaHR0cC5IYW5kbGVyRnVuYyhmdW5jKHcgaHR0cC5SZXNwb25zZVdyaXRlciwgciAqaHR0cC5SZXF1ZXN0KSB7CgkJc3dpdGNoIHIuVVJMLlBhdGggewoJCWNhc2UgIi9WRVJTSU9OIjoKCQkJZm10LkZwcmludCh3LCAiOTkuMC4wIikKCQljYXNlICIvcmVsZWFzZSI6CgkJCWFwaUNhbGxzLkFkZCgxKQoJCQl3LkhlYWRlcigpLlNldCgiQ29udGVudC1UeXBlIiwgImFwcGxpY2F0aW9uL2pzb24iKQoJCQlmbXQuRnByaW50KHcsIGB7InRhZ19uYW1lIjoidjk5LjAuMCIsIm5hbWUiOiJGbGlwQWkgOTkuMC4wIiwiaHRtbF91cmwiOiJodHRwczovL2V4YW1wbGUuaW52YWxpZC9yZWxlYXNlIiwiZHJhZnQiOmZhbHNlLCJwcmVyZWxlYXNlIjpmYWxzZSwiYXNzZXRzIjpbeyJuYW1lIjoiRmxpcEFpLVNldHVwLXY5OS4wLjAuZXhlIiwiYnJvd3Nlcl9kb3dubG9hZF91cmwiOiJodHRwczovL2V4YW1wbGUuaW52YWxpZC9GbGlwQWktU2V0dXAtdjk5LjAuMC5leGUifV19YCkKCQlkZWZhdWx0OgoJCQlodHRwLk5vdEZvdW5kKHcsIHIpCgkJfQoJfSkpCglkZWZlciBzZXJ2ZXIuQ2xvc2UoKQoJdXBkYXRlVmVyc2lvbkZlZWRVUkwgPSBzZXJ2ZXIuVVJMICsgIi9WRVJTSU9OIgoJdXBkYXRlQVBJVVJMID0gc2VydmVyLlVSTCArICIvcmVsZWFzZSIKCglhIDo9IG5ld1Rlc3RBcHAodCkKCWluZm8gOj0gYS5jaGVja0ZvclVwZGF0ZShjb250ZXh0LkJhY2tncm91bmQoKSwgZmFsc2UpCglpZiBnb3QgOj0gYXBpQ2FsbHMuTG9hZCgpOyBnb3QgIT0gMSB7CgkJdC5GYXRhbGYoInJlbGVhc2UgQVBJIGNhbGxzID0gJWQsIHdhbnQgMSBhZnRlciBuZXdlciBWRVJTSU9OIG1hcmtlciIsIGdvdCkKCX0KCWlmICFpbmZvLk5ld2VyKCkgfHwgaW5mby5WZXJzaW9uICE9ICI5OS4wLjAiIHsKCQl0LkZhdGFsZigicmVzb2x2ZWQgdXBkYXRlID0gJSt2LCB3YW50IG5ld2VyIDk5LjAuMCByZWxlYXNlIiwgaW5mbykKCX0KfQo=').decode(), encoding='utf-8')
 
           replace('config.go', 'const version = "0.46.27"', 'const version = "0.46.28"')
           Path('VERSION').write_text('0.46.28\n', encoding='utf-8')
           replace('installer/FlipAi.iss', '#define MyVersion "0.46.27"', '#define MyVersion "0.46.28"')
-
-          Path('docs/RELEASE-NOTES.md').write_text('''# FlipAi v0.46.28
-
-Update discovery is now much faster without hammering GitHub's release API.
-
-## Updates
-
-- FlipAi checks for a newer version every 30 seconds instead of every five minutes.
-- The frequent check reads only the tiny `VERSION` file from GitHub's raw CDN.
-- The GitHub release API is queried only when that marker reports a version newer than the running app.
-- Once release metadata is already known, download retries reuse it instead of repeatedly calling the release API.
-- Automatic background download, checksum verification, sidebar-only install control, and user-triggered installation remain unchanged.
-
-## Reliability
-
-- Added regression coverage proving a current VERSION marker does not call the release API and a newer marker does.
-''', encoding='utf-8')
+          Path('docs/RELEASE-NOTES.md').write_text(base64.b64decode('IyBGbGlwQWkgdjAuNDYuMjgKClVwZGF0ZSBkaXNjb3ZlcnkgaXMgbm93IG11Y2ggZmFzdGVyIHdpdGhvdXQgaGFtbWVyaW5nIEdpdEh1YidzIHJlbGVhc2UgQVBJLgoKIyMgVXBkYXRlcwoKLSBGbGlwQWkgY2hlY2tzIGZvciBhIG5ld2VyIHZlcnNpb24gZXZlcnkgMzAgc2Vjb25kcyBpbnN0ZWFkIG9mIGV2ZXJ5IGZpdmUgbWludXRlcy4KLSBUaGUgZnJlcXVlbnQgY2hlY2sgcmVhZHMgb25seSB0aGUgdGlueSBgVkVSU0lPTmAgZmlsZSBmcm9tIEdpdEh1YidzIHJhdyBDRE4uCi0gVGhlIEdpdEh1YiByZWxlYXNlIEFQSSBpcyBxdWVyaWVkIG9ubHkgd2hlbiB0aGF0IG1hcmtlciByZXBvcnRzIGEgdmVyc2lvbiBuZXdlciB0aGFuIHRoZSBydW5uaW5nIGFwcC4KLSBPbmNlIHJlbGVhc2UgbWV0YWRhdGEgaXMgYWxyZWFkeSBrbm93biwgZG93bmxvYWQgcmV0cmllcyByZXVzZSBpdCBpbnN0ZWFkIG9mIHJlcGVhdGVkbHkgY2FsbGluZyB0aGUgcmVsZWFzZSBBUEkuCi0gQXV0b21hdGljIGJhY2tncm91bmQgZG93bmxvYWQsIGNoZWNrc3VtIHZlcmlmaWNhdGlvbiwgc2lkZWJhci1vbmx5IGluc3RhbGwgY29udHJvbCwgYW5kIHVzZXItdHJpZ2dlcmVkIGluc3RhbGxhdGlvbiByZW1haW4gdW5jaGFuZ2VkLgoKIyMgUmVsaWFiaWxpdHkKCi0gQWRkZWQgcmVncmVzc2lvbiBjb3ZlcmFnZSBwcm92aW5nIGEgY3VycmVudCBWRVJTSU9OIG1hcmtlciBkb2VzIG5vdCBjYWxsIHRoZSByZWxlYXNlIEFQSSBhbmQgYSBuZXdlciBtYXJrZXIgZG9lcy4K').decode(), encoding='utf-8')
           PY
 
           git diff --check
