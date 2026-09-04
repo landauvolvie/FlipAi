@@ -1,0 +1,195 @@
+name: oneoff-30s-updater-patch
+
+on:
+  push:
+    branches:
+      - codex/update-check-30-seconds
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[patch-done]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/update-check-30-seconds
+          fetch-depth: 0
+      - name: Apply 30-second updater patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old!r}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace('update.go',
+              '// FlipAi ships as a GitHub release. Updates are intentionally quiet: the host\n// checks every five minutes, downloads a newer installer in the background,\n// and leaves installation to the small button beside the version in the app.\nconst (\n\tupdateRepo          = "landauvolvie/FlipAi"\n\tupdateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"\n\tupdateCheckInterval = 5 * time.Minute\n)\n\n// updateAPIURL is a variable so tests can point the check at a local server.\nvar updateAPIURL = updateAPI',
+              '// FlipAi ships as a GitHub release. Updates are intentionally quiet: the host\n// checks a tiny version marker every 30 seconds, downloads a newer installer\n// in the background, and leaves installation to the small button beside the\n// version in the app. The heavier GitHub release API is only queried after the\n// marker says a newer version exists.\nconst (\n\tupdateRepo          = "landauvolvie/FlipAi"\n\tupdateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"\n\tupdateVersionFeed   = "https://raw.githubusercontent.com/" + updateRepo + "/main/VERSION"\n\tupdateCheckInterval = 30 * time.Second\n)\n\n// These are variables so tests can point both network checks at local servers.\nvar (\n\tupdateAPIURL         = updateAPI\n\tupdateVersionFeedURL = updateVersionFeed\n)')
+
+          marker_fn = r'''
+// fetchLatestVersionMarker reads the tiny VERSION file from GitHub's raw CDN.
+// This is the frequent 30-second check; it avoids spending GitHub API quota
+// when nothing changed. The release API is queried only after this marker is
+// newer than the running build.
+func fetchLatestVersionMarker(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateVersionFeedURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "FlipAi/"+version)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("version marker returned HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 128))
+	if err != nil {
+		return "", err
+	}
+	v := strings.TrimPrefix(strings.TrimSpace(string(raw)), "v")
+	if len(versionParts(v)) == 0 {
+		return "", errors.New("version marker did not contain a valid version")
+	}
+	return v, nil
+}
+
+'''
+          replace('update.go', 'type githubRelease struct {', 'type githubRelease struct {')
+          p = Path('update.go')
+          text = p.read_text(encoding='utf-8')
+          anchor = '// fetchLatestRelease asks GitHub for the newest published release. It sends no\n'
+          if marker_fn.strip() not in text:
+              if anchor not in text:
+                  raise SystemExit('missing fetchLatestRelease anchor')
+              text = text.replace(anchor, marker_fn + anchor, 1)
+              p.write_text(text, encoding='utf-8')
+
+          replace('update.go',
+              '\tinfo, err := fetchLatestRelease(ctx)\n',
+              '\tif !force {\n\t\tmarker, err := fetchLatestVersionMarker(ctx)\n\t\tif err != nil {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = truncate(err.Error(), 200)\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t\tif !versionLess(version, marker) {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = ""\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t\t// If we already resolved this exact newer release, keep using the saved\n\t\t// asset metadata. Download retries can proceed without another API call.\n\t\tif current.Version == marker && current.AssetURL != "" {\n\t\t\tcurrent.CheckedAt = time.Now()\n\t\t\tcurrent.Error = ""\n\t\t\tsaveUpdateState(a.statePath, current)\n\t\t\treturn current\n\t\t}\n\t}\n\tinfo, err := fetchLatestRelease(ctx)\n')
+
+          replace('update.go',
+              '// watchForUpdates performs an early check after startup and then checks exactly\n// every five minutes. A newer release is downloaded and verified immediately,',
+              '// watchForUpdates performs an early check after startup and then checks exactly\n// every 30 seconds. A newer release is downloaded and verified immediately,')
+
+          replace('quiet_updater_test.go',
+              'func TestAppUpdateCheckIsAlwaysFiveMinutes(t *testing.T) {',
+              'func TestAppUpdateCheckIsAlwaysThirtySeconds(t *testing.T) {')
+          replace('quiet_updater_test.go',
+              'if got := a.updateInterval(); got != 5*time.Minute {\n\t\tt.Fatalf("update interval = %v, want 5m", got)\n\t}',
+              'if got := a.updateInterval(); got != 30*time.Second {\n\t\tt.Fatalf("update interval = %v, want 30s", got)\n\t}')
+
+          Path('update_marker_test.go').write_text(r'''package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+)
+
+func TestUpdateMarkerKeepsReleaseAPIQuietWhenVersionIsCurrent(t *testing.T) {
+	oldMarker, oldAPI := updateVersionFeedURL, updateAPIURL
+	defer func() { updateVersionFeedURL, updateAPIURL = oldMarker, oldAPI }()
+
+	var apiCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/VERSION":
+			fmt.Fprint(w, version)
+		case "/release":
+			apiCalls.Add(1)
+			http.Error(w, "release API should not be called", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	updateVersionFeedURL = server.URL + "/VERSION"
+	updateAPIURL = server.URL + "/release"
+
+	a := newTestApp(t)
+	info := a.checkForUpdate(context.Background(), false)
+	if got := apiCalls.Load(); got != 0 {
+		t.Fatalf("release API calls = %d, want 0 when VERSION is current", got)
+	}
+	if info.CheckedAt.IsZero() {
+		t.Fatal("30-second marker check did not record CheckedAt")
+	}
+}
+
+func TestUpdateMarkerEscalatesToReleaseAPIWhenVersionAdvances(t *testing.T) {
+	oldMarker, oldAPI := updateVersionFeedURL, updateAPIURL
+	defer func() { updateVersionFeedURL, updateAPIURL = oldMarker, oldAPI }()
+
+	var apiCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/VERSION":
+			fmt.Fprint(w, "99.0.0")
+		case "/release":
+			apiCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"tag_name":"v99.0.0","name":"FlipAi 99.0.0","html_url":"https://example.invalid/release","draft":false,"prerelease":false,"assets":[{"name":"FlipAi-Setup-v99.0.0.exe","browser_download_url":"https://example.invalid/FlipAi-Setup-v99.0.0.exe"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	updateVersionFeedURL = server.URL + "/VERSION"
+	updateAPIURL = server.URL + "/release"
+
+	a := newTestApp(t)
+	info := a.checkForUpdate(context.Background(), false)
+	if got := apiCalls.Load(); got != 1 {
+		t.Fatalf("release API calls = %d, want 1 after newer VERSION marker", got)
+	}
+	if !info.Newer() || info.Version != "99.0.0" {
+		t.Fatalf("resolved update = %+v, want newer 99.0.0 release", info)
+	}
+}
+''', encoding='utf-8')
+
+          replace('config.go', 'const version = "0.46.27"', 'const version = "0.46.28"')
+          Path('VERSION').write_text('0.46.28\n', encoding='utf-8')
+          replace('installer/FlipAi.iss', '#define MyVersion "0.46.27"', '#define MyVersion "0.46.28"')
+
+          Path('docs/RELEASE-NOTES.md').write_text('''# FlipAi v0.46.28
+
+Update discovery is now much faster without hammering GitHub's release API.
+
+## Updates
+
+- FlipAi checks for a newer version every 30 seconds instead of every five minutes.
+- The frequent check reads only the tiny `VERSION` file from GitHub's raw CDN.
+- The GitHub release API is queried only when that marker reports a version newer than the running app.
+- Once release metadata is already known, download retries reuse it instead of repeatedly calling the release API.
+- Automatic background download, checksum verification, sidebar-only install control, and user-triggered installation remain unchanged.
+
+## Reliability
+
+- Added regression coverage proving a current VERSION marker does not call the release API and a newer marker does.
+''', encoding='utf-8')
+          PY
+
+          git diff --check
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update.go quiet_updater_test.go update_marker_test.go config.go VERSION installer/FlipAi.iss docs/RELEASE-NOTES.md
+          git commit -m "Check for FlipAi updates every 30 seconds [patch-done]"
+          git push origin HEAD:codex/update-check-30-seconds
