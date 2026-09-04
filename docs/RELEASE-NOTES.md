@@ -1,15 +1,18 @@
-# FlipAi v0.46.28
+# FlipAi v0.46.29
 
-Update discovery is now much faster without hammering GitHub's release API.
+Agent symbols now match the correct product everywhere FlipAi identifies an agent.
 
-## Updates
+## Agent symbols
 
-- FlipAi checks for a newer version every 30 seconds instead of every five minutes.
-- The frequent check reads only the tiny `VERSION` file from GitHub's raw CDN.
-- The GitHub release API is queried only when that marker reports a version newer than the running app.
-- Once release metadata is already known, download retries reuse it instead of repeatedly calling the release API.
-- Automatic background download, checksum verification, sidebar-only install control, and user-triggered installation remain unchanged.
+- ChatGPT Chat now uses the OpenAI / ChatGPT knot instead of the Codex symbol.
+- Codex now uses the blue-purple Codex terminal-cloud symbol.
+- Claude Code now uses the orange Claude Code pixel-bot symbol.
+- Claude Chat now uses the Claude orange star symbol.
+- Gemini Chat now uses the multicolor Gemini star instead of the generic Google G.
+- Grok Chat now uses the Grok orbital symbol instead of a generic X.
+- The corrected symbols are shared across the Agents page, Activity filters, Activity rows, and other agent-brand UI so the same agent is represented consistently everywhere.
 
 ## Reliability
 
-- Added regression coverage proving a current VERSION marker does not call the release API and a newer marker does.
+- Added regression coverage for all six current agent-to-symbol mappings.
+- Preserved Activity filtering, message logging, updater behavior, and agent execution logic unchanged.
