@@ -20,6 +20,20 @@ func friendlyAgentMessage(raw string) string {
 	s := strings.ToLower(raw)
 
 	switch {
+	// Browser/network filters are intentionally treated as an agent-local
+	// availability problem. FlipAi never tells the user to bypass a filter and
+	// never turns a blocked provider into a bridge-wide failure; the other agents
+	// remain usable while this one reports unavailable.
+	case strings.Contains(s, "err_blocked_by_client"),
+		strings.Contains(s, "err_blocked_by_administrator"),
+		strings.Contains(s, "blocked by your administrator"),
+		strings.Contains(s, "dns_probe_finished_nxdomain"),
+		strings.Contains(s, "err_name_not_resolved"),
+		strings.Contains(s, "err_connection_refused"),
+		strings.Contains(s, "err_proxy_connection_failed"),
+		strings.Contains(s, "err_tunnel_connection_failed"):
+		return "This agent's service is unreachable from this PC. A network or content filter may be blocking it. FlipAi and your other agents can keep working."
+
 	// Claude Code's own sign-in lapsed. Its refresh already failed, so nothing
 	// FlipAi can do automatically — but the token path avoids a repeat.
 	case strings.Contains(s, "oauth session expired"),
