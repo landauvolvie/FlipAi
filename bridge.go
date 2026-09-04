@@ -758,13 +758,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	var cleanupInbound func()
 	var prepErr error
 	if !rc.Status && !rc.New && len(m.Attachments) > 0 {
-		if rc.Agent == "G" || rc.Agent == "H" || rc.Agent == "M" || rc.Agent == "X" {
-			prepErr = fmt.Errorf("%s over Google Voice supports text messages in this release; switch to C: or A: for an attachment", agentDisplayName(rc.Agent))
-		} else {
-			inbound, cleanupInbound, prepErr = prepareInboundAttachments(m.Attachments)
-			if cleanupInbound != nil {
-				defer cleanupInbound()
-			}
+		inbound, cleanupInbound, prepErr = prepareInboundAttachments(m.Attachments)
+		if cleanupInbound != nil {
+			defer cleanupInbound()
 		}
 	}
 
@@ -801,6 +797,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	} else if rc.Agent == "A" {
 		b.event("info", "agent", "Claude command started", rc.Sender, "A", m.ID)
 		final, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
+	} else if isBrowserChatAgent(rc.Agent) && len(inbound) > 0 {
+		b.event("info", "agent", agentDisplayName(rc.Agent)+" image command started", rc.Sender, rc.Agent, m.ID)
+		final, err = b.runBrowserChatSMSWithAttachments(ctx, rc.Agent, rc.Text, inbound)
 	} else if rc.Agent == "G" {
 		b.event("info", "agent", "ChatGPT Chat command started", rc.Sender, "G", m.ID)
 		final, err = b.runChatGPTSMS(ctx, rc.Text)
