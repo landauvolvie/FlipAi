@@ -4,11 +4,12 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 func TestAutostartUsesCurrentUserRunKey(t *testing.T) {
@@ -21,14 +22,18 @@ func TestAutostartUsesCurrentUserRunKey(t *testing.T) {
 	if err := installAutostartNamed(name, exe); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("reg.exe", "QUERY", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name)
-	out, err := cmd.CombinedOutput()
+	key, err := registry.OpenKey(registry.CURRENT_USER, flipAiRunKey, registry.QUERY_VALUE)
 	if err != nil {
-		t.Fatalf("query startup value: %v: %s", err, out)
+		t.Fatalf("open startup Run key: %v", err)
+	}
+	defer key.Close()
+	got, _, err := key.GetStringValue(name)
+	if err != nil {
+		t.Fatalf("read startup value: %v", err)
 	}
 	want := `"` + exe + `" --watchdog`
-	if !strings.Contains(string(out), want) {
-		t.Fatalf("startup value does not launch watchdog; want %q in %q", want, string(out))
+	if got != want {
+		t.Fatalf("startup value = %q, want %q", got, want)
 	}
 }
 
