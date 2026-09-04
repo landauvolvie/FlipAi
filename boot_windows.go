@@ -148,7 +148,9 @@ func currentUserName() string {
 // bootTaskXML describes a task that starts FlipAi's watchdog at power-on under
 // the same Windows account, without a stored password. S4U is what makes the
 // no-password part possible; it is also why the credentials FlipAi keeps for
-// this account are re-protected for the machine when this option is on.
+// this account are re-protected for the machine when this option is on. The
+// elevated helper is needed only to register/remove the task; the long-running
+// watchdog itself deliberately runs with the user's normal token.
 func bootTaskXML(exe, user string) string {
 	return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -167,7 +169,7 @@ func bootTaskXML(exe, user string) string {
     <Principal id="Author">
       <UserId>` + xmlEscape(user) + `</UserId>
       <LogonType>S4U</LogonType>
-      <RunLevel>HighestAvailable</RunLevel>
+      <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
   </Principals>
   <Settings>
