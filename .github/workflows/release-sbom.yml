@@ -1,3 +1,0 @@
-# This file is intentionally retired.
-# SBOM generation now runs inside release.yml before publishing so releases
-# created by GitHub Actions always include the SBOM in the same workflow.
