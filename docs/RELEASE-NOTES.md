@@ -1,16 +1,18 @@
-# FlipAi v0.46.26
+# FlipAi v0.46.27
 
-Updates now behave like a quiet desktop-app updater instead of a Settings workflow.
+Activity now reflects every current FlipAi agent instead of treating newer agents like Codex.
 
-## Updates
+## Activity
 
-- Update controls are completely removed from Settings.
-- FlipAi checks GitHub every five minutes and automatically downloads and verifies a newer installer in the background.
-- While the installer is downloading, only a small download indicator appears beside the version in the left sidebar.
-- Once the verified installer is ready, that indicator becomes the install button. Clicking it starts the update without navigating to an update-success or update-failure page.
-- Page-wide update banners and download-complete popups are removed.
-- Installation remains a deliberate user click; only the download is automatic.
+- Redesigned the Activity page with a cleaner live log layout and compact message statistics.
+- Added distinct agent/provider icons for ChatGPT Chat, Codex, Claude Code, Claude Chat, Gemini, and Grok.
+- Added one-click filtering for all six current agents.
+- Activity search now matches agent/model names, provider/company names, messages, stages, sources, and statuses.
+- Incoming and outgoing message flow is labeled clearly so it is easy to see what reached an agent and what was sent back through Google Voice.
+- The Activity page refreshes automatically while it is open.
+- Existing metadata-only privacy behavior is preserved: SMS bodies, prompts/results, security codes, passwords, and tokens are not stored in Activity.
 
-## Restart reliability
+## Reliability
 
-The updater now restores the watchdog/background host before reopening the normal FlipAi window, and gives stale FlipAi process trees more time to release after forced shutdown. This reduces the post-update race that could leave FlipAi installed but not running until its processes were ended manually in Task Manager.
+- Added regression coverage for all current agent filters, labels, and both incoming/outgoing Activity directions.
+- Verified the release with the Linux real-browser call-flow suite, full Linux tests, Windows tests, vet, race tests, Windows build, desktop lifecycle checks, Google Voice checks, Defender scan, and installer smoke test.
