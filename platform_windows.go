@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
+	"golang.org/x/sys/windows/registry"
 )
 
 var (
@@ -250,31 +251,47 @@ func spawnDetached(exe string, args ...string) error {
 	return cmd.Start()
 }
 
+const flipAiRunKey = `Software\Microsoft\Windows\CurrentVersion\Run`
+
 func installAutostart(exe string) error {
 	// Remove the pre-v0.6.1 value so upgrades cannot start two copies.
 	_ = uninstallAutostartNamed("AISMSBridge")
 	defer autostartProbe.invalidate()
 	return installAutostartNamed("FlipAi", exe)
 }
+
+// installAutostartNamed writes the per-user Run value through the supported
+// Windows registry API. Previous builds spawned a hidden reg.exe child for the
+// same operation. The user-facing behavior is identical, but the native API
+// avoids a command-line persistence pattern that endpoint protection rightly
+// treats with extra suspicion.
 func installAutostartNamed(name, exe string) error {
-	value := fmt.Sprintf("\"%s\" --watchdog", exe)
-	cmd := exec.Command("reg.exe", "ADD", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name, "/t", "REG_SZ", "/d", value, "/f")
-	hideWindow(cmd)
-	out, err := cmd.CombinedOutput()
+	key, _, err := registry.CreateKey(registry.CURRENT_USER, flipAiRunKey, registry.SET_VALUE)
 	if err != nil {
-		return fmt.Errorf("enable startup: %v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("enable startup: open Run key: %w", err)
+	}
+	defer key.Close()
+	value := fmt.Sprintf("\"%s\" --watchdog", exe)
+	if err := key.SetStringValue(name, value); err != nil {
+		return fmt.Errorf("enable startup: write Run value: %w", err)
 	}
 	return nil
 }
+
 func uninstallAutostart() error {
 	_ = uninstallAutostartNamed("AISMSBridge")
 	defer autostartProbe.invalidate()
 	return uninstallAutostartNamed("FlipAi")
 }
+
 func uninstallAutostartNamed(name string) error {
-	cmd := exec.Command("reg.exe", "DELETE", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", name, "/f")
-	hideWindow(cmd)
-	_ = cmd.Run()
+	key, err := registry.OpenKey(registry.CURRENT_USER, flipAiRunKey, registry.SET_VALUE)
+	if err != nil {
+		// A missing Run key/value already represents the requested state.
+		return nil
+	}
+	defer key.Close()
+	_ = key.DeleteValue(name)
 	return nil
 }
 
@@ -283,10 +300,17 @@ func uninstallAutostartNamed(name string) error {
 // The registry read is cached: the status snapshot behind it is rebuilt on
 // every page render and every status poll.
 var autostartProbe = newCachedBool(20*time.Second, func() bool {
-	cmd := exec.Command("reg.exe", "QUERY", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "FlipAi")
-	hideWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	return err == nil && strings.Contains(string(out), "FlipAi")
+	key, err := registry.OpenKey(registry.CURRENT_USER, flipAiRunKey, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	value, _, err := key.GetStringValue("FlipAi")
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(value)
+	return strings.Contains(lower, "flipai.exe") && strings.Contains(lower, "--watchdog")
 })
 
 func autostartEnabled() bool { return autostartProbe.get() }

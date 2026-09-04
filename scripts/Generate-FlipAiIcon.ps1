@@ -58,3 +58,52 @@ if (-not (Test-Path $OutputPath) -or (Get-Item $OutputPath).Length -lt 100) {
     throw "FlipAi icon generation failed: $OutputPath"
 }
 Write-Host "Generated $OutputPath"
+
+# Generate a normal Windows resource section for the Go executable too. FlipAi
+# historically only applied its icon at runtime, so Explorer/static scanners saw
+# a nearly anonymous Go GUI binary with no embedded manifest or version details.
+# This keeps the application asInvoker (no administrator requirement), embeds
+# the same icon Windows shows for the installer, and adds stable product/file
+# metadata. It is not code signing and does not change runtime behavior.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$versionPath = Join-Path $repoRoot 'VERSION'
+if (-not (Test-Path $versionPath)) {
+    throw "VERSION was not found at $versionPath"
+}
+$version = (Get-Content $versionPath -Raw).Trim()
+$numeric = ($version -split '[-+]')[0]
+$parts = @($numeric -split '\.')
+if ($parts.Count -gt 4) { $parts = $parts[0..3] }
+while ($parts.Count -lt 4) { $parts += '0' }
+foreach ($part in $parts) {
+    if ($part -notmatch '^\d+$') { throw "VERSION cannot be embedded as Windows metadata: $version" }
+}
+$winVersion = ($parts -join '.')
+$iconPath = (Resolve-Path $OutputPath).Path
+
+Push-Location $repoRoot
+try {
+    # Pin the resource generator so a future upstream release cannot silently
+    # change what goes into FlipAi.exe. `simply --manifest gui` emits the normal
+    # asInvoker GUI manifest; elevation is deliberately not requested here.
+    & go run github.com/tc-hib/go-winres@v0.2.3 simply `
+        --arch amd64 `
+        --manifest gui `
+        --icon $iconPath `
+        --file-version $winVersion `
+        --product-version $winVersion `
+        --file-description 'FlipAi AI bridge' `
+        --product-name 'FlipAi' `
+        --copyright 'Copyright (c) FlipAi' `
+        --original-filename 'FlipAi.exe'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows resource generation failed with exit code $LASTEXITCODE"
+    }
+    $resource = Join-Path $repoRoot 'rsrc_windows_amd64.syso'
+    if (-not (Test-Path $resource) -or (Get-Item $resource).Length -lt 100) {
+        throw "Windows resource generation did not create $resource"
+    }
+    Write-Host "Embedded-resource object ready: $resource (version $winVersion, asInvoker)"
+} finally {
+    Pop-Location
+}

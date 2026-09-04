@@ -1,5 +1,5 @@
 #ifndef MyVersion
-  #define MyVersion "0.46.30"
+  #define MyVersion "0.46.31"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist"
@@ -93,18 +93,14 @@ begin
   SaveStringToFile(QuitFile, Reason, False);
 end;
 
-{ Stop FlipAi and wait for it to really be gone. The flag alone only files a
-  request; FlipAi.exe --quit waits until nothing is answering and the Google
-  Voice window has closed. Older builds could leave detached --chatgpt-worker
-  processes behind, and each of those owns a full WebView2/Chromium process
-  tree. After the graceful stop, force-close any remaining FlipAi.exe process
-  trees owned by this user so an upgrade cannot carry an old memory leak into
-  the new build. taskkill only targets FlipAi.exe; it does not touch Edge or
-  WebView2 processes belonging to other applications. }
+{ Stop FlipAi through its own bounded shutdown path. Older installers used
+  taskkill.exe as a second step, which made a normal update look like a hidden
+  forced process-tree termination. Current FlipAi --quit already waits for the
+  host and provider WebViews to close, so Setup no longer needs to invoke a
+  system process-killing utility. }
 procedure StopFlipAiAndWait(const Reason: String);
 var
   Exe: String;
-  TaskKill: String;
   ResultCode: Integer;
 begin
   SignalBridgeToQuit(Reason);
@@ -116,13 +112,6 @@ begin
   end
   else
     Sleep(3000);
-
-  TaskKill := ExpandConstant('{sys}\taskkill.exe');
-  if FileExists(TaskKill) then
-  begin
-    Exec(TaskKill, '/F /T /IM FlipAi.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(1500);
-  end;
 end;
 
 { An existing install is an update, not a first run. Setup detects it up front

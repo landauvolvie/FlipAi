@@ -76,7 +76,10 @@ jobs:
       - name: Build Windows x64
         shell: pwsh
         run: |
-          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist\FlipAi.exe .
+          # Keep Go symbol/debug metadata in the binary. Stripping saves a few
+          # megabytes but gives static-analysis engines less structure to inspect
+          # and provides no functional benefit for a desktop application.
+          go build -trimpath -ldflags "-H=windowsgui" -o dist\FlipAi.exe .
           if (-not (Test-Path .\dist\FlipAi.exe)) { throw 'FlipAi.exe was not built' }
 
       - name: FlipAi desktop and background lifecycle
@@ -121,9 +124,6 @@ jobs:
             Start-Sleep -Milliseconds 250
           } while((Get-Date)-lt $deadline)
           if($left.Count -gt 0){
-            # Which mode survived is the whole question, and the process name is
-            # the same for all of them. Print the command line so a failure
-            # names the internal mode instead of leaving it to be guessed at.
             $detail=@(Get-CimInstance Win32_Process -Filter "Name='FlipAi.exe'" -ErrorAction SilentlyContinue |
               Select-Object ProcessId,CommandLine | Format-Table -AutoSize -Wrap | Out-String)
             Write-Host 'FlipAi processes still running:'
@@ -139,6 +139,13 @@ jobs:
           .\scripts\Assert-GoogleVoiceReceiver.ps1 `
             -Exe (Resolve-Path .\dist\FlipAi.exe).Path `
             -DataRoot (Join-Path $env:RUNNER_TEMP 'FlipAi-Voice-Receiver')
+
+      - name: Refresh Microsoft Defender intelligence
+        shell: pwsh
+        run: |
+          if(Get-Command Update-MpSignature -ErrorAction SilentlyContinue){
+            try { Update-MpSignature | Out-Null } catch { Write-Host "Defender signature refresh was unavailable: $($_.Exception.Message)" }
+          }
 
       - name: Microsoft Defender scan app when available
         shell: pwsh
@@ -173,7 +180,7 @@ jobs:
           $setup=".\installer-output\FlipAi-Setup-v$version.exe"
           if(-not (Test-Path $setup)){throw "Setup EXE not found: $setup"}
 
-      - name: Installer install and uninstall smoke test
+      - name: Installer install smoke test
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -185,6 +192,31 @@ jobs:
           if(-not (Test-Path (Join-Path $target 'FlipAi.exe'))){throw 'Installer did not install FlipAi.exe'}
           $unins=Join-Path $target 'unins000.exe'
           if(-not (Test-Path $unins)){throw 'Installer did not create uninstaller'}
+
+      - name: Microsoft Defender scan installer and installed app when available
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if(-not (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue)){exit 0}
+          $status=Get-MpComputerStatus -ErrorAction SilentlyContinue
+          if($null -eq $status -or -not $status.AntivirusEnabled){exit 0}
+          $version=(Get-Content VERSION -Raw).Trim()
+          $setup=(Resolve-Path ".\installer-output\FlipAi-Setup-v$version.exe").Path
+          $target=Join-Path $env:LOCALAPPDATA 'Programs\FlipAi'
+          foreach($path in @($setup,$target)){
+            Start-MpScan -ScanType CustomScan -ScanPath $path
+            if(Get-Command Get-MpThreatDetection -ErrorAction SilentlyContinue){
+              $hits=@(Get-MpThreatDetection -ErrorAction SilentlyContinue|Where-Object {$_.Resources -and (($_.Resources -join "`n") -match [regex]::Escape($path))})
+              if($hits.Count -gt 0){throw "Defender reported $($hits.Count) detection(s) for $path"}
+            }
+          }
+
+      - name: Installer uninstall smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $target=Join-Path $env:LOCALAPPDATA 'Programs\FlipAi'
+          $unins=Join-Path $target 'unins000.exe'
           Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           Start-Sleep -Seconds 2
           if(Test-Path (Join-Path $target 'FlipAi.exe')){throw 'Uninstaller left FlipAi.exe behind'}

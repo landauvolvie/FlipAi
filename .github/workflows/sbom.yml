@@ -1,0 +1,29 @@
+name: sbom
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cyclonedx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.13'
+          cache: true
+      - name: Generate CycloneDX SBOM
+        run: |
+          set -euo pipefail
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.9.0
+          cyclonedx-gomod mod -json -output flipai-sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlipAi-SBOM
+          path: flipai-sbom.cdx.json
+          if-no-files-found: error

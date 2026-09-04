@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,8 @@ const (
 	updateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"
 	updateVersionFeed   = "https://raw.githubusercontent.com/" + updateRepo + "/main/VERSION"
 	updateCheckInterval = 30 * time.Second
+	maxUpdateBytes      = int64(200 << 20)
+	maxChecksumBytes    = int64(64 << 10)
 )
 
 // These are variables so tests can point both network checks at local servers.
@@ -137,18 +140,56 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
+// trustedUpdateURL restricts update traffic to GitHub-owned HTTPS endpoints.
+// Loopback HTTP remains allowed only so the repository's httptest-based release
+// tests can exercise the same code without reaching the network.
+func trustedUpdateURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if (host == "127.0.0.1" || host == "localhost" || host == "::1") && u.Scheme == "http" {
+		return true
+	}
+	if u.Scheme != "https" {
+		return false
+	}
+	if host == "github.com" || host == "api.github.com" || host == "raw.githubusercontent.com" || host == "release-assets.githubusercontent.com" || host == "objects.githubusercontent.com" || host == "github-releases.githubusercontent.com" {
+		return true
+	}
+	return strings.HasSuffix(host, ".githubusercontent.com")
+}
+
+func updateHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 8 {
+				return errors.New("too many update download redirects")
+			}
+			if !trustedUpdateURL(req.URL.String()) {
+				return fmt.Errorf("update redirect left trusted GitHub endpoints: %s", req.URL.Hostname())
+			}
+			return nil
+		},
+	}
+}
+
 // fetchLatestVersionMarker reads the tiny VERSION file from GitHub's raw CDN.
 // This is the frequent 30-second check; it avoids spending GitHub API quota
 // when nothing changed. The release API is queried only after this marker is
 // newer than the running build.
 func fetchLatestVersionMarker(ctx context.Context) (string, error) {
+	if !trustedUpdateURL(updateVersionFeedURL) {
+		return "", errors.New("version marker URL is not a trusted GitHub endpoint")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateVersionFeedURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "FlipAi/"+version)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := updateHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -170,14 +211,16 @@ func fetchLatestVersionMarker(ctx context.Context) (string, error) {
 // fetchLatestRelease asks GitHub for the newest published release. It sends no
 // user identifier, configuration, or message data.
 func fetchLatestRelease(ctx context.Context) (ReleaseInfo, error) {
+	if !trustedUpdateURL(updateAPIURL) {
+		return ReleaseInfo{}, errors.New("release API URL is not a trusted GitHub endpoint")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateAPIURL, nil)
 	if err != nil {
 		return ReleaseInfo{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "FlipAi/"+version)
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := updateHTTPClient(20 * time.Second).Do(req)
 	if err != nil {
 		return ReleaseInfo{}, err
 	}
@@ -338,8 +381,6 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 	path, err := downloadUpdate(dlCtx, current)
 	latest := loadUpdateState(a.statePath)
 	if latest.Version != current.Version || latest.AssetURL != current.AssetURL {
-		// A newer release replaced this one while it was downloading. Leave the
-		// old temp file alone; the next cycle stages the current release.
 		return
 	}
 	latest.Downloading = false
@@ -378,9 +419,25 @@ func (a *App) bridgeBusy() bool {
 	return b.Busy()
 }
 
-// downloadUpdate fetches the release installer into the temp folder and checks
-// it against SHA256SUMS.txt. If the same verified installer was already staged,
-// the manual install path reuses it instead of downloading a second time.
+func safeUpdateAssetName(name string) bool {
+	return name != "" && filepath.Base(name) == name && !strings.ContainsAny(name, `/\\`) && strings.HasPrefix(name, "FlipAi-Setup-") && strings.HasSuffix(strings.ToLower(name), ".exe")
+}
+
+func updateDownloadDir() (string, error) {
+	dataDir, _, _, _, err := appPaths()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(dataDir, "updates")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create update staging directory: %w", err)
+	}
+	return dir, nil
+}
+
+// downloadUpdate fetches the release installer into FlipAi's private per-user
+// update directory and requires a matching SHA256SUMS.txt entry. Nothing from a
+// generic Downloads/TEMP location is accepted as the staged update.
 func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
 	updateDownloadMu.Lock()
 	defer updateDownloadMu.Unlock()
@@ -393,41 +450,48 @@ func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
 	if info.AssetURL == "" {
 		return "", errors.New("this release has no Windows installer attached")
 	}
-	if !strings.HasPrefix(info.AssetURL, "https://") {
-		return "", errors.New("the release asset is not served over HTTPS")
+	if !trustedUpdateURL(info.AssetURL) {
+		return "", errors.New("the release asset is not served by a trusted GitHub endpoint")
+	}
+	if info.SumsURL == "" || !trustedUpdateURL(info.SumsURL) {
+		return "", errors.New("the release is missing a trusted SHA256SUMS.txt asset")
 	}
 	name := info.AssetName
-	if name == "" {
-		name = "FlipAi-Setup.exe"
+	if !safeUpdateAssetName(name) {
+		return "", errors.New("the release installer has an unexpected filename")
 	}
-	dest := filepath.Join(os.TempDir(), name)
+
+	rawSums, err := downloadSmall(ctx, info.SumsURL, maxChecksumBytes)
+	if err != nil {
+		return "", fmt.Errorf("could not download the checksum file: %w", err)
+	}
+	want := ""
+	for _, line := range strings.Split(string(rawSums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == name {
+			want = strings.ToLower(fields[0])
+			break
+		}
+	}
+	decoded, err := hex.DecodeString(want)
+	if want == "" || err != nil || len(decoded) != sha256.Size {
+		return "", errors.New("the published checksum file does not contain a valid SHA-256 for " + name)
+	}
+
+	dir, err := updateDownloadDir()
+	if err != nil {
+		return "", err
+	}
+	dest := filepath.Join(dir, name)
+	if sum, err := sha256File(dest); err == nil && strings.EqualFold(sum, want) {
+		return dest, nil
+	}
+	_ = os.Remove(dest)
 	sum, err := download(ctx, info.AssetURL, dest)
 	if err != nil {
 		return "", err
 	}
-	if info.SumsURL == "" {
-		return dest, nil
-	}
-	sumsPath := dest + ".sha256"
-	defer os.Remove(sumsPath)
-	if _, err := download(ctx, info.SumsURL, sumsPath); err != nil {
-		return "", fmt.Errorf("could not download the checksum file: %w", err)
-	}
-	raw, err := os.ReadFile(sumsPath)
-	if err != nil {
-		return "", err
-	}
-	want := ""
-	for _, line := range strings.Split(string(raw), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == name {
-			want = strings.ToLower(fields[0])
-		}
-	}
-	if want == "" {
-		return "", errors.New("the published checksum file does not list " + name)
-	}
-	if want != sum {
+	if !strings.EqualFold(want, sum) {
 		_ = os.Remove(dest)
 		return "", errors.New("the downloaded installer does not match its published checksum")
 	}
@@ -447,15 +511,48 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// download saves a URL to a path and returns the file's SHA-256.
-func download(ctx context.Context, url, dest string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func downloadSmall(ctx context.Context, rawURL string, max int64) ([]byte, error) {
+	if !trustedUpdateURL(rawURL) {
+		return nil, errors.New("download URL is not a trusted GitHub endpoint")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "FlipAi/"+version)
+	resp, err := updateHTTPClient(30 * time.Second).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+	}
+	if resp.ContentLength > max {
+		return nil, errors.New("download is larger than the allowed size")
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, errors.New("download is larger than the allowed size")
+	}
+	return b, nil
+}
+
+// download saves a trusted URL atomically and returns the file's SHA-256. A
+// partial network transfer is never left behind under an executable filename.
+func download(ctx context.Context, rawURL, dest string) (string, error) {
+	if !trustedUpdateURL(rawURL) {
+		return "", errors.New("download URL is not a trusted GitHub endpoint")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "FlipAi/"+version)
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	resp, err := updateHTTPClient(10 * time.Minute).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -463,16 +560,39 @@ func download(ctx context.Context, url, dest string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download returned HTTP %d", resp.StatusCode)
 	}
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if resp.ContentLength > maxUpdateBytes {
+		return "", errors.New("update installer is larger than the allowed size")
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(filepath.Dir(dest), ".flipai-update-*.part")
 	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, 200<<20)); err != nil {
-		f.Close()
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
 		return "", err
 	}
-	if err := f.Close(); err != nil {
+	h := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxUpdateBytes+1))
+	if copyErr == nil && n > maxUpdateBytes {
+		copyErr = errors.New("update installer is larger than the allowed size")
+	}
+	if copyErr == nil {
+		copyErr = f.Sync()
+	}
+	closeErr := f.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	_ = os.Remove(dest)
+	if err := os.Rename(tmp, dest); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
