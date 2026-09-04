@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	webview2 "github.com/jchv/go-webview2"
 )
@@ -115,10 +116,90 @@ func createGoogleVoiceSMSObserver(dataDir string, enabled func() bool) (webview2
 		}
 		if err := appendDirectGoogleVoiceSMS(dataDir, payload); err != nil {
 			log.Printf("Google Voice SMS listener: %v", err)
+			return
 		}
+		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+			s.LastInboundAt = time.Now()
+		})
 	})
 	w.Init(googleVoiceSMSObserverIsolationScript)
 	w.Init(googleVoiceSMSInitScript)
-	w.Navigate(googleVoiceSMSObserverURL(dataDir))
+	target := googleVoiceSMSObserverURL(dataDir)
+	mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+		s.ListenerRunning = true
+		s.Ready = false
+		s.Page = target
+		s.LastError = "Starting the Google Voice Messages listener"
+	})
+	w.Navigate(target)
 	return w, newWebViewDevTools(w), nil
+}
+
+type googleVoiceSMSProbe struct {
+	Href  string `json:"href"`
+	Host  string `json:"host"`
+	Path  string `json:"path"`
+	Ready string `json:"ready"`
+}
+
+const googleVoiceSMSProbeJS = `({href:String(location.href||''),host:String(location.hostname||'').toLowerCase(),path:String(location.pathname||''),ready:String(document.readyState||'')})`
+
+func probeGoogleVoiceSMSListener(d voiceDevTools) (googleVoiceSMSProbe, error) {
+	var p googleVoiceSMSProbe
+	if err := voiceEval(d, googleVoiceSMSProbeJS, false, &p); err != nil {
+		return p, err
+	}
+	if p.Host != "voice.google.com" {
+		return p, errors.New("Google Voice SMS listener left voice.google.com")
+	}
+	if !strings.Contains(strings.ToLower(p.Path), "/messages") {
+		return p, errors.New("Google Voice SMS listener is not on the Messages page")
+	}
+	if p.Ready != "interactive" && p.Ready != "complete" {
+		return p, errors.New("Google Voice SMS Messages page is still loading")
+	}
+	return p, nil
+}
+
+func runGoogleVoiceSMSHealthLoop(dataDir string, d voiceDevTools, stop <-chan struct{}) {
+	if d == nil {
+		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+			s.ListenerRunning = false
+			s.Ready = false
+			s.LastError = "Google Voice SMS listener has no browser control channel"
+		})
+		return
+	}
+	probe := func() {
+		p, err := probeGoogleVoiceSMSListener(d)
+		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+			s.ListenerRunning = true
+			s.LastProbeAt = time.Now()
+			if p.Href != "" {
+				s.Page = p.Href
+			}
+			if err != nil {
+				s.Ready = false
+				s.LastError = err.Error()
+				return
+			}
+			s.Ready = true
+			s.LastError = ""
+		})
+	}
+	probe()
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	defer mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+		s.ListenerRunning = false
+		s.Ready = false
+	})
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			probe()
+		}
+	}
 }
