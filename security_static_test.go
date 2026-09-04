@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -98,5 +99,28 @@ func TestSecurityHardeningDoesNotRegressToShellPersistenceOrRemoteScriptInstall(
 	}
 	if strings.Contains(bootText, strings.ToLower("<RunLevel>HighestAvailable</RunLevel>")) {
 		t.Fatal("the long-running boot watchdog must not request elevated privileges")
+	}
+	// The one UAC path may only create or remove FlipAi's own fixed boot task.
+	for _, want := range []string{"--boot-task", "install", "remove", "FlipAi Boot"} {
+		if !strings.Contains(bootText, strings.ToLower(want)) {
+			t.Fatalf("boot helper lost fixed-action guard %q", want)
+		}
+	}
+	if strings.Contains(bootText, strings.ToLower("HighestAvailable")) {
+		t.Fatal("boot helper regressed to an elevated long-running task")
+	}
+}
+
+func TestInstallerUsesGracefulShutdownNotHiddenProcessKilling(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("installer", "FlipAi.iss"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.ToLower(string(raw))
+	if strings.Contains(text, "taskkill.exe") || strings.Contains(text, "/f /t /im flipai.exe") {
+		t.Fatal("installer must stop FlipAi through --quit, not a hidden forced process-tree kill")
+	}
+	if !strings.Contains(text, "--quit") {
+		t.Fatal("installer lost FlipAi's graceful shutdown path")
 	}
 }
