@@ -18,16 +18,22 @@ import (
 )
 
 // FlipAi ships as a GitHub release. Updates are intentionally quiet: the host
-// checks every five minutes, downloads a newer installer in the background,
-// and leaves installation to the small button beside the version in the app.
+// checks a tiny version marker every 30 seconds, downloads a newer installer
+// in the background, and leaves installation to the small button beside the
+// version in the app. The heavier GitHub release API is only queried after the
+// marker says a newer version exists.
 const (
 	updateRepo          = "landauvolvie/FlipAi"
 	updateAPI           = "https://api.github.com/repos/" + updateRepo + "/releases/latest"
-	updateCheckInterval = 5 * time.Minute
+	updateVersionFeed   = "https://raw.githubusercontent.com/" + updateRepo + "/main/VERSION"
+	updateCheckInterval = 30 * time.Second
 )
 
-// updateAPIURL is a variable so tests can point the check at a local server.
-var updateAPIURL = updateAPI
+// These are variables so tests can point both network checks at local servers.
+var (
+	updateAPIURL         = updateAPI
+	updateVersionFeedURL = updateVersionFeed
+)
 
 var (
 	updateDownloadMu sync.Mutex
@@ -131,6 +137,36 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
+// fetchLatestVersionMarker reads the tiny VERSION file from GitHub's raw CDN.
+// This is the frequent 30-second check; it avoids spending GitHub API quota
+// when nothing changed. The release API is queried only after this marker is
+// newer than the running build.
+func fetchLatestVersionMarker(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateVersionFeedURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "FlipAi/"+version)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("version marker returned HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 128))
+	if err != nil {
+		return "", err
+	}
+	v := strings.TrimPrefix(strings.TrimSpace(string(raw)), "v")
+	if len(versionParts(v)) == 0 {
+		return "", errors.New("version marker did not contain a valid version")
+	}
+	return v, nil
+}
+
 // fetchLatestRelease asks GitHub for the newest published release. It sends no
 // user identifier, configuration, or message data.
 func fetchLatestRelease(ctx context.Context) (ReleaseInfo, error) {
@@ -219,6 +255,27 @@ func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
 	if !force && time.Since(current.CheckedAt) < a.updateInterval() {
 		return current
 	}
+	if !force {
+		marker, err := fetchLatestVersionMarker(ctx)
+		if err != nil {
+			current.CheckedAt = time.Now()
+			current.Error = truncate(err.Error(), 200)
+			saveUpdateState(a.statePath, current)
+			return current
+		}
+		if !versionLess(version, marker) {
+			current.CheckedAt = time.Now()
+			current.Error = ""
+			saveUpdateState(a.statePath, current)
+			return current
+		}
+		if current.Version == marker && current.AssetURL != "" {
+			current.CheckedAt = time.Now()
+			current.Error = ""
+			saveUpdateState(a.statePath, current)
+			return current
+		}
+	}
 	info, err := fetchLatestRelease(ctx)
 	if err != nil {
 		current.CheckedAt = time.Now()
@@ -238,7 +295,7 @@ func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
 }
 
 // watchForUpdates performs an early check after startup and then checks exactly
-// every five minutes. A newer release is downloaded and verified immediately,
+// every 30 seconds. A newer release is downloaded and verified immediately,
 // but never installed until the user clicks the small install control in the
 // sidebar. Download failures remain silent and are retried on a later check.
 func (a *App) watchForUpdates(ctx context.Context) {

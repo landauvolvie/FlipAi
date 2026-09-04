@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-func TestAppUpdateCheckIsAlwaysFiveMinutes(t *testing.T) {
+func TestAppUpdateCheckIsAlwaysThirtySeconds(t *testing.T) {
 	a := newTestApp(t)
 	a.mu.Lock()
 	a.cfg.Updates.CheckMinutes = 24 * 60
 	a.cfg.Updates.Automatic = true
 	a.mu.Unlock()
-	if got := a.updateInterval(); got != 5*time.Minute {
-		t.Fatalf("update interval = %v, want 5m", got)
+	if got := a.updateInterval(); got != 30*time.Second {
+		t.Fatalf("update interval = %v, want 30s", got)
 	}
 	if a.autoUpdateEnabled() {
 		t.Fatal("installation must never become automatic")
