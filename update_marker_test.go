@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -51,7 +52,17 @@ func TestUpdateMarkerEscalatesToReleaseAPIWhenVersionAdvances(t *testing.T) {
 		case "/release":
 			apiCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"tag_name":"v99.0.0"}`)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"tag_name":   "v99.0.0",
+				"name":       "FlipAi 99.0.0",
+				"html_url":   "https://example.invalid/release",
+				"draft":      false,
+				"prerelease": false,
+				"assets": []map[string]string{{
+					"name":                 "FlipAi-Setup-v99.0.0.exe",
+					"browser_download_url": "https://example.invalid/FlipAi-Setup-v99.0.0.exe",
+				}},
+			})
 		default:
 			http.NotFound(w, r)
 		}
