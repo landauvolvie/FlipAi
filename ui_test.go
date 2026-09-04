@@ -716,13 +716,13 @@ func TestUpdateCheckStoresPublishedRelease(t *testing.T) {
 		t.Fatal("the release check was not stored in state")
 	}
 
-	// The banner must appear on an ordinary page, not only in Settings.
+	// An available release appears only as the compact sidebar download state.
 	body := a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, "FlipAi "+next+" is available") || !strings.Contains(body, `action="/update/install"`) {
-		t.Fatal("the update banner is missing from the page")
+	if !strings.Contains(body, `title="Downloading FlipAi `+next+`"`) {
+		t.Fatal("the sidebar download indicator is missing from the page")
 	}
-	if !strings.Contains(body, "not a fresh setup") {
-		t.Fatal("the banner should say an update keeps existing settings")
+	if strings.Contains(body, `class="banner update"`) || strings.Contains(body, `action="/update/install"`) {
+		t.Fatal("the retired page-wide updater UI is still present")
 	}
 }
 
@@ -816,7 +816,6 @@ func TestSettingsOffersStartupChoices(t *testing.T) {
 		"Start before sign-in",
 		"administrator approval once",
 		`action="/settings/bootstartup"`,
-		"Check for updates",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Settings is missing %q", want)

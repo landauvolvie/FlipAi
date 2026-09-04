@@ -236,7 +236,7 @@ func runUpdateInstaller(path string, reopenWindow bool) error {
 	if reopenWindow {
 		mode = "/restartapp=1"
 	}
-	cmd := exec.Command(path, "/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES", mode)
+	cmd := exec.Command(path, "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES", mode)
 	hideWindow(cmd)
 	return cmd.Start()
 }

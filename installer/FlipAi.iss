@@ -1,5 +1,5 @@
 #ifndef MyVersion
-  #define MyVersion "0.46.25"
+  #define MyVersion "0.46.26"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist"
@@ -56,11 +56,11 @@ Filename: "{app}\FlipAi.exe"; Description: "Launch FlipAi and complete setup"; W
 ; asks for that, so a plain silent install (packaging tests, scripted
 ; deployment) still leaves nothing running.
 ;
-; /restartapp=1 is an update the user started from inside the app: run the
-; launcher with no arguments so the watchdog comes back AND the FlipAi window
-; opens again. Passing --watchdog here instead restored the tray and the
-; background bridge but never reopened the window, which is why an in-app
-; update looked like the app simply never came back.
+; /restartapp=1 is an update the user started from inside the app. Restore the
+; watchdog/background host first, then launch the normal UI. Starting the host
+; first removes the post-update race where the window could launch while the
+; old watchdog/process tree was still releasing its mutex and local port.
+Filename: "{app}\FlipAi.exe"; Parameters: "--resume"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: RestartWithWindow
 Filename: "{app}\FlipAi.exe"; WorkingDir: "{app}"; Flags: nowait; Check: RestartWithWindow
 ; /restartapp=2 is an unattended automatic update. Nobody is waiting at the
 ; screen, so restore the background bridge and tray without stealing focus.
@@ -121,7 +121,7 @@ begin
   if FileExists(TaskKill) then
   begin
     Exec(TaskKill, '/F /T /IM FlipAi.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(700);
+    Sleep(1500);
   end;
 end;
 

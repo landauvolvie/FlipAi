@@ -119,7 +119,7 @@ func TestSidebarShowsAnAvailableUpdateNextToTheVersion(t *testing.T) {
 		CheckedAt: time.Now(),
 	})
 	body := a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, "side-update") {
+	if !strings.Contains(body, `title="Downloading FlipAi 99.0.0"`) {
 		t.Error("the sidebar version line should become an update indicator")
 	}
 	if !strings.Contains(body, "99.0.0") {
@@ -128,7 +128,7 @@ func TestSidebarShowsAnAvailableUpdateNextToTheVersion(t *testing.T) {
 
 	saveUpdateState(a.statePath, ReleaseInfo{Version: version, CheckedAt: time.Now()})
 	plain := a.do(t, http.MethodGet, "/", nil).Body.String()
-	if strings.Contains(plain, "side-update") {
+	if strings.Contains(plain, `title="Downloading FlipAi`) || strings.Contains(plain, `id="flipai-update-install"`) {
 		t.Error("no update available should leave the plain version line")
 	}
 }

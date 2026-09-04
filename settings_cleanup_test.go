@@ -13,7 +13,6 @@ func TestSettingsPageKeepsOnlyAppLevelControls(t *testing.T) {
 	body := a.do(t, http.MethodGet, "/settings", nil).Body.String()
 
 	for _, want := range []string{
-		"Check for new version",
 		"Start FlipAi with Windows",
 		"Start before sign-in",
 		"Call status & diagnostics",
@@ -25,6 +24,10 @@ func TestSettingsPageKeepsOnlyAppLevelControls(t *testing.T) {
 	}
 
 	for _, retired := range []string{
+		"Check for new version",
+		"Latest v",
+		`action="/update/check"`,
+		`action="/settings/updates"`,
 		`name="autoUpdate"`,
 		`name="updateCheckMinutes"`,
 		`name="theme"`,

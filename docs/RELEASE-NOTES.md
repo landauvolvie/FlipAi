@@ -1,9 +1,16 @@
-# FlipAi v0.46.25
+# FlipAi v0.46.26
 
-Gemini Chat SMS replies no longer include Gemini's hidden accessibility speaker label.
+Updates now behave like a quiet desktop-app updater instead of a Settings workflow.
 
-## Gemini Chat
+## Updates
 
-Gemini's page can expose response text to automation as `Gemini said ...` even though the visible answer does not show that label. FlipAi now strips that provider-only accessibility prefix before sending the reply through Google Voice.
+- Update controls are completely removed from Settings.
+- FlipAi checks GitHub every five minutes and automatically downloads and verifies a newer installer in the background.
+- While the installer is downloading, only a small download indicator appears beside the version in the left sidebar.
+- Once the verified installer is ready, that indicator becomes the install button. Clicking it starts the update without navigating to an update-success or update-failure page.
+- Page-wide update banners and download-complete popups are removed.
+- Installation remains a deliberate user click; only the download is automatic.
 
-The SMS therefore starts directly with the model's actual answer, matching the behavior of ChatGPT Chat.
+## Restart reliability
+
+The updater now restores the watchdog/background host before reopening the normal FlipAi window, and gives stale FlipAi process trees more time to release after forced shutdown. This reduces the post-update race that could leave FlipAi installed but not running until its processes were ended manually in Task Manager.
