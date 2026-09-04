@@ -39,9 +39,22 @@ func TestGoogleVoiceSMSConnectDoesNotRestartCalling(t *testing.T) {
 			t.Fatalf("SMS connection is coupled to calling again through %q", forbidden)
 		}
 	}
-	for _, want := range []string{"platformStartGoogleVoiceSMSLogin", "platformDisconnectGoogleVoiceSMS"} {
+	for _, want := range []string{"googleVoiceSMSLoginForUI", "platformDisconnectGoogleVoiceSMS"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("SMS connection is missing %q", want)
+		}
+	}
+}
+
+func TestGoogleVoiceSMSSignInCanReachInteractiveTray(t *testing.T) {
+	b, err := os.ReadFile("google_voice_sms_desktop_worker.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{"voiceSessionInteractive", "requestGoogleVoiceSMSDesktopLogin", "googleVoiceSMSLoginForUI"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("SMS desktop handoff is missing %q", want)
 		}
 	}
 }
