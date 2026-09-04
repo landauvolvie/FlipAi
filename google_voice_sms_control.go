@@ -113,7 +113,7 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 			return
 		}
 		resetGoogleVoiceSMSCheckpoint(statePath)
-		if err := platformStartGoogleVoiceSMSLogin(dataDir); err != nil {
+		if err := googleVoiceSMSLoginForUI(dataDir); err != nil {
 			mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
 				s.LastError = "Could not open the Google Voice SMS sign-in window: " + err.Error()
 				s.LastEvent = "sign-in-window-error"
