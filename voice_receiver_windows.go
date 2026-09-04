@@ -107,8 +107,13 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 	_ = w.Bind("flipVoiceEnded", bridge.Ended)
 	_ = w.Bind("flipVoiceDevices", bridge.Devices)
 	_ = w.Bind("flipVoicePage", bridge.Page)
+	// Direct SMS is a separate consumer of the same signed-in page. It only
+	// writes observed text events to the SMS spool; it does not touch the call
+	// machine above or any voice-call setting.
+	_ = w.Bind("flipVoiceSMS", func(payload string) { _ = appendDirectGoogleVoiceSMS(dataDir, payload) })
 
 	w.Init(googleVoiceInitScript)
+	w.Init(googleVoiceSMSInitScript)
 
 	// The one thing that does listen is FlipAi's own endpoint, so the host
 	// process can ask this one to send an image through the signed-in Google
@@ -139,6 +144,7 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 
 	stop := make(chan struct{})
 	defer close(stop)
+	go runGoogleVoiceSMSOutboundLoop(dataDir, control.devTools, stop)
 	go runVoiceReceiverLoops(dataDir, hwnd, bridge, control, dock, stop)
 
 	w.Navigate(googleVoiceWebURL)
