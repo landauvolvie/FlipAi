@@ -27,7 +27,7 @@ func init() {
     <div class="card-title-row">
       <span class="bmark lg google">{{brand "google"}}</span>
       <div>
-        <h2>Google Voice SMS <span id="gv-sms-pill" class="pill warn">{{if eq .S.GmailMethod "google_voice"}}Not connected{{else}}Not connected{{end}}</span></h2>
+        <h2>Google Voice SMS <span id="gv-sms-pill" class="pill warn">Not connected</span></h2>
         <p>Send and receive texts directly through a private Google Voice SMS browser. Gmail forwarding is not required.</p>
       </div>
     </div>
@@ -64,7 +64,11 @@ func init() {
     }
     if(listener)listener.textContent=!selected?'Off':(connected?'Ready':(s.listenerRunning?'Starting…':'Not running'));
     if(mode)mode.textContent=selected?'Direct Google Voice':'Gmail / not selected';
-    pill.textContent=connected?'Connected':(selected&&(s.listenerError||s.running)?'Needs attention':'Not connected');
+    if(connected) pill.textContent='Connected';
+    else if(loginActive) pill.textContent='Sign in';
+    else if(s.starting) pill.textContent='Opening…';
+    else if(selected&&s.listenerError) pill.textContent='Needs attention';
+    else pill.textContent='Not connected';
     pill.className='pill '+(connected?'ok':'warn');
     if(connected){button.textContent='Disconnect';button.className='btn';}
     else if(loginActive){button.textContent='Cancel';button.className='btn';}
@@ -72,6 +76,7 @@ func init() {
     else{button.textContent='Connect';button.className='btn accent';}
     if(note&&connected)note.textContent='Direct Google Voice SMS is signed in and the Messages listener is verified ready.';
     else if(note&&loginActive)note.textContent='Sign in to Google Voice in the separate window FlipAi opened. This SMS login is intentionally separate from calling.';
+    else if(note&&s.starting)note.textContent='FlipAi is opening the separate Google Voice SMS sign-in window.';
     else if(note&&selected&&s.listenerError)note.textContent=s.listenerError;
     else if(note&&!selected)note.textContent='Press Connect. FlipAi will open a separate Google Voice SMS sign-in window.';
     if(restartWhenReady&&connected&&!wasConnected){restartWhenReady=false;restart();}
