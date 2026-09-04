@@ -7,16 +7,22 @@ import (
 	"testing"
 )
 
-func TestClaudeInstallSignInUsesOfficialWindowsInstallerAndLogin(t *testing.T) {
+func TestClaudeInstallSignInUsesWinGetAndLoginWithoutRemoteScriptExecution(t *testing.T) {
 	got := claudeInstallSignInArgs()
 	for _, want := range []string{
-		"https://claude.ai/install.ps1",
+		"winget install",
+		claudeWingetPackageID,
+		"--exact",
 		"auth login",
-		`.local\bin\claude.exe`,
-		"-NoExit",
+		"/K",
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("Claude first-run PowerShell is missing %q: %s", want, got)
+			t.Errorf("Claude first-run command is missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"install.ps1", "Invoke-Expression", "| iex", "irm http"} {
+		if strings.Contains(strings.ToLower(got), strings.ToLower(forbidden)) {
+			t.Errorf("Claude first-run command must not download-and-execute script text; found %q in %s", forbidden, got)
 		}
 	}
 }
