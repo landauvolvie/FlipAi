@@ -126,8 +126,8 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 			return parseRemoteCommand(raw, cfg, target)
 		}
 	}
-	if target == "G" || target == "H" || target == "M" {
-		return remoteCommand{}, fmt.Errorf("%s over Google Voice supports text messages in this release; switch to C: or A: for an attachment", agentDisplayName(target))
+	if isBrowserChatAgent(target) {
+		return parseBrowserChatAttachmentOnlyCommand(cfg, target, m)
 	}
 	return parseRemoteCommandForMessage(raw, cfg, target, m)
 }
