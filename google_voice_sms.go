@@ -19,7 +19,7 @@ import (
 const GmailMethodGoogleVoice = "google_voice"
 
 // directGoogleVoiceSMS is a message observed inside FlipAi's own signed-in
-// Google Voice WebView. It is written to a small local spool so the existing
+// Google Voice SMS WebView. It is written to a small local spool so the existing
 // Bridge can consume it through the same MailClient contract as Gmail.
 type directGoogleVoiceSMS struct {
 	ID     string    `json:"id"`
@@ -45,29 +45,30 @@ func (g *GoogleVoiceSMSClient) Test(ctx context.Context) error {
 	if g == nil || strings.TrimSpace(g.dataDir) == "" {
 		return errors.New("Google Voice SMS is not configured")
 	}
-	if err := platformOpenGoogleVoice(g.dataDir, false); err != nil {
-		// If the host is running before sign-in, the interactive tray may already
-		// own the browser. In that case its runtime state is the authoritative
-		// answer rather than the host's inability to open a desktop window.
-		rt := loadVoiceRuntime(g.dataDir)
-		if !rt.BrowserRunning {
-			return err
-		}
+	// Direct SMS owns a completely separate browser/profile from calling. The
+	// old test checked the call browser, which is how v0.46.34 could report a
+	// healthy SMS connection while the SMS renderer itself was dead.
+	if err := platformEnsureGoogleVoiceSMSWorker(g.dataDir); err != nil {
+		return err
 	}
-	deadline := time.Now().Add(12 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
-		rt := loadVoiceRuntime(g.dataDir)
-		if rt.BrowserRunning && rt.SignedIn {
+		s := loadGoogleVoiceSMSRuntime(g.dataDir)
+		fresh := !s.LastProbeAt.IsZero() && time.Since(s.LastProbeAt) < 8*time.Second
+		if s.Running && s.Connected && s.SignedIn && s.ListenerRunning && s.Ready && fresh {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if !time.Now().Before(deadline) {
-			if rt.BrowserRunning {
-				return errors.New("Google Voice is open inside FlipAi but is not signed in")
+			if s.LastError != "" {
+				return errors.New(s.LastError)
 			}
-			return errors.New("Google Voice did not become ready inside FlipAi")
+			if !s.Connected || !s.SignedIn {
+				return errors.New("Google Voice SMS is not signed in; open Connections, press Connect under Google Voice SMS, and sign in in the window FlipAi opens")
+			}
+			return errors.New("Google Voice SMS is signed in but its Messages listener is not ready")
 		}
 		select {
 		case <-ctx.Done():
@@ -198,10 +199,13 @@ func directGoogleVoiceSMSID(sender, body string, at time.Time) string {
 	return "gv-" + hex.EncodeToString(sum[:10])
 }
 
-// appendDirectGoogleVoiceSMS is called only by the WebView binding in the
-// Google Voice process. It validates the small JSON payload again before it is
-// allowed anywhere near the Bridge.
+// appendDirectGoogleVoiceSMS is called by the dedicated SMS WebView binding. A
+// pre-v0.46.35 fallback binding still exists in the untouched calling window;
+// ignore it there so the call process can never become a second SMS reader.
 func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
+	if len(os.Args) > 1 && strings.EqualFold(os.Args[1], "--google-voice") {
+		return nil
+	}
 	var m directGoogleVoiceSMS
 	if err := json.Unmarshal([]byte(payload), &m); err != nil {
 		return err
