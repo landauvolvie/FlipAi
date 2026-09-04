@@ -84,8 +84,8 @@ $iconPath = (Resolve-Path $OutputPath).Path
 Push-Location $repoRoot
 try {
     # Pin the resource generator so a future upstream release cannot silently
-    # change what goes into FlipAi.exe. `simply --manifest gui` emits an
-    # asInvoker GUI manifest; --admin is intentionally not used.
+    # change what goes into FlipAi.exe. `simply --manifest gui` emits the normal
+    # asInvoker GUI manifest; elevation is deliberately not requested here.
     & go run github.com/tc-hib/go-winres@v0.2.3 simply `
         --arch amd64 `
         --manifest gui `
