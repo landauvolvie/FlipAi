@@ -23,6 +23,8 @@ type GoogleVoiceSMSRuntimeState struct {
 	LastProbeAt     time.Time `json:"lastProbeAt,omitempty"`
 	LastInboundAt   time.Time `json:"lastInboundAt,omitempty"`
 	LastOutboundAt  time.Time `json:"lastOutboundAt,omitempty"`
+	DesktopRequest   string    `json:"desktopRequest,omitempty"`
+	DesktopRequestAt time.Time `json:"desktopRequestAt,omitempty"`
 	UpdatedAt       time.Time `json:"updatedAt,omitempty"`
 }
 
