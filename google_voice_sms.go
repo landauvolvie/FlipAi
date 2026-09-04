@@ -143,11 +143,19 @@ func (g *GoogleVoiceSMSClient) Get(ctx context.Context, id string) (GmailMessage
 		// This is an internal trusted envelope: the sender came from the signed-in
 		// Google Voice page, not from an email body. Reusing the existing parser
 		// keeps the allowlist/security/routing path exactly the same as Gmail.
+		phrase := "new text message from"
+		if _, cfgPath, _, _, pathErr := appPaths(); pathErr == nil {
+			if cfg, cfgErr := loadConfig(cfgPath, g.dataDir); cfgErr == nil {
+				if p := strings.TrimSpace(cfg.GoogleVoice.RequiredSubjectPhrase); p != "" {
+					phrase = p
+				}
+			}
+		}
 		return GmailMessage{
 			ID:                    m.ID,
-			Subject:               "New text message from " + m.Sender,
+			Subject:               phrase + " " + m.Sender,
 			From:                  "Google Voice <voice-noreply@google.com>",
-			ReplyTo:               m.Sender + "@txt.voice.google.com",
+			ReplyTo:               "flipai." + m.Sender + ".direct@txt.voice.google.com",
 			AuthenticationResults: "dkim=pass header.d=google.com",
 			Body:                  "Google Voice\n" + m.Body,
 			Snippet:               m.Body,
