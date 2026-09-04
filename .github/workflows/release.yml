@@ -2,6 +2,7 @@ name: release
 
 # Version, compiled app and installer version are kept in lockstep before publishing.
 # Existing assets are replaced only after every release check passes.
+# Release-time CycloneDX SBOM generation and upload are intentionally part of this job.
 on:
   push:
     branches: [main]
