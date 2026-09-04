@@ -25,6 +25,20 @@ const googleVoiceSMSInitScript = `
     }
     return out;
   };
+  // Google Voice often replaces the visible phone number with a saved contact
+  // name. The number is still present on the signed-in Voice row in accessibility
+  // labels, titles, data attributes or a descendant link. Inspect only that row
+  // and its descendants; never infer a sender from the SMS body itself.
+  const phoneOf = (row,text) => {
+    const attrs=['aria-label','title','href','data-phone','data-number','data-e164','data-id','value'];
+    const candidates=[text];
+    const addAttrs=el=>{for(const a of attrs){try{const v=el.getAttribute?.(a);if(v)candidates.push(v)}catch(_){}}};
+    addAttrs(row);
+    let descendants=[];try{descendants=row.querySelectorAll?.('[aria-label],[title],[href],[data-phone],[data-number],[data-e164],[data-id],[value]')||[]}catch(_){}
+    for(const el of descendants){addAttrs(el);if(candidates.length>180)break;}
+    for(const v of candidates){const p=digits(v);if(p)return p;}
+    return '';
+  };
   const bodyOf = (row,text,phone) => {
     const preferred=row.querySelector?.('[data-message-text],[class*="snippet"],[class*="message-text"],[aria-label*="message" i]');
     let v=norm(preferred?.innerText||preferred?.textContent||preferred?.getAttribute?.('aria-label')||'');
@@ -44,7 +58,7 @@ const googleVoiceSMSInitScript = `
     for(const [k,t] of state.recent){if(now-t>30000)state.recent.delete(k)}
     for(const row of rows()){
       const text=norm((row.getAttribute?.('aria-label')||'')+' '+(row.innerText||row.textContent||''));
-      const phone=digits(text+' '+(row.getAttribute?.('href')||''));
+      const phone=phoneOf(row,text);
       const body=bodyOf(row,text,phone);
       const sig=phone+'\u0000'+body;
       const old=state.rows.get(row)||'';
@@ -59,6 +73,6 @@ const googleVoiceSMSInitScript = `
     state.armed=true;
   }
   const obs=new MutationObserver(()=>{clearTimeout(globalThis.__flipAiDirectSMSTimer);globalThis.__flipAiDirectSMSTimer=setTimeout(scan,80)});
-  const start=()=>{try{obs.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-label','class']})}catch(_){} scan(); setInterval(scan,800)};
+  const start=()=>{try{obs.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-label','title','href','class','data-phone','data-number','data-e164','data-id','value']})}catch(_){} scan(); setInterval(scan,800)};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
 })()`
