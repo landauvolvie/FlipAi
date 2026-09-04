@@ -62,14 +62,25 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 	}
 	writeStatus := func(w http.ResponseWriter, selected bool) {
 		rt := loadVoiceRuntime(dataDir)
+		sms := loadGoogleVoiceSMSRuntime(dataDir)
+		fresh := !sms.LastProbeAt.IsZero() && time.Since(sms.LastProbeAt) < 8*time.Second
+		listenerReady := selected && rt.BrowserRunning && rt.SignedIn && sms.ListenerRunning && sms.Ready && fresh
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"selected":       selected,
-			"browserRunning": rt.BrowserRunning,
-			"signedIn":       rt.SignedIn,
-			"page":           rt.Page,
-			"lastError":      rt.LastError,
+			"selected":        selected,
+			"connected":       listenerReady,
+			"browserRunning":  rt.BrowserRunning,
+			"signedIn":        rt.SignedIn,
+			"page":            rt.Page,
+			"lastError":       rt.LastError,
+			"listenerRunning": sms.ListenerRunning,
+			"listenerReady":   listenerReady,
+			"listenerPage":    sms.Page,
+			"listenerError":   sms.LastError,
+			"lastProbeAt":     sms.LastProbeAt,
+			"lastInboundAt":   sms.LastInboundAt,
+			"lastOutboundAt":  sms.LastOutboundAt,
 		})
 	}
 	selected := func() bool {
@@ -118,13 +129,16 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 			return
 		}
 		resetGoogleVoiceSMSCheckpoint(statePath)
+		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+			*s = GoogleVoiceSMSRuntimeState{LastError: "Starting the Google Voice Messages listener"}
+		})
 		// The direct listener is its own Messages WebView. Recreate the Google
 		// Voice process after selecting this transport so that listener exists
 		// immediately, including when the user switched from Gmail without
 		// restarting Windows or signing in again.
 		platformRestartGoogleVoice(dataDir)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Google Voice SMS connected. FlipAi is starting the dedicated message listener."})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Google Voice SMS selected. FlipAi is starting and verifying the dedicated message listener."})
 	}))
 	mux.HandleFunc("/disconnect", withLocalUI(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -143,6 +157,7 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 				return
 			}
 			resetGoogleVoiceSMSCheckpoint(statePath)
+			mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) { *s = GoogleVoiceSMSRuntimeState{} })
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
