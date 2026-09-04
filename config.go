@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.32"
+const version = "0.46.33"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -434,7 +434,7 @@ func loadConfig(path, dataDir string) (Config, error) {
 			cfg.Gmail.Method = GmailMethodOAuth
 		}
 	}
-	if cfg.Gmail.Method != "" && cfg.Gmail.Method != GmailMethodOAuth && cfg.Gmail.Method != GmailMethodAppPassword {
+	if cfg.Gmail.Method != "" && cfg.Gmail.Method != GmailMethodOAuth && cfg.Gmail.Method != GmailMethodAppPassword && cfg.Gmail.Method != GmailMethodGoogleVoice {
 		cfg.Gmail.Method = ""
 	}
 	if cfg.GoogleVoice.ReplyMaxChars < 80 {
