@@ -1,18 +1,19 @@
-# FlipAi v0.46.32
+# FlipAi v0.46.33
 
-Image-sharing release for regular browser chat agents.
+Direct Google Voice SMS connection release.
 
-## Universal chat images
+## Google Voice SMS
 
-- Google Voice image messages can now be sent to ChatGPT Chat, Claude Chat, Gemini Chat, and Grok Chat, not only Codex/Claude Code.
-- Attachment-only MMS stays with the phone number's selected/sticky chat agent instead of falling back to another agent.
-- Images are attached through each signed-in provider's normal WebView file input; FlipAi does not encode the image into the model prompt or use a provider API.
-- Multiple image attachments are supported within FlipAi's existing inbound attachment limits.
+- Added **Google Voice SMS** as a second option under Connections alongside Gmail.
+- Direct SMS uses FlipAi's existing signed-in Google Voice WebView, so Gmail forwarding is not required when this transport is selected.
+- Incoming texts use the same allowlist, security-code, sticky-agent, queue, STATUS, NEW, acknowledgement, and progress paths as the existing SMS bridge.
+- Replies are sent back through the Google Voice page itself.
+- The direct transport works with Codex, Claude Code, ChatGPT Chat, Claude Chat, Gemini Chat, and Grok Chat through the existing agent routing.
+- Gmail remains available as the alternate SMS transport; only one reader is selected at a time to prevent duplicate replies.
 
-## Safety and isolation
+## Calling isolation
 
-- Browser-chat image paths are restricted to FlipAi-created temporary inbound folders and validated as regular image files before the WebView can select them.
-- Temporary images are cleaned up after the turn, and each provider keeps its existing isolated WebView profile and authenticated loopback control channel.
-- Existing text-only behavior is unchanged when no image is attached.
+- Existing Google Voice calling settings and call-routing behavior are not changed by this release.
+- The SMS observer and sender are separate from the call state machine even though they reuse the same signed-in Google Voice browser profile.
 
 No Authenticode/code-signing certificate is included in this release.
