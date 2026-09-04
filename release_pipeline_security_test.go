@@ -26,12 +26,13 @@ func TestWindowsBuildPipelineKeepsAnalyzableBinariesAndDefenderGates(t *testing.
 
 func TestSecurityAutomationRemainsEnabled(t *testing.T) {
 	// Dependency Review is intentionally omitted: this repository does not have
-	// GitHub's Dependency Graph feature enabled. govulncheck, CodeQL, Dependabot
-	// configuration, and the SBOM jobs remain the repository-supported gates.
+	// GitHub's Dependency Graph feature enabled. govulncheck, CodeQL, Dependabot,
+	// the standalone SBOM check, and release-time SBOM publication remain the
+	// repository-supported gates.
 	for _, path := range []string{
 		".github/workflows/security.yml",
 		".github/workflows/sbom.yml",
-		".github/workflows/release-sbom.yml",
+		".github/workflows/release.yml",
 		".github/dependabot.yml",
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -46,6 +47,22 @@ func TestSecurityAutomationRemainsEnabled(t *testing.T) {
 	for _, want := range []string{"codeql-action", "govulncheck"} {
 		if !strings.Contains(string(security), want) {
 			t.Fatalf("security workflow lost %q", want)
+		}
+	}
+
+	release, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseText := string(release)
+	for _, want := range []string{
+		"Generate CycloneDX SBOM",
+		"FlipAi-SBOM.cdx.json",
+		"Attest release build provenance",
+		"SBOM is missing; refusing to publish release without it",
+	} {
+		if !strings.Contains(releaseText, want) {
+			t.Fatalf("release workflow lost inline SBOM control %q", want)
 		}
 	}
 }
