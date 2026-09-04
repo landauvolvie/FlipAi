@@ -35,11 +35,26 @@ func requestGoogleVoiceText(ctx context.Context, dataDir, phone, body string) er
 	if phone == "" || body == "" {
 		return errors.New("Google Voice SMS needs a recipient and text")
 	}
-	if err := platformOpenGoogleVoice(dataDir, false); err != nil {
-		rt := loadVoiceRuntime(dataDir)
-		if !rt.BrowserRunning {
+	if err := platformEnsureGoogleVoiceSMSWorker(dataDir); err != nil {
+		return err
+	}
+	readyDeadline := time.Now().Add(15 * time.Second)
+	for {
+		s := loadGoogleVoiceSMSRuntime(dataDir)
+		fresh := !s.LastProbeAt.IsZero() && time.Since(s.LastProbeAt) < 8*time.Second
+		if s.Running && s.Connected && s.SignedIn && s.Ready && fresh {
+			break
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if !time.Now().Before(readyDeadline) {
+			if s.LastError != "" {
+				return errors.New(s.LastError)
+			}
+			return errors.New("Google Voice SMS browser is not ready; reconnect it under Connections")
+		}
+		time.Sleep(150 * time.Millisecond)
 	}
 	if err := os.MkdirAll(googleVoiceSMSOutboxDir(dataDir), 0700); err != nil {
 		return err
@@ -89,7 +104,10 @@ func requestGoogleVoiceText(ctx context.Context, dataDir, phone, body string) er
 }
 
 func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan struct{}) {
-	if d == nil {
+	// v0.46.34 also started this loop in the Google Voice calling process. Keep
+	// calling code untouched but make that old call-site inert: the dedicated
+	// SMS process is now the only process allowed to consume the outbox.
+	if googleVoiceSMSCallProcess() || d == nil {
 		return
 	}
 	_ = os.MkdirAll(googleVoiceSMSOutboxDir(dataDir), 0700)
@@ -125,6 +143,8 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 				} else if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Body); err != nil {
 					result.OK = false
 					result.Error = err.Error()
+				} else {
+					mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) { s.LastOutboundAt = time.Now() })
 				}
 				resultRaw, _ := json.Marshal(result)
 				resultPath := filepath.Join(googleVoiceSMSOutboxDir(dataDir), req.ID+".result.json")
@@ -138,13 +158,6 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 }
 
 func sendGoogleVoiceTextInPage(d voiceDevTools, phone, body string) error {
-	snap, err := voiceReadSnapshot(d)
-	if err != nil {
-		return err
-	}
-	if !snap.SignedIn {
-		return errors.New("Google Voice is not signed in inside FlipAi")
-	}
 	phone = normalizeUSPhone(phone)
 	body = strings.TrimSpace(body)
 	if phone == "" || body == "" {
