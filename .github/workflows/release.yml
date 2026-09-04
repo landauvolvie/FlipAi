@@ -168,6 +168,17 @@ jobs:
           Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           if(Test-Path (Join-Path $target 'FlipAi.exe')){throw 'Uninstaller left FlipAi.exe behind'}
 
+      - name: Generate CycloneDX SBOM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $sbom='.\installer-output\FlipAi-SBOM.cdx.json'
+          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.9.0 mod -json -output $sbom
+          if($LASTEXITCODE -ne 0){throw "SBOM generation failed with exit code $LASTEXITCODE"}
+          if(-not (Test-Path $sbom)){throw 'SBOM was not generated'}
+          $parsed=Get-Content $sbom -Raw | ConvertFrom-Json
+          if($parsed.bomFormat -ne 'CycloneDX'){throw 'Generated SBOM is not CycloneDX'}
+
       - name: SHA-256
         shell: pwsh
         run: |
@@ -177,7 +188,7 @@ jobs:
           "$hash  FlipAi-Setup-v$version.exe" | Set-Content .\installer-output\SHA256SUMS.txt -Encoding ascii
 
       # This is GitHub build provenance, not Authenticode code signing. It lets
-      # anyone verify that the published installer and checksum were produced by
+      # anyone verify that the published installer, checksum and SBOM were produced by
       # this repository/workflow from this exact commit.
       - name: Attest release build provenance
         uses: actions/attest-build-provenance@v3
@@ -185,6 +196,7 @@ jobs:
           subject-path: |
             installer-output/FlipAi-Setup-v*.exe
             installer-output/SHA256SUMS.txt
+            installer-output/FlipAi-SBOM.cdx.json
 
       - name: Publish release
         shell: pwsh
@@ -195,19 +207,21 @@ jobs:
           $version='${{ steps.version.outputs.version }}'
           $tag='v'+$version
           $setup=".\installer-output\FlipAi-Setup-v$version.exe"
+          $sbom='.\installer-output\FlipAi-SBOM.cdx.json'
           $notesFile='.\docs\RELEASE-NOTES.md'
           if(-not (Test-Path $notesFile)){throw "docs/RELEASE-NOTES.md is missing; release notes ship with the release"}
+          if(-not (Test-Path $sbom)){throw 'SBOM is missing; refusing to publish release without it'}
           $notes=Get-Content $notesFile -Raw
           if($notes -notmatch [regex]::Escape($version)){throw "docs/RELEASE-NOTES.md does not describe $version"}
           gh release view $tag *> $null
           $releaseExists=($LASTEXITCODE -eq 0)
           if($releaseExists){
-            gh release upload $tag $setup .\installer-output\SHA256SUMS.txt --clobber
+            gh release upload $tag $setup .\installer-output\SHA256SUMS.txt $sbom --clobber
             if($LASTEXITCODE -ne 0){throw "uploading replacement assets for $tag failed with exit code $LASTEXITCODE"}
             gh release edit $tag --title "FlipAi $tag" --notes-file $notesFile
             if($LASTEXITCODE -ne 0){throw "editing $tag failed with exit code $LASTEXITCODE"}
           } else {
-            gh release create $tag $setup .\installer-output\SHA256SUMS.txt --title "FlipAi $tag" --notes-file $notesFile
+            gh release create $tag $setup .\installer-output\SHA256SUMS.txt $sbom --title "FlipAi $tag" --notes-file $notesFile
             if($LASTEXITCODE -ne 0){throw "creating $tag failed with exit code $LASTEXITCODE"}
           }
-          Write-Host "Published $tag with the installer and SHA256SUMS.txt"
+          Write-Host "Published $tag with installer, SHA256SUMS.txt and CycloneDX SBOM"
