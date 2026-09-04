@@ -8,8 +8,6 @@ func init() {
 	body := connectionsHTML
 	// When Direct Google Voice is selected, the bridge's generic mail transport
 	// is healthy by design, but that does not mean Gmail itself is connected.
-	// Keep the first card truthful instead of showing the contradictory
-	// "Connected / Authentication method: Not selected" state.
 	body = strings.Replace(body,
 		`<p>Configure how FlipAi reads Google Voice texts from Gmail and sends replies back.</p>`,
 		`<p>Choose how FlipAi receives Google Voice texts and sends replies back.</p>`, 1)
@@ -29,21 +27,21 @@ func init() {
     <div class="card-title-row">
       <span class="bmark lg google">{{brand "google"}}</span>
       <div>
-        <h2>Google Voice SMS <span id="gv-sms-pill" class="pill warn">{{if eq .S.GmailMethod "google_voice"}}Starting…{{else}}Not connected{{end}}</span></h2>
-        <p>Send and receive texts directly through your signed-in Google Voice session. Gmail forwarding is not required.</p>
+        <h2>Google Voice SMS <span id="gv-sms-pill" class="pill warn">{{if eq .S.GmailMethod "google_voice"}}Not connected{{else}}Not connected{{end}}</span></h2>
+        <p>Send and receive texts directly through a private Google Voice SMS browser. Gmail forwarding is not required.</p>
       </div>
     </div>
     <div class="head-actions">
-      <button class="btn {{if ne .S.GmailMethod "google_voice"}}accent{{end}}" id="gv-sms-connect" type="button">{{if eq .S.GmailMethod "google_voice"}}Disconnect{{else}}Connect{{end}}</button>
+      <button class="btn accent" id="gv-sms-connect" type="button">Connect</button>
     </div>
   </div>
   <div class="card-body">
     <div class="rows">
-      <div class="row"><div class="label">Google Voice sign-in<span>Uses FlipAi's existing private Google Voice browser profile.</span></div><div class="value"><b id="gv-sms-signin">Checking…</b></div></div>
-      <div class="row"><div class="label">SMS listener<span>A dedicated hidden Messages view stays active independently of the calling screen.</span></div><div class="value"><b id="gv-sms-listener">Checking…</b></div></div>
+      <div class="row"><div class="label">Google Voice SMS account<span>This has its own private browser profile. It is separate from Google Voice calling.</span></div><div class="value"><b id="gv-sms-signin">Checking…</b></div></div>
+      <div class="row"><div class="label">SMS listener<span>After sign-in, the Messages page stays active in its own background browser.</span></div><div class="value"><b id="gv-sms-listener">Checking…</b></div></div>
       <div class="row"><div class="label">SMS transport<span>Only one reader is active, so Gmail and direct Voice cannot answer the same text twice.</span></div><div class="value"><b id="gv-sms-mode">{{if eq .S.GmailMethod "google_voice"}}Direct Google Voice{{else}}Gmail / not selected{{end}}</b></div></div>
     </div>
-    <p class="hint" id="gv-sms-note">When connected, all existing agent routing, security codes, NEW/STATUS commands, acknowledgements and replies keep working the same way.</p>
+    <p class="hint" id="gv-sms-note">Press Connect. FlipAi will open a Google Voice window for this SMS connection. Sign in there once; calling uses a different profile and is not changed.</p>
   </div>
 </section>
 <script>
@@ -56,31 +54,48 @@ func init() {
   const mode=document.getElementById('gv-sms-mode');
   const note=document.getElementById('gv-sms-note');
   if(!button)return;
-  let selected={{if eq .S.GmailMethod "google_voice"}}true{{else}}false{{end}};
+  let selected={{if eq .S.GmailMethod "google_voice"}}true{{else}}false{{end}}, connected=false, loginActive=false, restartWhenReady=false;
+  const restart=async()=>{try{await fetch('/bridge/restart',{method:'POST',headers:{'X-FlipAi-Inline':'1'}})}catch(_){}setTimeout(()=>location.reload(),2200)};
   const show=(s)=>{
-    selected=!!s.selected;const connected=!!s.connected;
-    if(signin)signin.textContent=s.signedIn?'Signed in':(s.browserRunning?'Sign-in needed':'Opening Google Voice…');
+    const wasConnected=connected;
+    selected=!!s.selected;connected=!!s.connected;loginActive=!!s.loginActive;
+    if(signin){
+      signin.textContent=connected||s.signedIn?'Signed in':(loginActive?'Sign-in window open':(s.starting?'Opening sign-in…':'Not signed in'));
+    }
     if(listener)listener.textContent=!selected?'Off':(connected?'Ready':(s.listenerRunning?'Starting…':'Not running'));
     if(mode)mode.textContent=selected?'Direct Google Voice':'Gmail / not selected';
-    pill.textContent=!selected?'Not connected':(connected?'Connected':(s.listenerError?'Needs attention':'Starting…'));
+    pill.textContent=connected?'Connected':(selected&&(s.listenerError||s.running)?'Needs attention':'Not connected');
     pill.className='pill '+(connected?'ok':'warn');
-    button.textContent=selected?'Disconnect':'Connect';button.className='btn '+(selected?'':'accent');
-    if(note&&selected&&!connected&&s.listenerError)note.textContent=s.listenerError;
-    else if(note&&connected)note.textContent='Direct Google Voice SMS listener is verified and ready.';
+    if(connected){button.textContent='Disconnect';button.className='btn';}
+    else if(loginActive){button.textContent='Cancel';button.className='btn';}
+    else if(selected){button.textContent='Retry sign-in';button.className='btn accent';}
+    else{button.textContent='Connect';button.className='btn accent';}
+    if(note&&connected)note.textContent='Direct Google Voice SMS is signed in and the Messages listener is verified ready.';
+    else if(note&&loginActive)note.textContent='Sign in to Google Voice in the separate window FlipAi opened. This SMS login is intentionally separate from calling.';
+    else if(note&&selected&&s.listenerError)note.textContent=s.listenerError;
+    else if(note&&!selected)note.textContent='Press Connect. FlipAi will open a separate Google Voice SMS sign-in window.';
+    if(restartWhenReady&&connected&&!wasConnected){restartWhenReady=false;restart();}
   };
-  async function status(){try{const r=await fetch(svc+'/status',{cache:'no-store'});if(r.ok)show(await r.json())}catch(_){if(signin)signin.textContent='Google Voice service unavailable';if(listener)listener.textContent='Unavailable';pill.textContent='Needs attention';pill.className='pill warn'}}
-  async function restart(){try{await fetch('/bridge/restart',{method:'POST',headers:{'X-FlipAi-Inline':'1'}})}catch(_){}setTimeout(()=>location.reload(),2200)}
+  async function status(){
+    try{const r=await fetch(svc+'/status',{cache:'no-store'});if(r.ok)show(await r.json())}
+    catch(_){if(signin)signin.textContent='Service unavailable';if(listener)listener.textContent='Unavailable';pill.textContent='Needs attention';pill.className='pill warn'}
+  }
   button.addEventListener('click',async()=>{
-    button.disabled=true;const was=selected;button.textContent=was?'Disconnecting…':'Connecting…';
+    button.disabled=true;
+    const disconnecting=connected||loginActive;
+    button.textContent=disconnecting?'Disconnecting…':'Opening sign-in…';
     try{
-      const r=await fetch(svc+(was?'/disconnect':'/connect'),{method:'POST',headers:{'Content-Type':'application/json'}});
+      const r=await fetch(svc+(disconnecting?'/disconnect':'/connect'),{method:'POST',headers:{'Content-Type':'application/json'}});
       let data={};try{data=await r.json()}catch(_){}
-      if(!r.ok){throw new Error(data.message||'Google Voice SMS could not connect')}
+      if(!r.ok)throw new Error(data.message||'Google Voice SMS connection failed');
       if(note&&data.message)note.textContent=data.message;
-      await restart();
-    }catch(e){if(note)note.textContent=e.message||String(e);button.disabled=false;button.textContent=was?'Disconnect':'Connect';await status()}
+      if(disconnecting){restartWhenReady=false;await restart();return;}
+      restartWhenReady=true;
+      button.disabled=false;
+      await status();
+    }catch(e){if(note)note.textContent=e.message||String(e);button.disabled=false;await status()}
   });
-  status();setInterval(status,2500);
+  status();setInterval(status,1500);
 })();
 </script>
 `
