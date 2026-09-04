@@ -51,7 +51,7 @@ func TestUpdateMarkerEscalatesToReleaseAPIWhenVersionAdvances(t *testing.T) {
 		case "/release":
 			apiCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"tag_name":"v99.0.0","name":"FlipAi 99.0.0","html_url":"https://example.invalid/release","draft":false,"prerelease":false,"assets":[{"name":"FlipAi-Setup-v99.0.0.exe","browser_download_url":"https://example.invalid/FlipAi-Setup-v99.0.0.exe"}]}`)
+			fmt.Fprint(w, `{"tag_name":"v99.0.0"}`)
 		default:
 			http.NotFound(w, r)
 		}
