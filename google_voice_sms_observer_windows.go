@@ -76,6 +76,16 @@ func googleVoiceSMSObserverURL(dataDir string) string {
 	return googleVoiceMessagesURLFromPage(loadVoiceRuntime(dataDir).Page)
 }
 
+func setGoogleVoiceSMSListenerError(dataDir string, err error) {
+	mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+		s.ListenerRunning = false
+		s.Ready = false
+		if err != nil {
+			s.LastError = err.Error()
+		}
+	})
+}
+
 // createGoogleVoiceSMSObserver creates a second, off-screen Google Voice view
 // only while Direct Google Voice SMS is selected. It uses the exact same
 // WebView2 user-data folder as the normal Google Voice window, so the user signs
@@ -103,12 +113,16 @@ func createGoogleVoiceSMSObserver(dataDir string, enabled func() bool) (webview2
 		},
 	})
 	if w == nil {
-		return nil, nil, errors.New("Windows could not create the dedicated Google Voice SMS listener")
+		err := errors.New("Windows could not create the dedicated Google Voice SMS listener")
+		setGoogleVoiceSMSListenerError(dataDir, err)
+		return nil, nil, err
 	}
 	c := voiceChromium(w)
 	if c == nil {
 		w.Destroy()
-		return nil, nil, errors.New("the Google Voice SMS listener has no WebView2 control channel")
+		err := errors.New("the Google Voice SMS listener has no WebView2 control channel")
+		setGoogleVoiceSMSListenerError(dataDir, err)
+		return nil, nil, err
 	}
 	_ = w.Bind("flipVoiceSMS", func(payload string) {
 		if enabled != nil && !enabled() {
@@ -132,7 +146,11 @@ func createGoogleVoiceSMSObserver(dataDir string, enabled func() bool) (webview2
 		s.LastError = "Starting the Google Voice Messages listener"
 	})
 	w.Navigate(target)
-	return w, newWebViewDevTools(w), nil
+	d := newWebViewDevTools(w)
+	// This process exists exactly as long as the Google Voice window. A nil stop
+	// channel therefore intentionally means "probe until this process exits".
+	go runGoogleVoiceSMSHealthLoop(dataDir, d, nil)
+	return w, d, nil
 }
 
 type googleVoiceSMSProbe struct {
@@ -163,11 +181,7 @@ func probeGoogleVoiceSMSListener(d voiceDevTools) (googleVoiceSMSProbe, error) {
 
 func runGoogleVoiceSMSHealthLoop(dataDir string, d voiceDevTools, stop <-chan struct{}) {
 	if d == nil {
-		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
-			s.ListenerRunning = false
-			s.Ready = false
-			s.LastError = "Google Voice SMS listener has no browser control channel"
-		})
+		setGoogleVoiceSMSListenerError(dataDir, errors.New("Google Voice SMS listener has no browser control channel"))
 		return
 	}
 	probe := func() {
@@ -190,10 +204,12 @@ func runGoogleVoiceSMSHealthLoop(dataDir string, d voiceDevTools, stop <-chan st
 	probe()
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
-	defer mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
-		s.ListenerRunning = false
-		s.Ready = false
-	})
+	if stop != nil {
+		defer mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+			s.ListenerRunning = false
+			s.Ready = false
+		})
+	}
 	for {
 		select {
 		case <-stop:
