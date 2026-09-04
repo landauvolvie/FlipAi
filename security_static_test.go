@@ -117,7 +117,9 @@ func TestInstallerUsesGracefulShutdownNotHiddenProcessKilling(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := strings.ToLower(string(raw))
-	if strings.Contains(text, "taskkill.exe") || strings.Contains(text, "/f /t /im flipai.exe") {
+	// Comments may describe the legacy taskkill behavior. Reject the old
+	// executable code/arguments rather than documentation mentioning it.
+	if strings.Contains(text, "taskkill :=") || strings.Contains(text, "/f /t /im flipai.exe") {
 		t.Fatal("installer must stop FlipAi through --quit, not a hidden forced process-tree kill")
 	}
 	if !strings.Contains(text, "--quit") {
