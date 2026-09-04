@@ -25,14 +25,27 @@ func TestWindowsBuildPipelineKeepsAnalyzableBinariesAndDefenderGates(t *testing.
 }
 
 func TestSecurityAutomationRemainsEnabled(t *testing.T) {
+	// Dependency Review is intentionally omitted: this repository does not have
+	// GitHub's Dependency Graph feature enabled. govulncheck, CodeQL, Dependabot
+	// configuration, and the SBOM jobs remain the repository-supported gates.
 	for _, path := range []string{
 		".github/workflows/security.yml",
-		".github/workflows/dependency-review.yml",
 		".github/workflows/sbom.yml",
+		".github/workflows/release-sbom.yml",
 		".github/dependabot.yml",
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("required security automation %s is missing: %v", path, err)
+		}
+	}
+
+	security, err := os.ReadFile(".github/workflows/security.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"codeql-action", "govulncheck"} {
+		if !strings.Contains(string(security), want) {
+			t.Fatalf("security workflow lost %q", want)
 		}
 	}
 }
