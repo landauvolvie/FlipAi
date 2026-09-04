@@ -6,13 +6,30 @@ import "strings"
 // changing the existing Google Voice calling controls injected on this page.
 func init() {
 	body := connectionsHTML
+	// When Direct Google Voice is selected, the bridge's generic mail transport
+	// is healthy by design, but that does not mean Gmail itself is connected.
+	// Keep the first card truthful instead of showing the contradictory
+	// "Connected / Authentication method: Not selected" state.
+	body = strings.Replace(body,
+		`<p>Configure how FlipAi reads Google Voice texts from Gmail and sends replies back.</p>`,
+		`<p>Choose how FlipAi receives Google Voice texts and sends replies back.</p>`, 1)
+	body = strings.Replace(body,
+		`<h2>Gmail / Google Voice <span class="pill {{if .S.GmailReady}}ok{{else}}warn{{end}}">{{if .S.GmailReady}}Connected{{else}}Not connected{{end}}</span></h2>`,
+		`<h2>Gmail / Google Voice <span class="pill {{if and .S.GmailReady (ne .S.GmailMethod "google_voice")}}ok{{else}}warn{{end}}">{{if and .S.GmailReady (ne .S.GmailMethod "google_voice")}}Connected{{else}}Not connected{{end}}</span></h2>`, 1)
+	body = strings.Replace(body,
+		`<div class="row"><div class="label">Authentication method</div><div class="value"><b>{{.S.GmailMethodLabel}}</b>{{if .S.GmailReady}}<span class="pill ok">Valid</span>{{else if .S.GmailMethod}}<span class="pill warn">Incomplete</span>{{end}}</div></div>`,
+		`<div class="row"><div class="label">Authentication method</div><div class="value"><b>{{.S.GmailMethodLabel}}</b>{{if eq .S.GmailMethod "google_voice"}}<span class="pill">Not selected</span>{{else if .S.GmailReady}}<span class="pill ok">Valid</span>{{else if .S.GmailMethod}}<span class="pill warn">Incomplete</span>{{end}}</div></div>`, 1)
+	body = strings.Replace(body,
+		`<div class="row"><div class="label">Reply address<span>FlipAi always answers the authenticated Google Voice thread the text arrived on.</span></div><div class="value"><b>Authenticated Voice thread</b>{{if .ReplyReady}}<span class="pill ok">Ready</span>{{else}}<span class="pill warn">Waiting</span>{{end}}</div></div>`,
+		`<div class="row"><div class="label">Reply address<span>FlipAi always answers the authenticated Google Voice thread the text arrived on.</span></div><div class="value"><b>Authenticated Voice thread</b>{{if eq .S.GmailMethod "google_voice"}}<span class="pill">Not using Gmail</span>{{else if .ReplyReady}}<span class="pill ok">Ready</span>{{else}}<span class="pill warn">Waiting</span>{{end}}</div></div>`, 1)
+
 	card := `
 <section class="card" id="gv-sms-connection">
   <div class="card-head divided">
     <div class="card-title-row">
       <span class="bmark lg google">{{brand "google"}}</span>
       <div>
-        <h2>Google Voice SMS <span id="gv-sms-pill" class="pill {{if eq .S.GmailMethod "google_voice"}}ok{{else}}warn{{end}}">{{if eq .S.GmailMethod "google_voice"}}Connected{{else}}Not connected{{end}}</span></h2>
+        <h2>Google Voice SMS <span id="gv-sms-pill" class="pill warn">{{if eq .S.GmailMethod "google_voice"}}Starting…{{else}}Not connected{{end}}</span></h2>
         <p>Send and receive texts directly through your signed-in Google Voice session. Gmail forwarding is not required.</p>
       </div>
     </div>
@@ -23,6 +40,7 @@ func init() {
   <div class="card-body">
     <div class="rows">
       <div class="row"><div class="label">Google Voice sign-in<span>Uses FlipAi's existing private Google Voice browser profile.</span></div><div class="value"><b id="gv-sms-signin">Checking…</b></div></div>
+      <div class="row"><div class="label">SMS listener<span>A dedicated hidden Messages view stays active independently of the calling screen.</span></div><div class="value"><b id="gv-sms-listener">Checking…</b></div></div>
       <div class="row"><div class="label">SMS transport<span>Only one reader is active, so Gmail and direct Voice cannot answer the same text twice.</span></div><div class="value"><b id="gv-sms-mode">{{if eq .S.GmailMethod "google_voice"}}Direct Google Voice{{else}}Gmail / not selected{{end}}</b></div></div>
     </div>
     <p class="hint" id="gv-sms-note">When connected, all existing agent routing, security codes, NEW/STATUS commands, acknowledgements and replies keep working the same way.</p>
@@ -34,18 +52,23 @@ func init() {
   const button=document.getElementById('gv-sms-connect');
   const pill=document.getElementById('gv-sms-pill');
   const signin=document.getElementById('gv-sms-signin');
+  const listener=document.getElementById('gv-sms-listener');
   const mode=document.getElementById('gv-sms-mode');
   const note=document.getElementById('gv-sms-note');
   if(!button)return;
   let selected={{if eq .S.GmailMethod "google_voice"}}true{{else}}false{{end}};
   const show=(s)=>{
-    selected=!!s.selected;
+    selected=!!s.selected;const connected=!!s.connected;
     if(signin)signin.textContent=s.signedIn?'Signed in':(s.browserRunning?'Sign-in needed':'Opening Google Voice…');
+    if(listener)listener.textContent=!selected?'Off':(connected?'Ready':(s.listenerRunning?'Starting…':'Not running'));
     if(mode)mode.textContent=selected?'Direct Google Voice':'Gmail / not selected';
-    pill.textContent=selected?'Connected':'Not connected';pill.className='pill '+(selected?'ok':'warn');
+    pill.textContent=!selected?'Not connected':(connected?'Connected':(s.listenerError?'Needs attention':'Starting…'));
+    pill.className='pill '+(connected?'ok':'warn');
     button.textContent=selected?'Disconnect':'Connect';button.className='btn '+(selected?'':'accent');
+    if(note&&selected&&!connected&&s.listenerError)note.textContent=s.listenerError;
+    else if(note&&connected)note.textContent='Direct Google Voice SMS listener is verified and ready.';
   };
-  async function status(){try{const r=await fetch(svc+'/status',{cache:'no-store'});if(r.ok)show(await r.json())}catch(_){if(signin)signin.textContent='Google Voice service unavailable'}}
+  async function status(){try{const r=await fetch(svc+'/status',{cache:'no-store'});if(r.ok)show(await r.json())}catch(_){if(signin)signin.textContent='Google Voice service unavailable';if(listener)listener.textContent='Unavailable';pill.textContent='Needs attention';pill.className='pill warn'}}
   async function restart(){try{await fetch('/bridge/restart',{method:'POST',headers:{'X-FlipAi-Inline':'1'}})}catch(_){}setTimeout(()=>location.reload(),2200)}
   button.addEventListener('click',async()=>{
     button.disabled=true;const was=selected;button.textContent=was?'Disconnecting…':'Connecting…';
