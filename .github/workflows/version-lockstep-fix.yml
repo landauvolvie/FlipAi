@@ -1,4 +1,4 @@
-name: version-lockstep-fix
+name: release-v0.46.30
 
 on:
   push:
@@ -11,50 +11,66 @@ permissions:
   actions: write
 
 jobs:
-  fix-and-release:
+  prepare-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
 
-      - name: Keep version constants in lockstep
+      - name: Prepare v0.46.30 in lockstep
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          p = Path('config.go')
-          s = p.read_text()
-          old = 'const version = "0.46.28"'
-          new = 'const version = "0.46.29"'
-          if old not in s:
-              raise SystemExit('config.go did not contain expected 0.46.28 version constant')
-          p.write_text(s.replace(old, new, 1))
 
-          p = Path('installer/FlipAi.iss')
-          s = p.read_text()
-          old = '#define MyVersion "0.46.28"'
-          new = '#define MyVersion "0.46.29"'
-          if old not in s:
-              raise SystemExit('installer did not contain expected 0.46.28 fallback version')
-          p.write_text(s.replace(old, new, 1))
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f'{path} did not contain expected {old!r}')
+              p.write_text(s.replace(old, new, 1))
+
+          replace_once('VERSION', '0.46.29', '0.46.30')
+          replace_once('config.go', 'const version = "0.46.29"', 'const version = "0.46.30"')
+          replace_once('installer/FlipAi.iss', '#define MyVersion "0.46.29"', '#define MyVersion "0.46.30"')
+
+          Path('docs/RELEASE-NOTES.md').write_text('''# FlipAi v0.46.30
+
+Agent logos now render correctly and consistently throughout FlipAi.
+
+## Agent logos
+
+- Replaced the hand-drawn approximations with current web-sourced SVG product marks for OpenAI / ChatGPT, Codex, Claude Code, Claude, Grok, and Gemini.
+- The uploaded reference screenshots are not used as application assets.
+- Codex and Gemini are rendered as isolated SVG images so their gradient IDs cannot collide when the same logo appears multiple times on one page.
+- Removed legacy background and recoloring rules that were turning Codex into a blank square and Gemini into a blue block.
+- The same shared marks are used on the Agents page, Activity filters, and Activity rows.
+
+## Reliability
+
+- Added regression tests for all six agent-to-logo mappings and for isolated SVG rendering.
+- Browser, Linux, Windows, race, Google Voice, Defender, installer, and uninstall smoke checks passed before this release was prepared.
+''')
           PY
-          test "$(tr -d '\r\n' < VERSION)" = "0.46.29"
-          grep -q 'const version = "0.46.29"' config.go
-          grep -q '#define MyVersion "0.46.29"' installer/FlipAi.iss
 
-      - name: Commit lockstep fix
+          test "$(tr -d '\r\n' < VERSION)" = "0.46.30"
+          grep -q 'const version = "0.46.30"' config.go
+          grep -q '#define MyVersion "0.46.30"' installer/FlipAi.iss
+          grep -q '# FlipAi v0.46.30' docs/RELEASE-NOTES.md
+
+      - name: Commit release metadata
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add config.go installer/FlipAi.iss
-          git commit -m 'Keep v0.46.29 version in lockstep'
+          git add VERSION config.go installer/FlipAi.iss docs/RELEASE-NOTES.md
+          git commit -m 'Release FlipAi v0.46.30'
           git push origin HEAD:main
 
-      - name: Retrigger v0.46.29 release
+      - name: Publish v0.46.30
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
