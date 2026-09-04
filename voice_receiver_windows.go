@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -87,6 +88,9 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 		}
 		return cfg
 	}
+	directSMSSelected := func() bool {
+		return mainConfig().Gmail.Method == GmailMethodGoogleVoice
+	}
 
 	// The DevTools channel is in-process: WebView2's own CallDevToolsProtocolMethod,
 	// against this view and no other, with nothing listening on the machine.
@@ -107,13 +111,32 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 	_ = w.Bind("flipVoiceEnded", bridge.Ended)
 	_ = w.Bind("flipVoiceDevices", bridge.Devices)
 	_ = w.Bind("flipVoicePage", bridge.Page)
-	// Direct SMS is a separate consumer of the same signed-in page. It only
-	// writes observed text events to the SMS spool; it does not touch the call
-	// machine above or any voice-call setting.
-	_ = w.Bind("flipVoiceSMS", func(payload string) { _ = appendDirectGoogleVoiceSMS(dataDir, payload) })
+	// Keep this binding as a fallback when the visible Voice page happens to be
+	// on Messages, but never let it become a second reader in Gmail mode.
+	_ = w.Bind("flipVoiceSMS", func(payload string) {
+		if directSMSSelected() {
+			_ = appendDirectGoogleVoiceSMS(dataDir, payload)
+		}
+	})
 
 	w.Init(googleVoiceInitScript)
 	w.Init(googleVoiceSMSInitScript)
+
+	// Direct SMS must not depend on the page the call window happens to show.
+	// When selected, a second off-screen WebView stays on Messages with the same
+	// signed-in profile. It has no call bindings and no media access. Outbound
+	// texts use that view too, so composing a reply cannot navigate the call
+	// window away from its current surface.
+	smsDevTools := control.devTools
+	if directSMSSelected() {
+		observer, observerDevTools, observerErr := createGoogleVoiceSMSObserver(dataDir, directSMSSelected)
+		if observerErr != nil {
+			log.Printf("Google Voice SMS listener: %v; falling back to the visible Voice page", observerErr)
+		} else {
+			defer observer.Destroy()
+			smsDevTools = observerDevTools
+		}
+	}
 
 	// The one thing that does listen is FlipAi's own endpoint, so the host
 	// process can ask this one to send an image through the signed-in Google
@@ -144,7 +167,7 @@ func runGoogleVoiceWindow(dataDir string, showInPanel bool) error {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runGoogleVoiceSMSOutboundLoop(dataDir, control.devTools, stop)
+	go runGoogleVoiceSMSOutboundLoop(dataDir, smsDevTools, stop)
 	go runVoiceReceiverLoops(dataDir, hwnd, bridge, control, dock, stop)
 
 	w.Navigate(googleVoiceWebURL)
