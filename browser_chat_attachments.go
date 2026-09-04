@@ -13,10 +13,6 @@ import (
 	"time"
 )
 
-// browserChatAttachment is the small, private-loopback representation used to
-// hand a prepared Google Voice image from the bridge to the WebView worker. The
-// image bytes never pass through the model prompt and never leave FlipAi until
-// the signed-in chat site uploads them through its normal attachment control.
 type browserChatAttachment struct {
 	Path      string `json:"path"`
 	Filename  string `json:"filename,omitempty"`
@@ -43,10 +39,6 @@ func isBrowserChatAgent(agent string) bool {
 	}
 }
 
-// parseBrowserChatAttachmentOnlyCommand keeps an attachment-only MMS on the
-// user's sticky browser-chat destination instead of silently falling back to
-// Codex. A security code is text, so an attachment-only turn cannot satisfy a
-// provider that has Require code enabled.
 func parseBrowserChatAttachmentOnlyCommand(cfg Config, agent string, m GmailMessage) (remoteCommand, error) {
 	agent = strings.ToUpper(strings.TrimSpace(agent))
 	if !isBrowserChatAgent(agent) {
@@ -73,7 +65,7 @@ func preparedBrowserChatImages(in []InboundAttachment) ([]browserChatAttachment,
 	for _, a := range in {
 		mediaType := normalizeInboundMediaType(a.MediaType)
 		if !strings.HasPrefix(mediaType, "image/") {
-			return nil, fmt.Errorf("%s browser chat currently accepts image attachments from Google Voice; %s is %s", agentDisplayName("GHMX"), a.Filename, mediaType)
+			return nil, fmt.Errorf("browser chat currently accepts image attachments from Google Voice; %s is %s", a.Filename, mediaType)
 		}
 		item := browserChatAttachment{Path: a.Path, Filename: a.Filename, MediaType: mediaType}
 		if err := validatePreparedBrowserChatImage(item); err != nil {
@@ -126,10 +118,6 @@ func validatePreparedBrowserChatImage(a browserChatAttachment) error {
 	return nil
 }
 
-// browserChatFindFileInputJS first uses a file input already owned by the site.
-// If the site creates it lazily, it clicks the site's own attachment/upload
-// control and the caller polls again. We intentionally avoid coordinates,
-// Windows SendInput, clipboard tricks, and direct provider APIs.
 const browserChatFindFileInputJS = `(()=>{
   const pick=()=>{
     const inputs=Array.from(document.querySelectorAll('input[type="file"]')).filter(n=>!n.disabled);
@@ -178,27 +166,23 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 		}
 		return errors.New("could not find the chat image picker")
 	}
-	if err := d.Call("DOM.setFileInputFiles", map[string]any{
-		"files":    paths,
-		"objectId": objectID,
-	}, nil); err != nil {
+	if err := d.Call("DOM.setFileInputFiles", map[string]any{"files": paths, "objectId": objectID}, nil); err != nil {
 		return fmt.Errorf("could not attach the image to the chat: %w", err)
 	}
-
-	// Let the site's normal change/upload handlers consume the selected file.
-	// The existing turn scripts then wait for each provider's Send button to be
-	// ready, which covers the remaining upload time without provider-specific
-	// network interception.
 	time.Sleep(1200 * time.Millisecond)
 	return nil
 }
 
-// registerBrowserChatUploadEndpoint adds the same private upload endpoint to
-// every regular browser-chat worker. The worker's existing X-FlipAi-Token
-// middleware still protects this endpoint; the path validation above also
-// prevents it from being used to pick arbitrary local files.
-func registerBrowserChatUploadEndpoint(mux *http.ServeMux, dev voiceDevTools) {
-	mux.HandleFunc("POST /upload", func(rw http.ResponseWriter, r *http.Request) {
+func registerBrowserChatUploadEndpoint(mux *http.ServeMux, authorized func(*http.Request) bool, dev voiceDevTools) {
+	mux.HandleFunc("/upload", func(rw http.ResponseWriter, r *http.Request) {
+		if authorized == nil || !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
 		r.Body = http.MaxBytesReader(rw, r.Body, 32<<10)
 		var body browserChatUploadRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -222,11 +206,6 @@ func registerBrowserChatUploadEndpoint(mux *http.ServeMux, dev voiceDevTools) {
 
 func browserChatUploadControl(ctx context.Context, dataDir, agent string, attachments []browserChatAttachment) error {
 	payload, _ := json.Marshal(browserChatUploadRequest{Attachments: attachments})
-	post := func(call func(context.Context, string, string, interface{}) ([]byte, int, error)) error {
-		return errors.New("unused")
-	}
-	_ = post // keep the provider switch below explicit; their runtime types differ.
-
 	var body []byte
 	var code int
 	var err error
