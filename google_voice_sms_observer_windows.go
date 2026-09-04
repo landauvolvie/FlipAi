@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
@@ -32,12 +31,10 @@ const googleVoiceSMSObserverIsolationScript = `
     }
   } catch (_) {}
   try {
-    const nativePlay = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function() {
       try { this.muted = true; this.volume = 0; } catch (_) {}
       return Promise.resolve();
     };
-    void nativePlay;
   } catch (_) {}
   try {
     const QuietNotification = function(title, options) {
@@ -84,7 +81,10 @@ func googleVoiceSMSObserverURL(dataDir string) string {
 // in once, but the two views no longer fight over navigation: calls can remain
 // on whatever surface they need while this view stays on Messages.
 func createGoogleVoiceSMSObserver(dataDir string, enabled func() bool) (webview2.WebView, voiceDevTools, error) {
-	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", voiceBrowserArguments)
+	// Do not change WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS here. The main Google
+	// Voice view has already chosen the render mode that actually works on this
+	// PC, and WebView2 requires every environment sharing one user-data folder
+	// to use compatible options. Inherit that exact environment setting.
 	parkX, parkY := parkedWindowOrigin()
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
