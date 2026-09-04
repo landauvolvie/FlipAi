@@ -118,8 +118,13 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 			return
 		}
 		resetGoogleVoiceSMSCheckpoint(statePath)
+		// The direct listener is its own Messages WebView. Recreate the Google
+		// Voice process after selecting this transport so that listener exists
+		// immediately, including when the user switched from Gmail without
+		// restarting Windows or signing in again.
+		platformRestartGoogleVoice(dataDir)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Google Voice SMS connected. FlipAi is restarting the message bridge."})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Google Voice SMS connected. FlipAi is starting the dedicated message listener."})
 	}))
 	mux.HandleFunc("/disconnect", withLocalUI(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
