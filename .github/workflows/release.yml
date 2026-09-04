@@ -191,7 +191,7 @@ jobs:
       # anyone verify that the published installer, checksum and SBOM were produced by
       # this repository/workflow from this exact commit.
       - name: Attest release build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             installer-output/FlipAi-Setup-v*.exe
