@@ -74,6 +74,34 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 	if d == nil || d.view == nil || d.chromium == nil {
 		return errNoVoiceControlChannel
 	}
+
+	// Browser-chat image turns carry a private marker inside the prompt sent to
+	// the worker. Strip it before the page sees the prompt, upload those local
+	// temp files through the site's own file input, then run the normal provider
+	// turn unchanged. The nested DevTools calls contain no marker, so they do not
+	// recurse into this branch.
+	if method == "Runtime.evaluate" {
+		if m, ok := params.(map[string]any); ok {
+			if expression, ok := m["expression"].(string); ok {
+				clean, attachments, found, err := extractBrowserChatAttachmentMarker(expression)
+				if err != nil {
+					return err
+				}
+				if found {
+					if err := uploadBrowserChatImages(d, attachments); err != nil {
+						return err
+					}
+					copyParams := make(map[string]any, len(m))
+					for k, v := range m {
+						copyParams[k] = v
+					}
+					copyParams["expression"] = clean
+					params = copyParams
+				}
+			}
+		}
+	}
+
 	body := "{}"
 	if params != nil {
 		b, err := json.Marshal(params)
