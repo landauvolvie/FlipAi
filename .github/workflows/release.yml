@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   # No release is cut without the call flow having been run in a real browser:
@@ -25,7 +27,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
+          go-version: '1.25.13'
 
       - uses: actions/setup-node@v4
         with:
@@ -57,7 +59,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
+          go-version: '1.25.13'
 
       - name: Read version
         id: version
@@ -173,6 +175,16 @@ jobs:
           $setup=".\installer-output\FlipAi-Setup-v$version.exe"
           $hash=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  FlipAi-Setup-v$version.exe" | Set-Content .\installer-output\SHA256SUMS.txt -Encoding ascii
+
+      # This is GitHub build provenance, not Authenticode code signing. It lets
+      # anyone verify that the published installer and checksum were produced by
+      # this repository/workflow from this exact commit.
+      - name: Attest release build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            installer-output/FlipAi-Setup-v*.exe
+            installer-output/SHA256SUMS.txt
 
       - name: Publish release
         shell: pwsh
