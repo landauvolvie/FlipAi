@@ -21,16 +21,18 @@ jobs:
         with:
           go-version: '1.25.13'
       - name: Complete Copilot integration
-        run: python3 scripts/complete_copilot.py
+        run: |
+          python3 scripts/complete_copilot.py
+          python3 scripts/complete_copilot_tests.py
       - name: Format
-        run: gofmt -w bridge.go webui.go ui_actions.go ui_page_agents.go copilot_chat_*.go sms_copilot_chat.go browser_chat_attachments.go agents.go commands.go sms_sticky_chatgpt.go zzzzzzzzzzzzz_copilot_chat_ui.go
+        run: gofmt -w bridge.go webui.go ui_actions.go ui_page_agents.go ui_page_agents_test.go copilot_chat_*.go sms_copilot_chat.go browser_chat_attachments.go agents.go commands.go sms_sticky_chatgpt.go zzzzzzzzzzzzz_copilot_chat_ui.go
       - name: Test
         run: go test ./...
       - name: Commit completed integration
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bridge.go webui.go ui_actions.go ui_page_agents.go copilot_chat_*.go sms_copilot_chat.go browser_chat_attachments.go agents.go commands.go sms_sticky_chatgpt.go zzzzzzzzzzzzz_copilot_chat_ui.go
+          git add bridge.go webui.go ui_actions.go ui_page_agents.go ui_page_agents_test.go copilot_chat_*.go sms_copilot_chat.go browser_chat_attachments.go agents.go commands.go sms_sticky_chatgpt.go zzzzzzzzzzzzz_copilot_chat_ui.go
           if git diff --cached --quiet; then
             echo "No patch changes to commit"
             exit 0
