@@ -14,11 +14,12 @@ import (
 )
 
 type googleVoiceSMSOutboundRequest struct {
-	ID      string    `json:"id"`
-	Phone   string    `json:"phone"`
-	Thread  string    `json:"thread,omitempty"`
-	Body    string    `json:"body"`
-	Created time.Time `json:"created"`
+	ID          string    `json:"id"`
+	Phone       string    `json:"phone"`
+	Thread      string    `json:"thread,omitempty"`
+	ExactThread bool      `json:"exactThread,omitempty"`
+	Body        string    `json:"body"`
+	Created     time.Time `json:"created"`
 }
 
 type googleVoiceSMSOutboundResult struct {
@@ -31,16 +32,35 @@ func googleVoiceSMSOutboxDir(dataDir string) string {
 }
 
 func requestGoogleVoiceText(ctx context.Context, dataDir, phone, body string) error {
-	return requestGoogleVoiceTextThread(ctx, dataDir, phone, "", body)
+	return requestGoogleVoiceTextTarget(ctx, dataDir, phone, "", body, false)
 }
 
-// requestGoogleVoiceTextThread carries the exact inbound conversation path for
-// replies. An empty thread is permitted only for explicit one-off SendText
-// calls; those still require an exact phone-number suggestion in the page.
+// requestGoogleVoiceTextThread is used only for replies to a captured inbound
+// message. The exact thread is mandatory: if it cannot be normalized to a
+// same-site Google Voice Messages path, fail closed rather than degrading to a
+// new-message/contact lookup.
 func requestGoogleVoiceTextThread(ctx context.Context, dataDir, phone, thread, body string) error {
-	phone = normalizeUSPhone(phone)
 	thread = normalizeGoogleVoiceSMSThread(thread)
+	if thread == "" {
+		return errors.New("Google Voice reply blocked: exact conversation thread is required")
+	}
+	return requestGoogleVoiceTextTarget(ctx, dataDir, phone, thread, body, true)
+}
+
+func requestGoogleVoiceTextTarget(ctx context.Context, dataDir, phone, thread, body string, exactThread bool) error {
+	phone = normalizeUSPhone(phone)
 	body = strings.TrimSpace(body)
+	if exactThread {
+		thread = normalizeGoogleVoiceSMSThread(thread)
+		if thread == "" {
+			return errors.New("Google Voice reply blocked: exact conversation thread is required")
+		}
+	} else {
+		// One-off SendText deliberately has no conversation identity. It must use
+		// the exact-phone recipient picker in the page and may not smuggle in an
+		// unverified thread from an outbox file.
+		thread = ""
+	}
 	if phone == "" || body == "" {
 		return errors.New("Google Voice SMS needs a recipient and text")
 	}
@@ -72,7 +92,7 @@ func requestGoogleVoiceTextThread(ctx context.Context, dataDir, phone, thread, b
 	if err != nil {
 		return err
 	}
-	req := googleVoiceSMSOutboundRequest{ID: id, Phone: phone, Thread: thread, Body: body, Created: time.Now()}
+	req := googleVoiceSMSOutboundRequest{ID: id, Phone: phone, Thread: thread, ExactThread: exactThread, Body: body, Created: time.Now()}
 	raw, _ := json.Marshal(req)
 	requestPath := filepath.Join(googleVoiceSMSOutboxDir(dataDir), id+".request.json")
 	resultPath := filepath.Join(googleVoiceSMSOutboxDir(dataDir), id+".result.json")
@@ -149,7 +169,10 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 				if time.Since(req.Created) > 5*time.Minute {
 					result.OK = false
 					result.Error = "Google Voice SMS request expired before the browser could send it"
-				} else if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Thread, req.Body); err != nil {
+				} else if req.ExactThread && normalizeGoogleVoiceSMSThread(req.Thread) == "" {
+					result.OK = false
+					result.Error = "Google Voice reply blocked: exact conversation thread is invalid"
+				} else if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Thread, req.Body, req.ExactThread); err != nil {
 					result.OK = false
 					result.Error = err.Error()
 				} else {
@@ -166,10 +189,17 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 	}
 }
 
-func sendGoogleVoiceTextInPage(d voiceDevTools, phone, thread, body string) error {
+func sendGoogleVoiceTextInPage(d voiceDevTools, phone, thread, body string, exactThread bool) error {
 	phone = normalizeUSPhone(phone)
-	thread = normalizeGoogleVoiceSMSThread(thread)
 	body = strings.TrimSpace(body)
+	if exactThread {
+		thread = normalizeGoogleVoiceSMSThread(thread)
+		if thread == "" {
+			return errors.New("Google Voice reply blocked: exact conversation thread is required")
+		}
+	} else {
+		thread = ""
+	}
 	if phone == "" || body == "" {
 		return errors.New("Google Voice SMS needs a recipient and text")
 	}
