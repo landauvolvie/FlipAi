@@ -199,3 +199,67 @@ func TestGoogleVoiceSMSPageRequestOutlivesTheProbeDeadline(t *testing.T) {
 		t.Fatal("the page request has no deadline of its own")
 	}
 }
+
+// The correction that cost a release: an init script runs in every frame, so
+// seeing the page's calls to the web service was never proof they came from the
+// main frame. They come from a frame on the service's own origin, and a request
+// issued anywhere else is answered "Origin doesn't match Host".
+func TestGoogleVoiceSMSPageRequestRunsInAMatchingOriginFrame(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSAPIRequestViaPage(")
+	if start < 0 {
+		t.Fatal("the page request path is gone")
+	}
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "googleVoiceSMSAPIFrameContext(") {
+		t.Fatal("the page request no longer looks for a frame on the service's own origin")
+	}
+	if !strings.Contains(body, "voiceEvalInContext(") {
+		t.Fatal("the page request runs in the main frame again, which carries the wrong origin")
+	}
+	if strings.Contains(body, "voiceEval(d,") {
+		t.Fatal("the page request uses the main-frame evaluation, which Google refuses")
+	}
+
+	finder := raw[strings.Index(raw, "func googleVoiceSMSAPIFrameContext("):]
+	if end := strings.Index(finder, "\nfunc googleVoiceSMSAPIRequestViaPage"); end > 0 {
+		finder = finder[:end]
+	}
+	for _, want := range []string{"Page.getFrameTree", "Page.createIsolatedWorld", "googleVoiceSMSAPIOrigin"} {
+		if !strings.Contains(finder, want) {
+			t.Fatalf("the frame search is missing %q", want)
+		}
+	}
+}
+
+// With no matching frame there is nothing to run in, and the request must fall
+// back to the direct client rather than be issued from the wrong origin. That
+// fallback is also what keeps reading the inbox working.
+func TestGoogleVoiceSMSFallsBackWhenNoMatchingFrameExists(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSAPIRequestViaPage(")
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	missing := strings.Index(body, "if !ok {")
+	if missing < 0 {
+		t.Fatal("a missing frame is no longer handled")
+	}
+	tail := body[missing:]
+	if end := strings.Index(tail, "\n\t}"); end > 0 {
+		tail = tail[:end]
+	}
+	if !strings.Contains(tail, "errNoVoiceControlChannel") {
+		t.Fatal("a missing frame does not report the one error the caller falls back on")
+	}
+}

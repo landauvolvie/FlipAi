@@ -1,33 +1,37 @@
-# FlipAi v0.46.44
+# FlipAi v0.46.45
 
-The reply is now sent by the signed-in Google Voice page itself, not by a separate HTTP client.
+Restores the SMS listener, and sends from a frame whose origin Google accepts.
+
+## What v0.46.44 broke, and why
+
+v0.46.44 moved every Google Voice web-service request into the signed-in page. It was based on a wrong reading of the evidence: FlipAi's capture script sees the page's own calls to the service, and that looked like proof those calls come from the Voice page itself.
+
+They do not. A script installed at page start runs in **every frame**, so what the capture saw were the calls of a small helper frame Google loads from the web service's own address. A request issued from the main Voice page instead carries one address while talking to another, and Google refuses it:
+
+> Bad request: Origin doesn't match Host for XD3.
+
+Because that path was used for reading as well as sending, the SMS listener stopped starting at all. Inbound text detection stopped with it. That regression is the first thing this release fixes.
 
 ## The fix
 
-Replies kept failing with **"Google Voice web service is asking FlipAi to slow down"**, and slowing down did not help. Across three releases not one reply ever succeeded: the Outgoing count stayed at zero while inbound texts arrived normally.
+FlipAi now looks for a frame already loaded from the web service's own address and runs the request there, where the two agree. When no such frame is present there is nothing to run in, so the request goes back to the direct client, which sets the matching address itself — the path that read the inbox successfully in every release before v0.46.44.
 
-That pattern rules out a passing rate limit. Reading the inbox worked and sending never did, from the same session, with the same cookies and the same authorization — so the difference is not the credentials, it is who is asking. Sending a text is the operation abuse protection cares about, and a Go HTTP client is not the caller Google is willing to accept it from.
+The result is that reading works again immediately, and sending gets a genuinely different attempt rather than the one Google was refusing.
 
-Inbound kept working because FlipAi already reads the conversation updates the page receives on its own. Outbound had no such path, so it failed every time.
+## Diagnostics kept
 
-FlipAi now issues the request from inside the signed-in Google Voice page, using the page's own `fetch` with its own session. This is what the capture script had already demonstrated was possible: it wraps `fetch` on the Voice page and sees the page's calls to the web service, which means those calls are ordinary requests from that page rather than something routed through a hidden frame. A request FlipAi makes there is the same request, from the same origin, with the same cookies.
-
-The separate HTTP client remains only for a page that could not attempt the request at all. It is deliberately not a fallback for a request the page did attempt: once a request has gone out, repeating it through a second client could be a second text message.
-
-## Failures now say what Google said
-
-The response body was discarded on every error, leaving a status code and nothing else to work from. Google's own explanation — a quota name, a rejected field, a reason — is now read before the status is judged and carried into the message shown in Activity, for both request paths.
+The error above is visible only because v0.46.44 started reading Google's own words out of a failed response instead of discarding them. That stays, and it is what made this a single-look diagnosis instead of another guess.
 
 ## Regression coverage
 
-- The message body reaches the page as one encoded literal that decodes back to exactly what went in, so nothing in a text can become code in a signed-in Google session.
-- Both request paths agree on what each status means, and carry Google's own words with it.
-- A request the page could not complete is never sent again; a refusal is.
-- The page is tried before the HTTP client, and the fallback stays limited to a page that never attempted the request.
+- The page request runs in a frame on the service's own address, never in the main page.
+- With no such frame, the request reports the one error the caller falls back on, so reading the inbox keeps working.
+- The frame search and the isolated context it opens are both pinned.
 
 ## Unchanged
 
 - Sender authorization: the conversation's own phone number, never a contact name.
+- A reply whose outcome is unknown is still never sent twice.
 - Google Voice calling behavior, profile, settings, and call state machine.
 
 No Authenticode/code-signing certificate is included in this release.
