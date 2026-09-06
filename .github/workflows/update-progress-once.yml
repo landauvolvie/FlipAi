@@ -21,7 +21,9 @@ jobs:
         with:
           go-version: '1.25.13'
       - name: Apply updater patch
-        run: python3 scripts/apply_update_progress.py
+        run: |
+          python3 scripts/apply_update_progress.py
+          python3 scripts/fix_update_progress_patch.py
       - name: Format
         run: gofmt -w update.go main.go zzzzzzzz_quiet_updater_ui.go quiet_updater_test.go update_progress_restart_test.go
       - name: Test
