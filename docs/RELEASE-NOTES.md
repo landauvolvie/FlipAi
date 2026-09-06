@@ -1,36 +1,33 @@
-# FlipAi v0.46.48
+# FlipAi v0.46.49
 
-FlipAi was signing every request with a built-in Google key instead of your own.
+Google Voice outbound SMS now follows Google Voice's own page controls instead of replaying the internal `sendsms` web-service request.
 
-## What RESOURCE_EXHAUSTED was actually saying
+## What changed
 
-Google Voice kept refusing replies with `RESOURCE_EXHAUSTED`. That is the answer a Google API gives when the **key** a request is signed with is out of quota — not when the message is wrong, and not when the account is busy. Waiting, retrying and slowing down could never have helped.
+- Incoming Google Voice SMS detection stays on the existing background path.
+- Outgoing replies now open the exact conversation inside FlipAi's already-running hidden Google Voice WebView.
+- FlipAi fills the real Google Voice message composer and triggers the page's real Send control.
+- The page itself now creates the normal Google Voice network request.
+- FlipAi waits for the outgoing message/composer state to confirm the send and surfaces page errors if Google Voice rejects it.
+- Exact conversation and phone-number safety checks remain in place.
+- The loop guard that prevents FlipAi from answering its own outgoing SMS remains unchanged.
 
-FlipAi reads the key Google serves this session out of the page. It read it from the main page — but the calls to the web service are made by a small helper frame, and the key is only visible there. The lookup therefore always came back empty, and FlipAi fell back to a key built into the app: a public one, long since published and long since out of quota.
+## Background behavior
 
-The same mistake hid in three places at once: the key, the request headers, and the value that reveals how Google signs. All three were read from a page that never makes the call.
+This remains fully backgrounded. FlipAi does not open a visible browser window, move the Windows mouse, type through global keyboard input, or use Windows accessibility. The interaction happens inside the existing off-screen WebView2 session, matching the browser-control approach already used by ChatGPT Chat, Claude Chat, Grok Chat, and Gemini Chat.
 
-## Why nothing else revealed it
+## Why
 
-Reading your texts kept working, so the connection looked healthy. It works because FlipAi reads the conversation updates the page receives on its own — it does not need to ask the service anything. Sending has no such path, so sending was the only thing that ever showed the failure.
+The previous outbound path manually reproduced Google Voice's private web-service send request. The new path lets Google Voice's own frontend perform the send, keeping the interaction much closer to the normal website workflow and removing FlipAi's custom outbound `sendsms` request construction.
 
-## The fix
+## Validation
 
-All three are now read from the frame that actually calls the service, through the two things that frame shares: its storage and its own record of the requests it made.
-
-The Connections card now says which key is in use, so this cannot hide again:
-
-- *using this session's own Google key* — correct.
-- *WARNING: this session's Google key was not found, so requests use a built-in one the service refuses* — the state every release until now was silently in.
-
-## Regression coverage
-
-- The key, the headers and the signing origin are all read from the calling frame; none may go back to the main page.
-- The key stays reachable from an isolated world through both storage and the frame's own request record.
-
-## Unchanged
-
-- Sender authorization: the conversation's own phone number, never a contact name.
-- A reply whose outcome is unknown is still never sent twice.
+- Full Go test suite passes.
+- Browser integration tests pass.
+- Windows x64 build passes.
+- Race tests and vet pass.
+- Google Voice background-browser smoke test passes.
+- Microsoft Defender scans and installer install/uninstall smoke tests pass.
+- Security/CodeQL and SBOM checks pass.
 
 No Authenticode/code-signing certificate is included in this release.
