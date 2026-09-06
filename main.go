@@ -175,6 +175,9 @@ func showLauncherError(dataDir string, cfg Config, detail string) {
 
 func runLauncher(dataDir, cfgPath string) {
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
+	if maybeInstallStagedUpdateAtStartup(filepath.Join(dataDir, "state.json")) {
+		return
+	}
 	_ = os.Remove(filepath.Join(dataDir, "quit.flag"))
 	exe, err := os.Executable()
 	if err != nil {
@@ -214,6 +217,9 @@ func runWatchdog(dataDir, cfgPath string) {
 	defer release()
 
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
+	if maybeInstallStagedUpdateAtStartup(filepath.Join(dataDir, "state.json")) {
+		return
+	}
 	// The quit flag is deliberately NOT cleared here. Clearing it made Quit
 	// unreliable: the tray writes the flag and exits, and any watchdog that
 	// started in that window — an autostart entry, a relaunch, a second
