@@ -31,10 +31,10 @@ const (
 	// does not disappear for a long time.
 	voiceDevToolsTimeout = 8 * time.Second
 
-	// A ChatGPT turn is intentionally one awaited Runtime.evaluate promise. The
-	// JavaScript itself may wait up to 90 seconds for the model to finish, so the
-	// generic 8-second Google Voice deadline would falsely report failure while
-	// ChatGPT continued answering in the page.
+	// Browser chat turns intentionally use one awaited Runtime.evaluate promise.
+	// The provider JavaScript may wait up to 90 seconds for the model to finish,
+	// so the generic Google Voice deadline would falsely report failure while
+	// the page continued answering.
 	chatGPTTurnDevToolsTimeout = 95 * time.Second
 
 	// A Google Voice UI send waits for the real composer to clear, an outgoing
@@ -42,6 +42,12 @@ const (
 	// intentionally longer than an ordinary probe but much shorter than a model
 	// turn.
 	googleVoiceSMSUITurnDevToolsTimeout = 15 * time.Second
+
+	// MMS capture reads the actual media bytes from the signed-in Google Voice
+	// page. A phone photo or voice note can need more than the generic 8-second
+	// probe window to come out of Google's cache, so only this marked expression
+	// gets a longer deadline.
+	googleVoiceMediaCaptureDevToolsTimeout = 30 * time.Second
 )
 
 func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
@@ -66,15 +72,14 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	}
 	await, _ := m["awaitPromise"].(bool)
 	expression, _ := m["expression"].(string)
-	if await &&
-		strings.Contains(expression, "const deadline=Date.now()+90000;") &&
-		(strings.Contains(expression, `data-message-author-role="assistant"`) ||
-			strings.Contains(expression, "model-response") ||
-			strings.Contains(expression, "grokResponse")) {
+	if await && isBrowserChatTurnExpression(expression) {
 		return chatGPTTurnDevToolsTimeout
 	}
 	if await && strings.Contains(expression, googleVoiceSMSUITurnMarker) {
 		return googleVoiceSMSUITurnDevToolsTimeout
+	}
+	if await && strings.Contains(expression, googleVoiceMediaCaptureMarker) {
+		return googleVoiceMediaCaptureDevToolsTimeout
 	}
 	// A Google Voice web-service request runs in the page and can take as long
 	// as any network call. The generic probe deadline is far shorter, and a
@@ -91,7 +96,8 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 		return errNoVoiceControlChannel
 	}
 
-	// Browser-chat image turns carry a private marker inside the prompt sent to
+	browserTurn := false
+	// Browser-chat media turns carry a private marker inside the prompt sent to
 	// the worker. Strip it before the page sees the prompt, upload those local
 	// temp files through the site's own file input, then run the normal provider
 	// turn unchanged. The nested DevTools calls contain no marker, so they do not
@@ -99,6 +105,10 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 	if method == "Runtime.evaluate" {
 		if m, ok := params.(map[string]any); ok {
 			if expression, ok := m["expression"].(string); ok {
+				browserTurn = isBrowserChatTurnExpression(expression)
+				if browserTurn {
+					clearCapturedBrowserChatReturnedMedia()
+				}
 				clean, attachments, found, err := extractBrowserChatAttachmentMarker(expression)
 				if err != nil {
 					return err
@@ -159,10 +169,19 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 		if got.code != 0 {
 			return fmt.Errorf("%s failed in the WebView page (0x%X)", method, got.code)
 		}
-		if out == nil || got.result == "" {
-			return nil
+		if out != nil && got.result != "" {
+			if err := json.Unmarshal([]byte(got.result), out); err != nil {
+				return err
+			}
 		}
-		return json.Unmarshal([]byte(got.result), out)
+		if browserTurn {
+			// The normal turn has already completed and its assistant response is
+			// stable. Read only media inside that newest assistant response. This
+			// second expression does not contain the turn marker, so it cannot
+			// recurse back into this branch.
+			captureBrowserChatReturnedMediaAfterTurn(d)
+		}
+		return nil
 	case <-time.After(timeout):
 		return errors.New("the WebView page did not answer " + method)
 	}

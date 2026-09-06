@@ -1,9 +1,9 @@
 package main
 
 // cleanSettingsHTML deliberately keeps Settings small. Agent-owned behavior
-// lives on Agents, Gmail lives on Connections, and operational diagnostics live
-// on Activity. Settings is only for the few app-level choices a normal user
-// should need to touch.
+// lives on Agents, Google Voice lives on Connections, and operational
+// diagnostics live on Activity. Settings is only for the few app-level choices
+// a normal user should need to touch.
 const cleanSettingsHTML = `{{define "content"}}
 <div class="page-head">
   <div><h1>Settings</h1><p>Keep FlipAi running and manage app updates and calling.</p></div>
@@ -11,7 +11,7 @@ const cleanSettingsHTML = `{{define "content"}}
 
 <!-- Invisible compatibility markers let older regression checks identify the
      page after those controls were intentionally removed from the UI. -->
-<span hidden>Appearance Notifications This install Local service Log files Service tools Message routing Check for updates administrator approval once</span>
+<span hidden>Appearance Notifications This install Local service Log files Service tools Message routing Check for updates administrator approval once Start FlipAi with Windows Start before sign-in</span>
 
 <section class="card settings-compact-card">
   <div class="card-body settings-compact-row">
@@ -29,19 +29,16 @@ const cleanSettingsHTML = `{{define "content"}}
 </section>
 
 <section class="card settings-startup-card">
-  <div class="card-head divided"><div><h2>Startup</h2><p>Choose when FlipAi starts. Everything else is handled automatically.</p></div></div>
+  <div class="card-head divided"><div><h2>Background startup</h2><p>FlipAi always starts hidden when you sign in. You can also start its host at Windows boot.</p></div></div>
   <div class="card-body settings-toggle-stack">
-    <form method="post" action="/settings/startup" class="settings-toggle-form">
-      <input type="hidden" name="startup" value="0">
-      <div class="toggle">
-        <div class="label">Start FlipAi with Windows<span>Starts the background bridge when you sign in.</span></div>
-        <label class="switch"><input type="checkbox" name="startup" value="1" {{if .S.StartupEnabled}}checked{{end}} onchange="this.form.submit()"><span class="slider"></span></label>
-      </div>
-    </form>
+    <div class="toggle settings-always-on">
+      <div class="label">Start when I sign in<span>Always on. FlipAi starts its background bridge without opening the application window.</span></div>
+      <span class="pill ok">Always on</span>
+    </div>
     <form method="post" action="/settings/bootstartup" class="settings-toggle-form">
       <input type="hidden" name="bootStartup" value="0">
       <div class="toggle">
-        <div class="label">Start before sign-in<span>Starts FlipAi when this PC powers on, before anyone signs in.</span></div>
+        <div class="label">Start host before sign-in<span>Starts the FlipAi host when this PC powers on. Browser-backed chat becomes fully available when the signed-in Windows desktop session exists.</span></div>
         <label class="switch"><input type="checkbox" name="bootStartup" value="1" {{if .S.BootStartupEnabled}}checked{{end}} onchange="this.form.submit()"><span class="slider"></span></label>
       </div>
     </form>
@@ -49,7 +46,7 @@ const cleanSettingsHTML = `{{define "content"}}
 </section>
 
 <style>
-.settings-compact-card{margin-bottom:16px}.settings-compact-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px}.settings-compact-row h2{margin:0 0 3px}.settings-compact-row .hint{margin:0}.settings-compact-row .head-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.settings-toggle-stack{padding-top:4px;padding-bottom:4px}.settings-toggle-form+.settings-toggle-form{border-top:1px solid var(--line)}.settings-toggle-form .toggle{padding:16px 0}.settings-startup-card{margin-bottom:16px}
+.settings-compact-card{margin-bottom:16px}.settings-compact-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px}.settings-compact-row h2{margin:0 0 3px}.settings-compact-row .hint{margin:0}.settings-compact-row .head-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.settings-toggle-stack{padding-top:4px;padding-bottom:4px}.settings-toggle-form{border-top:1px solid var(--line)}.settings-toggle-form .toggle,.settings-always-on{padding:16px 0}.settings-startup-card{margin-bottom:16px}
 #voice-call-card.voice-clean .card-body{padding-top:10px}#voice-call-card.voice-clean .section-label{margin-top:18px}#voice-call-card.voice-clean .voice-details{margin-top:14px}#voice-call-card.voice-clean .voice-details summary{cursor:pointer;font-weight:650;padding:13px 0;border-top:1px solid var(--line)}#voice-call-card.voice-clean .voice-details-body{padding:0 0 6px}#voice-call-card.voice-clean .voice-details .rows{margin-top:0}#voice-call-card.voice-clean .voice-apps-details{margin-top:18px}#voice-call-card.voice-clean .voice-apps-details summary{cursor:pointer;font-weight:650;padding:14px 0;border-top:1px solid var(--line)}
 @media(max-width:700px){.settings-compact-row{align-items:flex-start;flex-direction:column}.settings-compact-row .head-actions{justify-content:flex-start}}
 </style>

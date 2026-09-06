@@ -16,9 +16,9 @@ const (
 	GmailMethodOAuth       = "oauth"
 )
 
-// MailClient is the small contract the bridge needs from Gmail. Both the
-// Google OAuth/Gmail API backend, the App Password IMAP/SMTP backend, and the
-// direct Google Voice WebView backend implement this interface.
+// MailClient is the small contract the bridge needs from its message transport.
+// Legacy Gmail backends remain in the source tree for recovery, while the live
+// app now selects the direct Google Voice WebView backend.
 type MailClient interface {
 	Authorized() bool
 	Test(context.Context) error
@@ -110,9 +110,9 @@ func hasAppPasswordSecret(path string) bool {
 	return err == nil
 }
 
-// buildConfiguredMailClient constructs only the explicitly selected SMS
-// transport. Gmail remains available exactly as before; direct Google Voice is
-// the second connection choice and reuses the same Bridge contract.
+// buildConfiguredMailClient retains the Gmail cases only so the archived
+// implementation and its tests remain recoverable. The running Windows app
+// migrates cfg.Method to direct Google Voice before the host loads this switch.
 func buildConfiguredMailClient(cfg GmailConfig, dataDir, tokenFile string) (MailClient, *GmailClient, error) {
 	switch cfg.Method {
 	case GmailMethodOAuth:
@@ -128,10 +128,10 @@ func buildConfiguredMailClient(cfg GmailConfig, dataDir, tokenFile string) (Mail
 		}
 		return g, nil, nil
 	case GmailMethodGoogleVoice:
-		return NewGoogleVoiceSMSClient(dataDir), nil, nil
+		return newGoogleVoiceMediaMailClient(dataDir), nil, nil
 	case "":
-		return nil, nil, errors.New("choose a Gmail connection method or direct Google Voice SMS")
+		return nil, nil, errors.New("connect Google Voice SMS under Connections")
 	default:
-		return nil, nil, fmt.Errorf("unsupported Gmail connection method %q", cfg.Method)
+		return nil, nil, fmt.Errorf("unsupported message connection method %q", cfg.Method)
 	}
 }
