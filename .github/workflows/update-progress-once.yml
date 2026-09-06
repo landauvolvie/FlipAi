@@ -1,0 +1,36 @@
+name: update-progress-once
+
+on:
+  push:
+    branches:
+      - update-progress-auto-install
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: update-progress-auto-install
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Apply updater implementation
+        run: python3 scripts/implement_update_progress_once.py
+      - name: Format Go sources
+        run: gofmt -w update.go update_startup.go main.go webui.go ui_actions.go zzzzzzzz_quiet_updater_ui.go quiet_updater_test.go update_progress_test.go update_behavior_test.go config.go
+      - name: Run full test suite
+        run: go test ./...
+      - name: Commit implementation and remove one-time helpers
+        run: |
+          git rm .github/workflows/update-progress-once.yml scripts/implement_update_progress_once.py
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Improve update progress and restart installation"
+          git push origin HEAD:update-progress-auto-install
