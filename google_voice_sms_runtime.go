@@ -9,23 +9,26 @@ import (
 )
 
 type GoogleVoiceSMSRuntimeState struct {
-	Running         bool      `json:"running"`
-	Starting        bool      `json:"starting,omitempty"`
-	Visible         bool      `json:"visible"`
-	LoginActive     bool      `json:"loginActive,omitempty"`
-	Connected       bool      `json:"connected,omitempty"`
-	SignedIn        bool      `json:"signedIn"`
-	ListenerRunning bool      `json:"listenerRunning"`
-	Ready           bool      `json:"ready"`
-	Page            string    `json:"page,omitempty"`
-	LastEvent       string    `json:"lastEvent,omitempty"`
-	LastError       string    `json:"lastError,omitempty"`
-	LastProbeAt     time.Time `json:"lastProbeAt,omitempty"`
-	LastInboundAt   time.Time `json:"lastInboundAt,omitempty"`
-	LastOutboundAt  time.Time `json:"lastOutboundAt,omitempty"`
+	Running          bool      `json:"running"`
+	Starting         bool      `json:"starting,omitempty"`
+	Visible          bool      `json:"visible"`
+	LoginActive      bool      `json:"loginActive,omitempty"`
+	Connected        bool      `json:"connected,omitempty"`
+	SignedIn         bool      `json:"signedIn"`
+	ListenerRunning  bool      `json:"listenerRunning"`
+	Ready            bool      `json:"ready"`
+	Page             string    `json:"page,omitempty"`
+	LastEvent        string    `json:"lastEvent,omitempty"`
+	LastError        string    `json:"lastError,omitempty"`
+	LastProbeAt      time.Time `json:"lastProbeAt,omitempty"`
+	LastObserverAt   time.Time `json:"lastObserverAt,omitempty"`
+	ObservedRows     int       `json:"observedRows,omitempty"`
+	ObserverCandidates int     `json:"observerCandidates,omitempty"`
+	LastInboundAt    time.Time `json:"lastInboundAt,omitempty"`
+	LastOutboundAt   time.Time `json:"lastOutboundAt,omitempty"`
 	DesktopRequest   string    `json:"desktopRequest,omitempty"`
 	DesktopRequestAt time.Time `json:"desktopRequestAt,omitempty"`
-	UpdatedAt       time.Time `json:"updatedAt,omitempty"`
+	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
 }
 
 var googleVoiceSMSRuntimeMu sync.Mutex
@@ -47,12 +50,15 @@ func loadGoogleVoiceSMSRuntime(dataDir string) GoogleVoiceSMSRuntimeState {
 	if b, err := os.ReadFile(googleVoiceSMSRuntimePath(dataDir)); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
-	// Older v0.46.34 state described the retired shared-profile listener. Never
-	// turn that into a connected state for the new independent SMS profile.
-	if !s.Running {
+	// Older states can describe a renderer that is alive without proving that
+	// the actual Messages observer is executing. Never surface that as Ready.
+	observerFresh := !s.LastObserverAt.IsZero() && time.Since(s.LastObserverAt) < 6*time.Second
+	if !s.Running || !observerFresh {
 		s.ListenerRunning = false
 		s.Ready = false
-		s.SignedIn = false
+		if !s.Running {
+			s.SignedIn = false
+		}
 	}
 	return s
 }
