@@ -116,6 +116,38 @@ func TestGoogleVoiceSMSSentMemoryExpires(t *testing.T) {
 	}
 }
 
+// The ledger only defends the window it exists for. Google accepts a text
+// before the send call returns, and both observation paths -- the inbox poll
+// and the updates the signed-in page receives by itself -- can read it back in
+// that gap. Recording after the send left FlipAi able to answer its own reply,
+// which is a paid SMS loop, so the fingerprint is written first.
+func TestGoogleVoiceSMSRecordsTheSendBeforeItCanBeObserved(t *testing.T) {
+	raw, err := os.ReadFile("google_voice_sms_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	start := strings.Index(body, "func runGoogleVoiceSMSOutboundLoop")
+	if start < 0 {
+		t.Fatal("the Google Voice SMS outbound loop is gone")
+	}
+	loop := body[start:]
+	if end := strings.Index(loop, "\nfunc "); end > 0 {
+		loop = loop[:end]
+	}
+	recorded := strings.Index(loop, "rememberGoogleVoiceSMSSent(")
+	sent := strings.Index(loop, "sendGoogleVoiceTextInPage(")
+	if recorded < 0 {
+		t.Fatal("outgoing text is no longer recorded, so FlipAi can answer its own reply")
+	}
+	if sent < 0 {
+		t.Fatal("the outbound loop no longer sends")
+	}
+	if recorded > sent {
+		t.Fatal("the outgoing text is recorded after the send: an inbox poll or an observed page update can read the reply back in that window and answer it")
+	}
+}
+
 // Authorization is keyed on the exact phone number, never on a contact name, so
 // a saved contact cannot change who is answered.
 func TestGoogleVoiceSMSSentMemoryIsKeyedOnTheNumber(t *testing.T) {
