@@ -1,0 +1,56 @@
+name: fix-release-v04650-once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-release-v04650-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-retrigger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.13'
+      - name: Keep v0.46.50 versions in lockstep
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          config = Path('config.go')
+          text = config.read_text(encoding='utf-8')
+          old = 'const version = "0.46.49"'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one compiled version marker, found {text.count(old)}')
+          config.write_text(text.replace(old, 'const version = "0.46.50"', 1), encoding='utf-8')
+
+          installer = Path('installer/FlipAi.iss')
+          text = installer.read_text(encoding='utf-8')
+          old = '#define MyVersion "0.46.31"'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one installer default version marker, found {text.count(old)}')
+          installer.write_text(text.replace(old, '#define MyVersion "0.46.50"', 1), encoding='utf-8')
+
+          # Remove the temporary newline so this corrective commit also touches
+          # VERSION and therefore re-triggers the guarded release workflow.
+          Path('VERSION').write_text('0.46.50', encoding='utf-8')
+          PY
+          gofmt -w config.go
+      - name: Test corrected release state
+        run: go test ./...
+      - name: Commit correction and remove this one-time workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-release-v04650-once.yml
+          git add config.go installer/FlipAi.iss VERSION
+          git commit -m "Fix v0.46.50 version lockstep"
+          git push origin HEAD:main
