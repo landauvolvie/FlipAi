@@ -65,8 +65,18 @@ func TestDirectGoogleVoiceSMSBlocksUnauthorizedNumberBeforeSpool(t *testing.T) {
 
 func TestDirectGoogleVoiceSMSBlocksCallsOnlyNumber(t *testing.T) {
 	dir := t.TempDir()
-	writeDirectSMSTestConfig(t, dir, []AgentPhone{{Number: "8455550142", Access: AccessVoice}})
-	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/0/messages/calls-only", "X: hi")); err != nil {
+	// Browser-chat agents are intentionally SMS-only, so a calls-only permission
+	// belongs on a voice-capable agent. Use Codex here to verify that direct
+	// Google Voice cannot widen a real calls-only permission into SMS access.
+	cfg := defaultConfig(dir)
+	cfg.Gmail.Method = GmailMethodGoogleVoice
+	cfg.Security.AgentsMigrated = true
+	cfg.Codex.Phones = []AgentPhone{{Number: "8455550142", Access: AccessVoice}}
+	cfg.GoogleVoice.AllowedFrom = smsAllowedFrom(cfg)
+	if err := saveConfig(filepath.Join(dir, "bridge.json"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/0/messages/calls-only", "C: hi")); err != nil {
 		t.Fatal(err)
 	}
 	msgs, err := NewGoogleVoiceSMSClient(dir).readAll()
