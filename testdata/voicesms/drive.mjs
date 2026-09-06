@@ -12,18 +12,16 @@ page.on('pageerror', e => errors.push(String(e)));
 await page.route('https://voice.google.com/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: fixture }));
 await page.goto('https://voice.google.com/u/2/messages');
 await page.waitForTimeout(1000);
+const detectorReady = await page.evaluate(() => globalThis.__flipAiGoogleVoiceSMSDetectorReady === true);
+const detectorRows = await page.evaluate(() => Number(globalThis.__flipAiGoogleVoiceSMSDetectorRows || 0));
 
-// The row shows a saved contact name. Its actual phone lives in dedicated
-// contact metadata. A different, clickable tel: phone stays inside the SMS body
-// throughout the mutation, proving body links cannot become sender identity.
 await page.locator('#messageText').evaluate(el => { el.textContent = 'X: call'; });
-await page.waitForTimeout(1000);
+await page.waitForTimeout(1500);
 let captured = await page.evaluate(() => globalThis.__captured || []);
 
-// Outgoing DOM updates must never be delivered back into FlipAi as inbound SMS.
 await page.locator('#messageText').evaluate(el => { el.textContent = 'You: reply'; });
 await page.waitForTimeout(1000);
 const afterOutgoing = await page.evaluate(() => globalThis.__captured || []);
 
-console.log(JSON.stringify({ errors, captured, afterOutgoing }));
+console.log(JSON.stringify({ errors, captured, afterOutgoing, detectorReady, detectorRows }));
 await browser.close();
