@@ -38,8 +38,7 @@ type smsRouteSpec struct {
 func smsRouteSpecs(_ Config) []smsRouteSpec {
 	// Public shortcuts are intentionally fixed and provider-grouped. Longer
 	// prefixes come first so OW:/OC:/AC:/AW:/AL: can never be swallowed by O:
-	// or A:. The old configurable prefixes remain usable internally while old
-	// bridge.json files migrate naturally through rewriteSMSRoutePrefix.
+	// or A:. Configured legacy prefixes are accepted separately as aliases.
 	return []smsRouteSpec{
 		{ID: smsRouteChatGPTWork, Agent: "G", Mode: browserModeWork, Prefix: "OW", Display: "ChatGPT Work"},
 		{ID: smsRouteCodex, Agent: "C", Prefix: "OC", Display: "Codex"},
@@ -51,6 +50,20 @@ func smsRouteSpecs(_ Config) []smsRouteSpec {
 		{ID: smsRouteGemini, Agent: "M", Prefix: "G", Display: "Gemini Chat"},
 		{ID: smsRouteCopilot, Agent: "P", Prefix: "M", Display: "Microsoft Copilot Chat"},
 		{ID: smsRouteGrok, Agent: "X", Prefix: "X", Display: "Grok Chat"},
+	}
+}
+
+func configuredSMSRouteAliases(cfg Config) []smsRouteSpec {
+	// This preserves existing customized prefixes and direct-parser tests while
+	// making the new grouped shortcuts the primary public contract.
+	return []smsRouteSpec{
+		{ID: smsRouteCodex, Agent: "C", Prefix: configuredCodexPrefix(cfg)},
+		{ID: smsRouteClaudeCodeLocal, Agent: "A", Prefix: configuredClaudePrefix(cfg)},
+		{ID: smsRouteChatGPTChat, Agent: "G", Mode: browserModeChat, Prefix: configuredChatGPTPrefix(cfg)},
+		{ID: smsRouteClaudeChat, Agent: "H", Mode: browserModeChat, Prefix: configuredClaudeChatPrefix(cfg)},
+		{ID: smsRouteGemini, Agent: "M", Prefix: configuredGeminiChatPrefix(cfg)},
+		{ID: smsRouteGrok, Agent: "X", Prefix: configuredGrokChatPrefix(cfg)},
+		{ID: smsRouteCopilot, Agent: "P", Prefix: configuredCopilotChatPrefix(cfg)},
 	}
 }
 
@@ -104,6 +117,11 @@ func explicitSMSRoute(raw string, cfg Config) string {
 	newWord := configuredNewSessionCommand(cfg)
 	for _, candidate := range candidates {
 		for _, route := range smsRouteSpecs(cfg) {
+			if _, ok := stripAgentCommandPrefix(candidate, route.Prefix); ok || isAgentNewSession(candidate, route.Prefix, newWord) {
+				return route.ID
+			}
+		}
+		for _, route := range configuredSMSRouteAliases(cfg) {
 			if _, ok := stripAgentCommandPrefix(candidate, route.Prefix); ok || isAgentNewSession(candidate, route.Prefix, newWord) {
 				return route.ID
 			}
