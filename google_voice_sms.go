@@ -55,8 +55,7 @@ func (g *GoogleVoiceSMSClient) Test(ctx context.Context) error {
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		s := loadGoogleVoiceSMSRuntime(g.dataDir)
-		fresh := !s.LastProbeAt.IsZero() && time.Since(s.LastProbeAt) < 8*time.Second
-		if s.Running && s.Connected && s.SignedIn && s.ListenerRunning && s.Ready && fresh {
+		if googleVoiceSMSConnected(s) {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -336,6 +335,11 @@ func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 		return nil
 	}
 	if strings.HasPrefix(strings.ToLower(m.Body), "you:") {
+		return nil
+	}
+	// Second, independent loop guard. Even if a conversation item were ever
+	// mislabelled as inbound, FlipAi will not answer text it just sent.
+	if googleVoiceSMSWasSentRecently(dataDir, m.Sender, m.Body) {
 		return nil
 	}
 	if len([]rune(m.Body)) > 12000 {

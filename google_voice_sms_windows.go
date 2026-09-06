@@ -62,8 +62,7 @@ func requestGoogleVoiceTextTarget(ctx context.Context, dataDir, phone, thread, b
 	readyDeadline := time.Now().Add(15 * time.Second)
 	for {
 		s := loadGoogleVoiceSMSRuntime(dataDir)
-		fresh := !s.LastProbeAt.IsZero() && time.Since(s.LastProbeAt) < 8*time.Second
-		if s.Running && s.Connected && s.SignedIn && s.ListenerRunning && s.Ready && fresh {
+		if googleVoiceSMSConnected(s) {
 			break
 		}
 		if err := ctx.Err(); err != nil {
@@ -165,6 +164,10 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 					result.OK = false
 					result.Error = err.Error()
 				} else {
+					// Remember what went out before the next inbox poll can see
+					// it, so FlipAi's own reply can never be read back as a new
+					// text to answer.
+					rememberGoogleVoiceSMSSent(dataDir, req.Phone, req.Body)
 					mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) { s.LastOutboundAt = time.Now() })
 				}
 				resultRaw, _ := json.Marshal(result)
