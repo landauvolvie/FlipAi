@@ -43,7 +43,7 @@ func TestDirectGoogleVoiceSMSBlocksUnauthorizedNumberBeforeSpool(t *testing.T) {
 	dir := t.TempDir()
 	writeDirectSMSTestConfig(t, dir, []AgentPhone{{Number: "8455550142", Access: AccessSMS}})
 
-	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550199", "/u/0/messages/blocked", "X: hi")); err != nil {
+	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550199", "/u/0/messages?itemId=t.%2B18455550199", "X: hi")); err != nil {
 		t.Fatal(err)
 	}
 	client := NewGoogleVoiceSMSClient(dir)
@@ -65,9 +65,6 @@ func TestDirectGoogleVoiceSMSBlocksUnauthorizedNumberBeforeSpool(t *testing.T) {
 
 func TestDirectGoogleVoiceSMSBlocksCallsOnlyNumber(t *testing.T) {
 	dir := t.TempDir()
-	// Browser-chat agents are intentionally SMS-only, so a calls-only permission
-	// belongs on a voice-capable agent. Use Codex here to verify that direct
-	// Google Voice cannot widen a real calls-only permission into SMS access.
 	cfg := defaultConfig(dir)
 	cfg.Gmail.Method = GmailMethodGoogleVoice
 	cfg.Security.AgentsMigrated = true
@@ -76,7 +73,7 @@ func TestDirectGoogleVoiceSMSBlocksCallsOnlyNumber(t *testing.T) {
 	if err := saveConfig(filepath.Join(dir, "bridge.json"), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/0/messages/calls-only", "C: hi")); err != nil {
+	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/0/messages?itemId=t.%2B18455550142", "C: hi")); err != nil {
 		t.Fatal(err)
 	}
 	msgs, err := NewGoogleVoiceSMSClient(dir).readAll()
@@ -109,10 +106,40 @@ func TestDirectGoogleVoiceSMSBlocksUnresolvedIdentity(t *testing.T) {
 	}
 }
 
+func TestDirectGoogleVoiceSMSCanRecoverSenderOnlyFromTrustedItemID(t *testing.T) {
+	dir := t.TempDir()
+	writeDirectSMSTestConfig(t, dir, []AgentPhone{{Number: "8455550142", Access: AccessSMS}})
+	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "US Mobile", "/u/0/messages?itemId=t.%2B18455550142", "X: hi")); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := NewGoogleVoiceSMSClient(dir).readAll()
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("trusted itemId phone did not recover sender: msgs=%+v err=%v", msgs, err)
+	}
+	if msgs[0].Sender != "8455550142" {
+		t.Fatalf("wrong sender recovered from itemId: %+v", msgs[0])
+	}
+}
+
+func TestDirectGoogleVoiceSMSBlocksSenderThreadMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writeDirectSMSTestConfig(t, dir, []AgentPhone{{Number: "8455550142", Access: AccessSMS}})
+	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/0/messages?itemId=t.%2B18455550199", "X: hi")); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, err := NewGoogleVoiceSMSClient(dir).readAll(); err != nil || len(msgs) != 0 {
+		t.Fatalf("sender/thread mismatch reached spool: msgs=%+v err=%v", msgs, err)
+	}
+	if !activityHas(directGoogleVoiceActivity(dir).Recent(20), "8455550142", "conversation phone does not match sender; no reply sent") {
+		t.Fatal("sender/thread mismatch was not explicitly blocked")
+	}
+}
+
 func TestDirectGoogleVoiceSMSReplyBoundToOriginalPhoneAndThread(t *testing.T) {
 	dir := t.TempDir()
 	writeDirectSMSTestConfig(t, dir, []AgentPhone{{Number: "8455550142", Access: AccessSMS}})
-	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/2/messages/contact-123", "X: hi")); err != nil {
+	thread := "/u/2/messages?itemId=t.%2B18455550142"
+	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", thread, "X: hi")); err != nil {
 		t.Fatal(err)
 	}
 	client := NewGoogleVoiceSMSClient(dir)
@@ -124,12 +151,12 @@ func TestDirectGoogleVoiceSMSReplyBoundToOriginalPhoneAndThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	phone, thread, err := client.directReplyIdentity(original)
+	phone, gotThread, err := client.directReplyIdentity(original)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if phone != "8455550142" || thread != "/u/2/messages/contact-123" {
-		t.Fatalf("reply identity drifted: phone=%q thread=%q", phone, thread)
+	if phone != "8455550142" || gotThread != thread {
+		t.Fatalf("reply identity drifted: phone=%q thread=%q", phone, gotThread)
 	}
 
 	forged := original
@@ -139,18 +166,39 @@ func TestDirectGoogleVoiceSMSReplyBoundToOriginalPhoneAndThread(t *testing.T) {
 	}
 }
 
-func TestNormalizeGoogleVoiceSMSThreadRejectsOtherSites(t *testing.T) {
-	if got := normalizeGoogleVoiceSMSThread("https://voice.google.com/u/3/messages/abc?x=1"); got != "/u/3/messages/abc" {
-		t.Fatalf("unexpected normalized thread %q", got)
+func TestNormalizeGoogleVoiceSMSThreadCurrentItemID(t *testing.T) {
+	const want = "/u/3/messages?itemId=t.%2B18455550142"
+	for _, raw := range []string{
+		want,
+		"https://voice.google.com/u/3/messages?itemId=t.%2B18455550142",
+		"https://voice.google.com/u/3/messages/?itemId=t.%2B18455550142",
+	} {
+		if got := normalizeGoogleVoiceSMSThread(raw); got != want {
+			t.Fatalf("normalizeGoogleVoiceSMSThread(%q)=%q, want %q", raw, got, want)
+		}
 	}
+	if got := googleVoiceSMSThreadPhone(want); got != "8455550142" {
+		t.Fatalf("itemId phone=%q, want 8455550142", got)
+	}
+}
+
+func TestNormalizeGoogleVoiceSMSThreadRejectsUnsafeTargets(t *testing.T) {
 	for _, bad := range []string{
-		"https://example.com/u/0/messages/abc",
+		"https://example.com/u/0/messages?itemId=t.%2B18455550142",
+		"http://voice.google.com/u/0/messages?itemId=t.%2B18455550142",
 		"javascript:alert(1)",
 		"/u/0/calls/abc",
 		"/u/0/messages/../calls/abc",
+		"/u/0/messages?itemId=t.%2B1845555014",
+		"/u/0/messages?itemId=draft-123",
+		"/u/0/messages?itemId=t.%2B18455550142&x=1",
+		"/u/0/messages/abc?x=1",
 	} {
 		if got := normalizeGoogleVoiceSMSThread(bad); got != "" {
 			t.Fatalf("unsafe thread %q normalized to %q", bad, got)
 		}
+	}
+	if got := normalizeGoogleVoiceSMSThread("/u/2/messages/legacy-thread"); got != "/u/2/messages/legacy-thread" {
+		t.Fatalf("legacy trusted thread no longer parses: %q", got)
 	}
 }
