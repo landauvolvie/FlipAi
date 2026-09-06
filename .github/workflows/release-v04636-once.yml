@@ -1,0 +1,78 @@
+name: prepare-v0.46.36-once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v04636-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare v0.46.36
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('config.go')
+          s = p.read_text()
+          old = 'const version = "0.46.35"'
+          new = 'const version = "0.46.36"'
+          if old not in s:
+              raise SystemExit('expected v0.46.35 constant not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          cat > docs/RELEASE-NOTES.md <<'EOF'
+          # FlipAi v0.46.36
+
+          Google Voice SMS phone-identity and reply-safety hardening.
+
+          ## Phone-number authorization
+
+          - Direct Google Voice SMS authorization is based only on the normalized phone number, never the visible contact name.
+          - Sender identity is read only from the Google Voice conversation/contact identity metadata. Phone numbers, `tel:` links, titled links, or other numbers inside the SMS body cannot become the authenticated sender.
+          - A detected text with an unresolved sender, an unverified conversation thread, an unauthorized number, or a calls-only number is blocked before it reaches the SMS queue or any AI agent.
+          - The existing per-agent SMS permissions remain authoritative, with the aggregate SMS allowlist checked again as an independent fail-closed assertion.
+
+          ## Activity logging
+
+          - Every detected inbound direct Google Voice text creates a Google Voice Activity event before authorization is evaluated.
+          - Blocked messages create an explicit Security event explaining why they were not answered, including unauthorized, calls-only, unresolved-number, unverified-thread, or inconsistent-permission cases.
+          - Blocked messages are not spooled, routed to an agent, acknowledged, or replied to.
+          - Activity now includes a Google Voice stage filter and shows Google Voice/security events as incoming Google Voice activity.
+
+          ## Exact reply destination
+
+          - Replies are bound to both the exact normalized phone number and the exact Google Voice conversation thread captured from the inbound message.
+          - The original inbound message must still exist in FlipAi's trusted direct-SMS spool and its stored sender must match the reply identity.
+          - Before Send is pressed, FlipAi finds the exact conversation URL and independently verifies that conversation's contact identity matches the expected phone number.
+          - Any missing thread, phone/thread mismatch, stale or forged inbound identity, or ambiguous recipient fails closed; FlipAi does not fall back to a contact name, a single suggestion, partial-number matching, or pressing Enter.
+          - One-off sends also require an exact phone-number recipient match.
+
+          ## Tests
+
+          - Added authorization tests proving unauthorized and calls-only numbers never reach the trusted SMS spool and produce explicit blocked Activity events.
+          - Added forged reply-identity and unsafe-thread tests.
+          - Added a real Chromium regression where Google Voice displays a saved contact name while a different clickable phone number is present inside the SMS body; FlipAi must still authenticate only the real contact number.
+          - Added source guards that prevent ambiguous recipient fallbacks from being reintroduced.
+
+          Google Voice calling remains unchanged and isolated from the direct SMS browser/profile.
+
+          No Authenticode/code-signing certificate is included in this release.
+          EOF
+          printf '0.46.36\n' > VERSION
+          rm .github/workflows/release-v04636-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add config.go VERSION docs/RELEASE-NOTES.md .github/workflows/release-v04636-once.yml
+          git commit -m 'Release FlipAi v0.46.36'
+          git push origin HEAD:main
