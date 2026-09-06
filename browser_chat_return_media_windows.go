@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"strings"
 )
 
@@ -18,11 +19,15 @@ func isBrowserChatTurnExpression(expression string) bool {
 }
 
 type browserChatPageMedia struct {
-	Kind            string `json:"kind"`
-	Filename        string `json:"filename"`
-	MediaType       string `json:"mediaType"`
-	Base64          string `json:"base64"`
-	ConversationURL string `json:"conversationUrl"`
+	Kind            string  `json:"kind"`
+	Filename        string  `json:"filename"`
+	MediaType       string  `json:"mediaType"`
+	Base64          string  `json:"base64"`
+	ConversationURL string  `json:"conversationUrl"`
+	X               float64 `json:"x"`
+	Y               float64 `json:"y"`
+	Width           float64 `json:"width"`
+	Height          float64 `json:"height"`
 }
 
 // The scan is deliberately limited to the newest assistant response. That
@@ -81,7 +86,8 @@ const browserChatReturnedMediaJS = `/*` + browserChatReturnedMediaMarker + `*/(a
       }
     }catch(_){}
   }
-  return {kind:choice.kind,filename,mediaType,base64,conversationUrl:href};
+  const rect=choice.e.getBoundingClientRect?.()||{left:0,top:0,width:0,height:0};
+  return {kind:choice.kind,filename,mediaType,base64,conversationUrl:href,x:rect.left+scrollX,y:rect.top+scrollY,width:rect.width,height:rect.height};
 })()`
 
 func captureBrowserChatReturnedMediaAfterTurn(d voiceDevTools) {
@@ -97,6 +103,36 @@ func captureBrowserChatReturnedMediaAfterTurn(d voiceDevTools) {
 		decoded, err := base64.StdEncoding.DecodeString(page.Base64)
 		if err == nil {
 			data = decoded
+		}
+	}
+	// Some providers render generated images from protected CDN/blob URLs that
+	// JavaScript cannot fetch because of CORS. DevTools can still capture the
+	// exact rendered image element from FlipAi's own browser, so use that before
+	// falling back to a conversation link.
+	if strings.EqualFold(page.Kind, "image") && len(data) == 0 && page.Width >= 32 && page.Height >= 32 {
+		scale := 1.0
+		if longest := math.Max(page.Width, page.Height); longest > 2048 {
+			scale = 2048 / longest
+		}
+		var shot struct {
+			Data string `json:"data"`
+		}
+		if err := d.Call("Page.captureScreenshot", map[string]any{
+			"format": "png",
+			"clip": map[string]any{
+				"x":      math.Max(0, page.X),
+				"y":      math.Max(0, page.Y),
+				"width":  page.Width,
+				"height": page.Height,
+				"scale":  scale,
+			},
+			"captureBeyondViewport": true,
+		}, &shot); err == nil && strings.TrimSpace(shot.Data) != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(shot.Data); err == nil && len(decoded) > 0 {
+				data = decoded
+				page.Filename = "flipai-generated.png"
+				page.MediaType = "image/png"
+			}
 		}
 	}
 	// Round-trip through JSON once so malformed page values cannot sneak in
