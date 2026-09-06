@@ -62,8 +62,7 @@ func requestGoogleVoiceTextTarget(ctx context.Context, dataDir, phone, thread, b
 	readyDeadline := time.Now().Add(15 * time.Second)
 	for {
 		s := loadGoogleVoiceSMSRuntime(dataDir)
-		fresh := !s.LastProbeAt.IsZero() && time.Since(s.LastProbeAt) < 8*time.Second
-		if s.Running && s.Connected && s.SignedIn && s.ListenerRunning && s.Ready && fresh {
+		if googleVoiceSMSConnected(s) {
 			break
 		}
 		if err := ctx.Err(); err != nil {
@@ -155,17 +154,33 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 					continue
 				}
 				result := googleVoiceSMSOutboundResult{OK: true}
-				if time.Since(req.Created) > 5*time.Minute {
+				switch {
+				case time.Since(req.Created) > 5*time.Minute:
 					result.OK = false
 					result.Error = "Google Voice SMS request expired before the background connection could send it"
-				} else if req.ExactThread && normalizeGoogleVoiceSMSThread(req.Thread) == "" {
+				case req.ExactThread && normalizeGoogleVoiceSMSThread(req.Thread) == "":
 					result.OK = false
 					result.Error = "Google Voice reply blocked: exact conversation thread is invalid"
-				} else if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Thread, req.Body, req.ExactThread); err != nil {
-					result.OK = false
-					result.Error = err.Error()
-				} else {
-					mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) { s.LastOutboundAt = time.Now() })
+				default:
+					// The loop guard has to exist before Google does. Both ways
+					// FlipAi learns about a text -- its own inbox poll, and the
+					// updates the signed-in page receives by itself -- can see
+					// this one the instant Google accepts it, which is already
+					// too late for bookkeeping that waits for the send to
+					// return. Recording it first closes that window.
+					//
+					// A fingerprint left behind by a failed send only suppresses
+					// an identical inbound text for half an hour. Removing it
+					// would reopen the window for a text Google may in fact have
+					// delivered, and an answered reply is a paid SMS loop, so
+					// the harmless failure is the one to prefer.
+					rememberGoogleVoiceSMSSent(dataDir, req.Phone, req.Body)
+					if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Thread, req.Body, req.ExactThread); err != nil {
+						result.OK = false
+						result.Error = err.Error()
+					} else {
+						mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) { s.LastOutboundAt = time.Now() })
+					}
 				}
 				resultRaw, _ := json.Marshal(result)
 				resultPath := filepath.Join(googleVoiceSMSOutboxDir(dataDir), req.ID+".result.json")

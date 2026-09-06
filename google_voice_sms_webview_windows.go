@@ -221,6 +221,12 @@ func runGoogleVoiceSMSWebView(dataDir string, visible bool) error {
 			}
 		})
 	})
+	// Installed before any page script on every navigation, so the page's own
+	// calls to the Google Voice web service are wrapped rather than a copy the
+	// app already captured. This is what lets FlipAi read the conversation
+	// updates Google Voice is already receiving, and sign its own requests the
+	// way Google's client signs them.
+	w.Init(googleVoiceSMSNetworkCaptureJS)
 	w.Init(googleVoiceSMSPageMonitorJS)
 
 	dev := newWebViewDevTools(w)
@@ -257,6 +263,17 @@ func runGoogleVoiceSMSWebView(dataDir string, visible bool) error {
 	return nil
 }
 
+// runGoogleVoiceSMSBackgroundSupervisor is what makes one sign-in last. Once
+// Connected is recorded it silently restores the hidden SMS browser whenever it
+// is missing: after the sign-in window is closed, after FlipAi restarts, and
+// after Windows restarts. It never opens a sign-in window on its own.
+//
+// Running, Starting and LoginActive describe a process, so a state file that
+// outlived its process describes one that no longer exists. Believing those
+// stale flags is what left a connected install permanently down after a reboot:
+// a persisted Starting blocked the restart guard, and a persisted LoginActive
+// made the supervisor think a sign-in window was still open. Both are checked
+// against the real window before they are trusted.
 func runGoogleVoiceSMSBackgroundSupervisor(ctx context.Context, dataDir string) {
 	t := time.NewTicker(1500 * time.Millisecond)
 	defer t.Stop()
@@ -266,8 +283,27 @@ func runGoogleVoiceSMSBackgroundSupervisor(ctx context.Context, dataDir string) 
 		if err == nil {
 			if cfg, cfgErr := loadConfig(cfgPath, dataDir); cfgErr == nil {
 				s := loadGoogleVoiceSMSRuntime(dataDir)
+				alive := googleVoiceSMSProcessAlive()
+				// A live window writes to this state every second, so state that
+				// has not moved in 20 seconds with no window belongs to a
+				// process that is gone. A sign-in window that is merely still
+				// opening is therefore never mistaken for a dead one.
+				stale := time.Since(s.UpdatedAt) > 20*time.Second
+				if !alive && stale && (s.Running || s.Starting || s.Visible || s.LoginActive) {
+					mutateGoogleVoiceSMSRuntime(dataDir, func(v *GoogleVoiceSMSRuntimeState) {
+						v.Running = false
+						v.Starting = false
+						v.Visible = false
+						v.LoginActive = false
+						v.SignedIn = false
+						v.ListenerRunning = false
+						v.Ready = false
+						v.LastEvent = "background-restart-pending"
+					})
+					s = loadGoogleVoiceSMSRuntime(dataDir)
+				}
 				want := cfg.Gmail.Method == GmailMethodGoogleVoice && s.Connected && !s.LoginActive
-				if want && !googleVoiceSMSProcessAlive() && !s.Starting && time.Since(lastAttempt) > 5*time.Second {
+				if want && !alive && !s.Starting && time.Since(lastAttempt) > 5*time.Second {
 					lastAttempt = time.Now()
 					_ = platformEnsureGoogleVoiceSMSWorker(dataDir)
 				}

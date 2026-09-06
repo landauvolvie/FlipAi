@@ -4,8 +4,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +19,13 @@ import (
 var (
 	errGoogleVoiceSMSNotAuthenticated = errors.New("Google Voice SMS session is not authenticated")
 	googleVoiceSMSAPIMu               sync.Mutex
-	googleVoiceSMSHTTPClient          = &http.Client{Timeout: 12 * time.Second}
+	googleVoiceSMSHTTPClient          = &http.Client{Timeout: 20 * time.Second}
+
+	// googleVoiceSMSOriginMu guards the origin FlipAi has learned this session.
+	// Once the page's own traffic proves which origin Google signs with, every
+	// later request uses it instead of rediscovering it.
+	googleVoiceSMSOriginMu    sync.Mutex
+	googleVoiceSMSKnownOrigin string
 )
 
 type googleVoiceSMSCDPCookie struct {
@@ -35,10 +38,11 @@ type googleVoiceSMSCDPCookie struct {
 
 type googleVoiceSMSAPISession struct {
 	CookieHeader string
-	SAPISID      string
+	Cookies      map[string]string
 	AuthUser     string
 	APIKey       string
 	UserAgent    string
+	Template     googleVoiceSMSAuthTemplate
 }
 
 func googleVoiceSMSCookieAppliesToAPI(domain string) bool {
@@ -80,13 +84,36 @@ func googleVoiceSMSAPIAccountSlot(d voiceDevTools) string {
 	return "0"
 }
 
+// googleVoiceSMSCaptureTemplate asks the page for the last request it made to
+// the Voice web service. This is the authoritative source for the API key, the
+// client version, and -- through its authorization value -- the origin Google
+// signs with.
+func googleVoiceSMSCaptureTemplate(d voiceDevTools) googleVoiceSMSAuthTemplate {
+	var raw string
+	if err := voiceEval(d, googleVoiceSMSCaptureTemplateJS, false, &raw); err != nil {
+		return googleVoiceSMSAuthTemplate{}
+	}
+	return parseGoogleVoiceSMSAuthTemplate(raw)
+}
+
+// googleVoiceSMSCaptureDrain takes the inbox responses the page received on its
+// own since the last drain. These need no authentication work at all: they are
+// Google Voice's own answers, observed as they arrived.
+func googleVoiceSMSCaptureDrain(d voiceDevTools) []string {
+	var raw string
+	if err := voiceEval(d, googleVoiceSMSCaptureDrainJS, false, &raw); err != nil {
+		return nil
+	}
+	return parseGoogleVoiceSMSCaptureDrain(raw)
+}
+
 func googleVoiceSMSAPIKeyFromPage(d voiceDevTools) string {
 	const expression = `(()=>{try{for(const e of performance.getEntriesByType('resource')){const u=new URL(String(e.name||''));if(u.hostname==='clients6.google.com'&&u.pathname.includes('/voice/v1/voiceclient/')){const k=u.searchParams.get('key');if(k&&/^AIza[0-9A-Za-z_-]{20,}$/.test(k))return k}}}catch(_){}return ''})()`
 	var key string
 	if err := voiceEval(d, expression, false, &key); err == nil && strings.HasPrefix(key, "AIza") {
 		return key
 	}
-	return googleVoiceSMSFallbackAPIKey
+	return ""
 }
 
 func googleVoiceSMSAPIUserAgent(d voiceDevTools) string {
@@ -123,69 +150,105 @@ func googleVoiceSMSAPISessionFromBrowser(d voiceDevTools) (googleVoiceSMSAPISess
 			chosen[c.Name] = chosenCookie{value: c.Value, score: score}
 		}
 	}
-	var sapisid string
-	for _, name := range []string{"SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID", "APISID"} {
-		if c, ok := chosen[name]; ok && c.value != "" {
-			sapisid = c.value
+	values := make(map[string]string, len(chosen))
+	names := make([]string, 0, len(chosen))
+	for name, c := range chosen {
+		values[name] = c.value
+		names = append(names, name)
+	}
+	// Every scheme Google offers is signed, so a session that carries only the
+	// partitioned cookies still authenticates. Requiring plain SAPISID alone
+	// turned such a session into a permanent "not signed in".
+	hasSigningCookie := false
+	for _, scheme := range googleVoiceSMSAuthSchemes {
+		if strings.TrimSpace(values[scheme.Cookie]) != "" {
+			hasSigningCookie = true
 			break
 		}
 	}
-	if sapisid == "" {
+	if !hasSigningCookie {
 		return googleVoiceSMSAPISession{}, errGoogleVoiceSMSNotAuthenticated
-	}
-	names := make([]string, 0, len(chosen))
-	for name := range chosen {
-		names = append(names, name)
 	}
 	sort.Strings(names)
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
-		parts = append(parts, name+"="+chosen[name].value)
+		parts = append(parts, name+"="+values[name])
+	}
+
+	template := googleVoiceSMSCaptureTemplate(d)
+	key := template.Key
+	if key == "" {
+		key = googleVoiceSMSAPIKeyFromPage(d)
+	}
+	if key == "" {
+		key = googleVoiceSMSFallbackAPIKey
+	}
+	if origin, ok := googleVoiceSMSOriginFromAuthorization(template.header("authorization"), values); ok {
+		googleVoiceSMSRememberOrigin(origin)
 	}
 	return googleVoiceSMSAPISession{
 		CookieHeader: strings.Join(parts, "; "),
-		SAPISID:      sapisid,
+		Cookies:      values,
 		AuthUser:     googleVoiceSMSAPIAccountSlot(d),
-		APIKey:       googleVoiceSMSAPIKeyFromPage(d),
+		APIKey:       key,
 		UserAgent:    googleVoiceSMSAPIUserAgent(d),
+		Template:     template,
 	}, nil
 }
 
-func googleVoiceSMSSAPISIDHash(sapisid string, now time.Time) string {
-	ts := strconv.FormatInt(now.Unix(), 10)
-	sum := sha1.Sum([]byte(ts + " " + sapisid + " https://voice.google.com"))
-	return "SAPISIDHASH " + ts + "_" + hex.EncodeToString(sum[:])
+func googleVoiceSMSRememberOrigin(origin string) {
+	googleVoiceSMSOriginMu.Lock()
+	defer googleVoiceSMSOriginMu.Unlock()
+	googleVoiceSMSKnownOrigin = origin
 }
 
-func googleVoiceSMSAPIRequest(d voiceDevTools, method string, body []byte) ([]byte, error) {
-	googleVoiceSMSAPIMu.Lock()
-	defer googleVoiceSMSAPIMu.Unlock()
-
-	session, err := googleVoiceSMSAPISessionFromBrowser(d)
-	if err != nil {
-		return nil, err
+// googleVoiceSMSOriginOrder is which origins to sign with, best first. A proven
+// origin is tried alone; without proof both are tried, because sending the
+// wrong one is indistinguishable from being signed out.
+func googleVoiceSMSOriginOrder() []string {
+	googleVoiceSMSOriginMu.Lock()
+	known := googleVoiceSMSKnownOrigin
+	googleVoiceSMSOriginMu.Unlock()
+	if known != "" {
+		return []string{known}
 	}
+	return append([]string(nil), googleVoiceSMSAuthOrigins...)
+}
+
+func googleVoiceSMSAPIDefaultHeaders() map[string]string {
+	return map[string]string{
+		"accept":                               "*/*",
+		"content-type":                         "application/json+protobuf",
+		"x-requested-with":                     "XMLHttpRequest",
+		"x-javascript-user-agent":              "google-api-javascript-client/1.1.0",
+		"x-origin":                             "https://voice.google.com",
+		"x-referer":                            "https://voice.google.com",
+		"x-goog-encode-response-if-executable": "base64",
+		"sec-fetch-dest":                       "empty",
+		"sec-fetch-mode":                       "cors",
+		"sec-fetch-site":                       "same-origin",
+	}
+}
+
+func googleVoiceSMSAPIRequestOnce(session googleVoiceSMSAPISession, method string, body []byte, origin string) ([]byte, error) {
 	endpoint := googleVoiceSMSAPIBase + "/" + strings.TrimPrefix(method, "/") + "?alt=json&key=" + url.QueryEscape(session.APIKey)
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Content-Type", "application/json+protobuf")
-	req.Header.Set("Authorization", googleVoiceSMSSAPISIDHash(session.SAPISID, time.Now()))
+	merged := googleVoiceSMSMergedHeaders(googleVoiceSMSAPIDefaultHeaders(), session.Template)
+	for i := 0; i+1 < len(merged); i += 2 {
+		req.Header.Set(merged[i], merged[i+1])
+	}
+	authorization := googleVoiceSMSAuthorization(session.Cookies, origin, time.Now())
+	if authorization == "" {
+		return nil, errGoogleVoiceSMSNotAuthenticated
+	}
+	req.Header.Set("Authorization", authorization)
 	req.Header.Set("Cookie", session.CookieHeader)
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("X-JavaScript-User-Agent", "google-api-javascript-client/1.1.0")
-	req.Header.Set("X-Origin", "https://voice.google.com")
-	req.Header.Set("X-Referer", "https://voice.google.com")
 	req.Header.Set("X-Goog-AuthUser", session.AuthUser)
-	req.Header.Set("X-Goog-Encode-Response-If-Executable", "base64")
-	req.Header.Set("X-Client-Version", "512793257")
 	req.Header.Set("Origin", "https://clients6.google.com")
 	req.Header.Set("Referer", "https://clients6.google.com/static/proxy.html?usegapi=1")
-	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Sec-Fetch-Mode", "cors")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	if session.UserAgent != "" {
 		req.Header.Set("User-Agent", session.UserAgent)
 	}
@@ -197,6 +260,9 @@ func googleVoiceSMSAPIRequest(d voiceDevTools, method string, body []byte) ([]by
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, errGoogleVoiceSMSNotAuthenticated
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, errors.New("Google Voice web service is rate limiting FlipAi; it will retry more slowly")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("Google Voice web service returned HTTP %d", resp.StatusCode)
@@ -212,12 +278,39 @@ func googleVoiceSMSAPIRequest(d voiceDevTools, method string, body []byte) ([]by
 	return raw, nil
 }
 
-func googleVoiceSMSAPIFetchInbox(d voiceDevTools) ([]googleVoiceSMSAPIMessage, error) {
-	raw, err := googleVoiceSMSAPIRequest(d, "api2thread/list", googleVoiceSMSAPIListBody())
+func googleVoiceSMSAPIRequest(d voiceDevTools, method string, body []byte) ([]byte, error) {
+	googleVoiceSMSAPIMu.Lock()
+	defer googleVoiceSMSAPIMu.Unlock()
+
+	session, err := googleVoiceSMSAPISessionFromBrowser(d)
 	if err != nil {
 		return nil, err
 	}
-	return parseGoogleVoiceSMSAPIListResponse(raw, googleVoiceSMSAPIAccountSlot(d))
+	var lastErr error
+	for _, origin := range googleVoiceSMSOriginOrder() {
+		raw, err := googleVoiceSMSAPIRequestOnce(session, method, body, origin)
+		if err == nil {
+			googleVoiceSMSRememberOrigin(origin)
+			return raw, nil
+		}
+		lastErr = err
+		if !errors.Is(err, errGoogleVoiceSMSNotAuthenticated) {
+			return nil, err
+		}
+	}
+	// A proven origin that has started failing is no longer proven: forget it
+	// so the next request rediscovers the right one instead of repeating a
+	// request Google now rejects.
+	googleVoiceSMSRememberOrigin("")
+	return nil, lastErr
+}
+
+func googleVoiceSMSAPIFetchInbox(d voiceDevTools) ([]googleVoiceSMSAPIMessage, googleVoiceSMSAPIStats, error) {
+	raw, err := googleVoiceSMSAPIRequest(d, "api2thread/list", googleVoiceSMSAPIListBody())
+	if err != nil {
+		return nil, googleVoiceSMSAPIStats{}, err
+	}
+	return parseGoogleVoiceSMSAPIListResponseDetailed(raw, googleVoiceSMSAPIAccountSlot(d))
 }
 
 func googleVoiceSMSAPISend(d voiceDevTools, threadID, body string) error {
@@ -302,26 +395,104 @@ func processGoogleVoiceSMSAPIPoll(dataDir string, messages []googleVoiceSMSAPIMe
 	return saveGoogleVoiceSMSAPISeenState(dataDir, state)
 }
 
+// The inbox is read two ways at once, and either one alone is enough.
+//
+//   - Passively: the page's own calls to the Voice web service are observed,
+//     so a text that arrives while Google Voice is refreshing itself is
+//     already in hand before FlipAi asks for anything.
+//   - Actively: FlipAi asks the same service directly, so a quiet page can
+//     never stall delivery.
+//
+// The active ask backs off when Google is unhappy. Polling a private endpoint
+// on a fixed sub-second timer is what gets a session rate limited, and a rate
+// limited session looks exactly like a broken one.
+const (
+	googleVoiceSMSPollInterval    = 3 * time.Second
+	googleVoiceSMSPollMaxInterval = 60 * time.Second
+	googleVoiceSMSPollTick        = 500 * time.Millisecond
+)
+
+func googleVoiceSMSDrainCaptured(dataDir string, d voiceDevTools) (int, googleVoiceSMSAPIStats) {
+	var total googleVoiceSMSAPIStats
+	captured := 0
+	slot := ""
+	for _, raw := range googleVoiceSMSCaptureDrain(d) {
+		if slot == "" {
+			slot = googleVoiceSMSAPIAccountSlot(d)
+		}
+		messages, stats, err := parseGoogleVoiceSMSAPIListResponseDetailed([]byte(raw), slot)
+		if err != nil {
+			continue
+		}
+		captured++
+		total.Threads += stats.Threads
+		total.Items += stats.Items
+		total.Undirected += stats.Undirected
+		total.UnknownTypes = append(total.UnknownTypes, stats.UnknownTypes...)
+		if err := processGoogleVoiceSMSAPIPoll(dataDir, messages); err != nil {
+			mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+				s.LastNote = "Observed inbox update was not delivered: " + err.Error()
+			})
+		}
+	}
+	return captured, total
+}
+
 func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan struct{}) {
 	if googleVoiceSMSCallProcess() || d == nil {
 		return
 	}
+	interval := googleVoiceSMSPollInterval
+	var nextPoll time.Time
+
 	poll := func() {
-		messages, err := googleVoiceSMSAPIFetchInbox(d)
+		captured, capturedStats := googleVoiceSMSDrainCaptured(dataDir, d)
+		messages, stats, err := googleVoiceSMSAPIFetchInbox(d)
 		if err == nil {
 			err = processGoogleVoiceSMSAPIPoll(dataDir, messages)
 		}
 		now := time.Now()
 		if err != nil {
+			// An observed update still proves the listener is alive and the
+			// session is signed in, so a failed active ask does not tear down a
+			// connection that is demonstrably working.
+			if captured > 0 {
+				interval = googleVoiceSMSPollInterval
+				note := googleVoiceSMSListenerNote(capturedStats, captured)
+				mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+					s.Running, s.Starting = true, false
+					s.Connected, s.SignedIn = true, true
+					s.ListenerRunning, s.Ready = true, true
+					s.LastProbeAt = now
+					s.LastEvent = "background-observed-only"
+					s.LastError = ""
+					s.LastNote = note + "; direct request failed: " + err.Error()
+					s.ObservedRows = capturedStats.Threads
+					s.ObserverCandidates = capturedStats.Items
+				})
+				return
+			}
+			message := err.Error()
+			if errors.Is(err, errGoogleVoiceSMSNotAuthenticated) {
+				message = "Google Voice did not accept this browser session; open Connections and press Connect under Google Voice SMS to sign in again"
+			}
+			if interval < googleVoiceSMSPollMaxInterval {
+				interval *= 2
+				if interval > googleVoiceSMSPollMaxInterval {
+					interval = googleVoiceSMSPollMaxInterval
+				}
+			}
 			mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
 				s.ListenerRunning = false
 				s.Ready = false
 				s.LastProbeAt = now
 				s.LastEvent = "background-api-error"
-				s.LastError = err.Error()
+				s.LastError = message
 			})
 			return
 		}
+		interval = googleVoiceSMSPollInterval
+		note := googleVoiceSMSListenerNote(stats, captured)
 		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
 			s.Running = true
 			s.Starting = false
@@ -332,18 +503,31 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 			s.LastProbeAt = now
 			s.LastEvent = "background-api-ready"
 			s.LastError = ""
+			s.LastNote = note
+			s.ObservedRows = stats.Threads
+			s.ObserverCandidates = stats.Items
 		})
 	}
 
-	poll()
-	ticker := time.NewTicker(1200 * time.Millisecond)
+	ticker := time.NewTicker(googleVoiceSMSPollTick)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-stop:
 			return
 		case <-ticker.C:
-			poll()
 		}
+		// The page owns the sign-in question. Polling before it has loaded and
+		// reported would only record errors about a browser that is still
+		// starting up.
+		if !loadGoogleVoiceSMSRuntime(dataDir).SignedIn {
+			nextPoll = time.Time{}
+			continue
+		}
+		if time.Now().Before(nextPoll) {
+			continue
+		}
+		poll()
+		nextPoll = time.Now().Add(interval)
 	}
 }

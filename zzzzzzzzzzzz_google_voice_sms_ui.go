@@ -74,7 +74,7 @@ func init() {
     else if(loginActive){button.textContent='Cancel';button.className='btn';}
     else if(selected){button.textContent='Retry sign-in';button.className='btn accent';}
     else{button.textContent='Connect';button.className='btn accent';}
-    if(note&&connected)note.textContent='Direct Google Voice SMS is signed in and the Messages listener is verified ready.';
+    if(note&&connected)note.textContent='Direct Google Voice SMS is signed in and the Messages listener is verified ready.'+(s.listenerNote?' Last check: '+s.listenerNote+'.':'');
     else if(note&&loginActive)note.textContent='Sign in to Google Voice in the separate window FlipAi opened. This SMS login is intentionally separate from calling.';
     else if(note&&s.starting)note.textContent='FlipAi is opening the separate Google Voice SMS sign-in window.';
     else if(note&&selected&&s.listenerError)note.textContent=s.listenerError;

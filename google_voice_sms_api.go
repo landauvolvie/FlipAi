@@ -40,17 +40,88 @@ type googleVoiceSMSAPIListResponse struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
 	Thread []struct {
-		ID   string `json:"id"`
-		Item []struct {
-			ID          string          `json:"id"`
-			StartTime   json.RawMessage `json:"startTime"`
-			DID         string          `json:"did"`
-			Status      string          `json:"status"`
-			MessageText string          `json:"messageText"`
-			Type        string          `json:"type"`
-			MessageID   string          `json:"messageId"`
-		} `json:"item"`
+		ID   string                      `json:"id"`
+		Item []googleVoiceSMSAPIListItem `json:"item"`
 	} `json:"thread"`
+}
+
+type googleVoiceSMSAPIListItem struct {
+	ID          string          `json:"id"`
+	StartTime   json.RawMessage `json:"startTime"`
+	DID         string          `json:"did"`
+	Status      string          `json:"status"`
+	MessageText string          `json:"messageText"`
+	Type        json.RawMessage `json:"type"`
+	MessageID   string          `json:"messageId"`
+
+	// Google has shipped more than one encoding for an item's direction over
+	// the life of this endpoint. These are the alternatives that have been
+	// seen alongside "type"; whichever one is present is used.
+	Outgoing   *bool  `json:"outgoing,omitempty"`
+	IsOutgoing *bool  `json:"isOutgoing,omitempty"`
+	Direction  string `json:"direction,omitempty"`
+}
+
+// googleVoiceSMSAPIStats is what one inbox response looked like, so a listener
+// that is authenticated but returning nothing usable can say which of the two
+// it is instead of silently doing nothing.
+type googleVoiceSMSAPIStats struct {
+	Threads      int
+	Items        int
+	Undirected   int
+	UnknownTypes []string
+}
+
+// googleVoiceSMSAPIDirectionWord normalizes the many spellings Google has used
+// for a direction ("smsIn", "SMS_IN", "sms-in", "INCOMING") to one token.
+func googleVoiceSMSAPIDirectionWord(raw string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(raw)) {
+		if r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// googleVoiceSMSAPIItemDirection decides whether an item is a text FlipAi
+// received. It answers "unknown" rather than guessing: an outgoing message
+// mistaken for an incoming one would make FlipAi answer its own reply forever,
+// so an item whose direction cannot be established is skipped and reported.
+func googleVoiceSMSAPIItemDirection(item googleVoiceSMSAPIListItem) (inbound bool, outgoing bool, known bool) {
+	switch {
+	case item.Outgoing != nil:
+		return !*item.Outgoing, *item.Outgoing, true
+	case item.IsOutgoing != nil:
+		return !*item.IsOutgoing, *item.IsOutgoing, true
+	}
+	for _, candidate := range []string{googleVoiceSMSAPITypeWord(item.Type), item.Direction} {
+		switch googleVoiceSMSAPIDirectionWord(candidate) {
+		case "smsin", "in", "incoming", "inbound", "smsinbound", "received", "receivedsms":
+			return true, false, true
+		case "smsout", "out", "outgoing", "outbound", "smsoutbound", "sent", "sentsms":
+			return false, true, true
+		}
+	}
+	return false, false, false
+}
+
+// googleVoiceSMSAPITypeWord reads the "type" field whether Google encoded it as
+// a JSON string or a bare number. A number carries no direction FlipAi can
+// safely interpret, so it is returned verbatim for the diagnostic instead.
+func googleVoiceSMSAPITypeWord(raw json.RawMessage) string {
+	v := strings.TrimSpace(string(raw))
+	if v == "" || v == "null" {
+		return ""
+	}
+	if strings.HasPrefix(v, `"`) {
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return ""
+		}
+		return strings.TrimSpace(s)
+	}
+	return v
 }
 
 func googleVoiceSMSAPIListBody() []byte {
@@ -131,6 +202,12 @@ func googleVoiceSMSAPICursorID(threadID, itemID, messageID, kind, body string, a
 }
 
 func parseGoogleVoiceSMSAPIListResponse(raw []byte, accountSlot string) ([]googleVoiceSMSAPIMessage, error) {
+	msgs, _, err := parseGoogleVoiceSMSAPIListResponseDetailed(raw, accountSlot)
+	return msgs, err
+}
+
+func parseGoogleVoiceSMSAPIListResponseDetailed(raw []byte, accountSlot string) ([]googleVoiceSMSAPIMessage, googleVoiceSMSAPIStats, error) {
+	var stats googleVoiceSMSAPIStats
 	accountSlot = strings.TrimSpace(accountSlot)
 	if accountSlot == "" || !asciiDigitsOnly(accountSlot) {
 		accountSlot = "0"
@@ -138,15 +215,17 @@ func parseGoogleVoiceSMSAPIListResponse(raw []byte, accountSlot string) ([]googl
 	raw = []byte(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(raw)), ")]}'")))
 	var decoded googleVoiceSMSAPIListResponse
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, errors.New("Google Voice web service returned invalid inbox data")
+		return nil, stats, errors.New("Google Voice web service returned invalid inbox data")
 	}
 	if decoded.Error != nil {
 		msg := strings.TrimSpace(decoded.Error.Message)
 		if msg == "" {
 			msg = "request failed"
 		}
-		return nil, fmt.Errorf("Google Voice web service: %s", msg)
+		return nil, stats, fmt.Errorf("Google Voice web service: %s", msg)
 	}
+	stats.Threads = len(decoded.Thread)
+	unknown := map[string]struct{}{}
 	out := make([]googleVoiceSMSAPIMessage, 0, 64)
 	for _, thread := range decoded.Thread {
 		threadID := strings.TrimSpace(thread.ID)
@@ -160,11 +239,19 @@ func parseGoogleVoiceSMSAPIListResponse(raw []byte, accountSlot string) ([]googl
 			if body == "" {
 				continue
 			}
-			kind := strings.ToLower(strings.TrimSpace(item.Type))
-			if kind != "smsin" && kind != "smsout" && kind != "sms" {
+			stats.Items++
+			kind := googleVoiceSMSAPITypeWord(item.Type)
+			_, outgoing, known := googleVoiceSMSAPIItemDirection(item)
+			if !known {
+				// Fail closed: an item FlipAi cannot place is never treated as
+				// something to answer. Record the encoding so the listener can
+				// say exactly what it did not recognize.
+				stats.Undirected++
+				if label := strings.TrimSpace(kind); label != "" {
+					unknown[label] = struct{}{}
+				}
 				continue
 			}
-			outgoing := kind == "smsout"
 			sender := normalizeUSPhone(item.DID)
 			at := parseGoogleVoiceSMSAPIStartTime(item.StartTime)
 			out = append(out, googleVoiceSMSAPIMessage{
@@ -177,6 +264,10 @@ func parseGoogleVoiceSMSAPIListResponse(raw []byte, accountSlot string) ([]googl
 			})
 		}
 	}
+	for label := range unknown {
+		stats.UnknownTypes = append(stats.UnknownTypes, label)
+	}
+	sort.Strings(stats.UnknownTypes)
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].At.Equal(out[j].At) {
 			return out[i].CursorID < out[j].CursorID
@@ -189,11 +280,119 @@ func parseGoogleVoiceSMSAPIListResponse(raw []byte, accountSlot string) ([]googl
 		}
 		return out[i].At.Before(out[j].At)
 	})
-	return out, nil
+	return out, stats, nil
+}
+
+// googleVoiceSMSListenerNote turns what one inbox check saw into something a
+// person can act on. A listener that is authenticated but delivering nothing is
+// the hardest state to debug from the outside, so it says which of the possible
+// reasons applies rather than reporting a bare "ready".
+func googleVoiceSMSListenerNote(stats googleVoiceSMSAPIStats, captured int) string {
+	var parts []string
+	if captured > 0 {
+		parts = append(parts, fmt.Sprintf("%d inbox update(s) observed from the page", captured))
+	}
+	parts = append(parts, fmt.Sprintf("%d conversation(s), %d message(s)", stats.Threads, stats.Items))
+	if stats.Undirected > 0 {
+		label := strings.Join(stats.UnknownTypes, ", ")
+		if label == "" {
+			label = "unlabelled"
+		}
+		parts = append(parts, fmt.Sprintf("%d message(s) skipped: unrecognized conversation item type (%s)", stats.Undirected, label))
+	}
+	if stats.Threads == 0 {
+		parts = append(parts, "this Google account's Voice inbox is empty or belongs to a different account")
+	}
+	return strings.Join(parts, "; ")
 }
 
 func googleVoiceSMSAPIStatePath(dataDir string) string {
 	return filepath.Join(dataDir, "google-voice-sms-api-state.json")
+}
+
+// A text FlipAi sent must never come back as a text FlipAi answers. Direction
+// is read from the conversation item first, but an SMS loop is expensive and
+// self-sustaining, so a second, independent guard remembers what was just sent
+// and refuses to treat it as inbound no matter how it is labelled.
+const (
+	googleVoiceSMSSentMemory = 30 * time.Minute
+	googleVoiceSMSSentLimit  = 200
+)
+
+type googleVoiceSMSSentEntry struct {
+	Fingerprint string    `json:"fingerprint"`
+	At          time.Time `json:"at"`
+}
+
+type googleVoiceSMSSentLedger struct {
+	Sent []googleVoiceSMSSentEntry `json:"sent,omitempty"`
+}
+
+func googleVoiceSMSSentPath(dataDir string) string {
+	return filepath.Join(dataDir, "google-voice-sms-sent.json")
+}
+
+func googleVoiceSMSSentFingerprint(phone, body string) string {
+	phone = normalizeUSPhone(phone)
+	body = strings.Join(strings.Fields(body), " ")
+	if phone == "" || body == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(phone + "\x00" + body))
+	return hex.EncodeToString(sum[:16])
+}
+
+func loadGoogleVoiceSMSSentLedger(dataDir string) googleVoiceSMSSentLedger {
+	var ledger googleVoiceSMSSentLedger
+	if raw, err := os.ReadFile(googleVoiceSMSSentPath(dataDir)); err == nil {
+		_ = json.Unmarshal(raw, &ledger)
+	}
+	cutoff := time.Now().Add(-googleVoiceSMSSentMemory)
+	kept := ledger.Sent[:0]
+	for _, entry := range ledger.Sent {
+		if entry.Fingerprint != "" && entry.At.After(cutoff) {
+			kept = append(kept, entry)
+		}
+	}
+	ledger.Sent = kept
+	return ledger
+}
+
+func rememberGoogleVoiceSMSSent(dataDir, phone, body string) {
+	fingerprint := googleVoiceSMSSentFingerprint(phone, body)
+	if fingerprint == "" {
+		return
+	}
+	ledger := loadGoogleVoiceSMSSentLedger(dataDir)
+	ledger.Sent = append(ledger.Sent, googleVoiceSMSSentEntry{Fingerprint: fingerprint, At: time.Now()})
+	if len(ledger.Sent) > googleVoiceSMSSentLimit {
+		ledger.Sent = append([]googleVoiceSMSSentEntry(nil), ledger.Sent[len(ledger.Sent)-googleVoiceSMSSentLimit:]...)
+	}
+	raw, err := json.Marshal(ledger)
+	if err != nil || os.MkdirAll(dataDir, 0700) != nil {
+		return
+	}
+	path := googleVoiceSMSSentPath(dataDir)
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, raw, 0600) != nil {
+		return
+	}
+	if os.Rename(tmp, path) != nil {
+		_ = os.Remove(tmp)
+	}
+}
+
+func googleVoiceSMSWasSentRecently(dataDir, phone, body string) bool {
+	fingerprint := googleVoiceSMSSentFingerprint(phone, body)
+	if fingerprint == "" {
+		return false
+	}
+	for _, entry := range loadGoogleVoiceSMSSentLedger(dataDir).Sent {
+		if entry.Fingerprint == fingerprint {
+			return true
+		}
+	}
+	return false
 }
 
 func loadGoogleVoiceSMSAPISeenState(dataDir string) googleVoiceSMSAPISeenState {

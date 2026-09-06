@@ -66,8 +66,7 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 	}
 	writeStatus := func(w http.ResponseWriter, isSelected bool) {
 		sms := loadGoogleVoiceSMSRuntime(dataDir)
-		fresh := !sms.LastProbeAt.IsZero() && time.Since(sms.LastProbeAt) < 8*time.Second
-		connected := isSelected && sms.Running && sms.Connected && sms.SignedIn && sms.ListenerRunning && sms.Ready && fresh
+		connected := isSelected && googleVoiceSMSConnected(sms)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -83,6 +82,9 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 			"listenerReady":   connected,
 			"listenerPage":    sms.Page,
 			"listenerError":   sms.LastError,
+			"listenerNote":    sms.LastNote,
+			"observedThreads": sms.ObservedRows,
+			"observedItems":   sms.ObserverCandidates,
 			"lastEvent":       sms.LastEvent,
 			"lastProbeAt":     sms.LastProbeAt,
 			"lastInboundAt":   sms.LastInboundAt,
@@ -125,7 +127,7 @@ func startGoogleVoiceSMSControlServer(dataDir, cfgPath, statePath string) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok": true,
+			"ok":      true,
 			"message": "Google Voice SMS sign-in opened. Sign in in the separate window FlipAi opened; Connected will appear only after the Messages page is verified.",
 		})
 	}))
