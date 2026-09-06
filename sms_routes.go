@@ -54,8 +54,10 @@ func smsRouteSpecs(_ Config) []smsRouteSpec {
 }
 
 func configuredSMSRouteAliases(cfg Config) []smsRouteSpec {
-	// This preserves existing customized prefixes and direct-parser tests while
-	// making the new grouped shortcuts the primary public contract.
+	// Existing installs may have customized the old single-agent prefixes. Keep
+	// those aliases readable, but never let them override a valid new public
+	// shortcut. They are only a fallback when the new destination is not allowed
+	// for the sender.
 	return []smsRouteSpec{
 		{ID: smsRouteCodex, Agent: "C", Prefix: configuredCodexPrefix(cfg)},
 		{ID: smsRouteClaudeCodeLocal, Agent: "A", Prefix: configuredClaudePrefix(cfg)},
@@ -105,29 +107,58 @@ func routeDisplayName(cfg Config, routeID, agent string) string {
 	return agentDisplayName(agent)
 }
 
-func explicitSMSRoute(raw string, cfg Config) string {
+func smsCommandCandidates(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return ""
+		return nil
 	}
 	candidates := []string{raw}
 	if fields := strings.Fields(raw); len(fields) > 1 {
 		candidates = append(candidates, strings.TrimSpace(strings.TrimPrefix(raw, fields[0])))
 	}
+	return candidates
+}
+
+func routeMatchesCommand(candidate string, route smsRouteSpec, newWord string) bool {
+	if route.Prefix == "" {
+		return false
+	}
+	if _, ok := stripAgentCommandPrefix(candidate, route.Prefix); ok {
+		return true
+	}
+	return isAgentNewSession(candidate, route.Prefix, newWord)
+}
+
+func explicitSMSRoute(raw string, cfg Config) string {
 	newWord := configuredNewSessionCommand(cfg)
-	for _, candidate := range candidates {
+	for _, candidate := range smsCommandCandidates(raw) {
 		for _, route := range smsRouteSpecs(cfg) {
-			if _, ok := stripAgentCommandPrefix(candidate, route.Prefix); ok || isAgentNewSession(candidate, route.Prefix, newWord) {
+			if routeMatchesCommand(candidate, route, newWord) {
 				return route.ID
 			}
 		}
 		for _, route := range configuredSMSRouteAliases(cfg) {
-			if _, ok := stripAgentCommandPrefix(candidate, route.Prefix); ok || isAgentNewSession(candidate, route.Prefix, newWord) {
+			if routeMatchesCommand(candidate, route, newWord) {
 				return route.ID
 			}
 		}
 	}
 	return ""
+}
+
+func explicitAllowedConfiguredAlias(raw string, cfg Config, sourceAgent string) (smsRouteSpec, bool) {
+	newWord := configuredNewSessionCommand(cfg)
+	for _, candidate := range smsCommandCandidates(raw) {
+		for _, alias := range configuredSMSRouteAliases(cfg) {
+			if !routeMatchesCommand(candidate, alias, newWord) || !smsRouteAllowed(sourceAgent, alias) {
+				continue
+			}
+			if route, ok := smsRouteByID(cfg, alias.ID); ok {
+				return route, true
+			}
+		}
+	}
+	return smsRouteSpec{}, false
 }
 
 func smsRouteAllowed(sourceAgent string, route smsRouteSpec) bool {
@@ -175,10 +206,18 @@ func selectStickySMSRoute(raw string, cfg Config, sourceAgent, sticky string) (s
 		if !ok {
 			return smsRouteSpec{}, fmt.Errorf("unknown SMS route %q", explicit)
 		}
-		if !smsRouteAllowed(sourceAgent, route) {
-			return smsRouteSpec{}, wrongAgentForNumber(sourceAgent, route.Agent)
+		if smsRouteAllowed(sourceAgent, route) {
+			return route, nil
 		}
-		return route, nil
+		// A new public shortcut can collide with an old configured prefix (for
+		// example A used to mean local Claude and now means Claude Chat). If the
+		// sender is not authorized for the new destination, preserve the old
+		// configured route as a migration fallback rather than silently widening
+		// permissions. Once the new destination is allowed, the new meaning wins.
+		if legacy, ok := explicitAllowedConfiguredAlias(raw, cfg, sourceAgent); ok {
+			return legacy, nil
+		}
+		return smsRouteSpec{}, wrongAgentForNumber(sourceAgent, route.Agent)
 	}
 	if stickyID := decodeStickySMSRoute(sticky); stickyID != "" {
 		if route, ok := smsRouteByID(cfg, stickyID); ok && smsRouteAllowed(sourceAgent, route) {
