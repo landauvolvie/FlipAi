@@ -36,6 +36,12 @@ const (
 	// generic 8-second Google Voice deadline would falsely report failure while
 	// ChatGPT continued answering in the page.
 	chatGPTTurnDevToolsTimeout = 95 * time.Second
+
+	// A Google Voice UI send waits for the real composer to clear, an outgoing
+	// bubble to appear, or a page error to surface. That confirmation window is
+	// intentionally longer than an ordinary probe but much shorter than a model
+	// turn.
+	googleVoiceSMSUITurnDevToolsTimeout = 15 * time.Second
 )
 
 func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
@@ -47,9 +53,9 @@ func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
 }
 
 // webViewDevToolsCallTimeout keeps the short Google Voice timeout as the
-// default, but recognizes FlipAi's long-running ChatGPT turn driver and gives
-// only that awaited expression enough time to finish. This channel is shared by
-// both private WebViews, so a single global timeout is not correct for both.
+// default, but recognizes long-running page turns and gives only those awaited
+// expressions enough time to finish. This channel is shared by the private
+// browser sessions, so a single global timeout is not correct for all of them.
 func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	if method != "Runtime.evaluate" {
 		return voiceDevToolsTimeout
@@ -66,6 +72,9 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 			strings.Contains(expression, "model-response") ||
 			strings.Contains(expression, "grokResponse")) {
 		return chatGPTTurnDevToolsTimeout
+	}
+	if await && strings.Contains(expression, googleVoiceSMSUITurnMarker) {
+		return googleVoiceSMSUITurnDevToolsTimeout
 	}
 	// A Google Voice web-service request runs in the page and can take as long
 	// as any network call. The generic probe deadline is far shorter, and a
