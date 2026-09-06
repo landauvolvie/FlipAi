@@ -18,10 +18,10 @@ func authorizeClaudeChatRaw(raw string, cfg Config) (string, error) {
 	}
 	f := strings.Fields(raw)
 	if len(f) < 2 {
-		return "", errors.New("missing the Claude Chat security code or the command")
+		return "", errors.New("missing the Claude security code or the command")
 	}
 	if !verifyAgentCode(s, f[0]) {
-		return "", errors.New("invalid SMS security code for Claude Chat")
+		return "", errors.New("invalid SMS security code for Claude")
 	}
 	return strings.TrimSpace(strings.TrimPrefix(raw, f[0])), nil
 }
@@ -44,7 +44,7 @@ func parseClaudeChatSMSCommand(raw string, cfg Config) (remoteCommand, error) {
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return remoteCommand{}, errors.New("empty Claude Chat command")
+		return remoteCommand{}, errors.New("empty Claude command")
 	}
 	return remoteCommand{Agent: "H", Text: text}, nil
 }
@@ -56,14 +56,14 @@ type claudeChatSMSReply struct {
 	ConversationID string `json:"conversationId"`
 }
 
-func claudeChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+func claudeChatBrowserSendMode(ctx context.Context, dataDir, prompt, mode string) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureClaudeChatReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
 		return "", err
 	}
-	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
+	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
 	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
 	b, code, err := claudeChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
@@ -79,9 +79,13 @@ func claudeChatBrowserSend(ctx context.Context, dataDir, prompt string) (string,
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" {
-		return "", errors.New("Claude Chat returned an empty reply")
+		return "", errors.New("Claude returned an empty reply")
 	}
 	return strings.TrimSpace(out.Reply), nil
+}
+
+func claudeChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+	return claudeChatBrowserSendMode(ctx, dataDir, prompt, browserModeChat)
 }
 
 func claudeChatBrowserNewConversation(ctx context.Context, dataDir string) error {
@@ -92,7 +96,7 @@ func claudeChatBrowserNewConversation(ctx context.Context, dataDir string) error
 		return err
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	b, code, err := claudeChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`))
+	b, code, err := claudeChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{"mode":"chat"}`))
 	cancel()
 	if err != nil {
 		return err
@@ -103,7 +107,7 @@ func claudeChatBrowserNewConversation(ctx context.Context, dataDir string) error
 		if out.Detail != "" {
 			return errors.New(out.Detail)
 		}
-		return fmt.Errorf("Claude Chat new-chat request returned HTTP %d", code)
+		return fmt.Errorf("Claude new-chat request returned HTTP %d", code)
 	}
 	return nil
 }
@@ -121,7 +125,11 @@ func (b *Bridge) composeClaudeChatSMSPrompt(command string) string {
 }
 
 func (b *Bridge) runClaudeChatSMS(ctx context.Context, command string) (string, error) {
-	return claudeChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeClaudeChatSMSPrompt(command))
+	mode, command := extractBrowserModeCommand(command)
+	if mode == "" {
+		mode = browserModeChat
+	}
+	return claudeChatBrowserSendMode(ctx, filepath.Dir(b.statePath), b.composeClaudeChatSMSPrompt(command), mode)
 }
 
 func (b *Bridge) newClaudeChatConversation(ctx context.Context) error {
