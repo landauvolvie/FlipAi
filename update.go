@@ -70,6 +70,8 @@ type ReleaseInfo struct {
 	CheckedAt        time.Time `json:"checkedAt,omitempty"`
 	Error            string    `json:"error,omitempty"`
 	Downloading      bool      `json:"downloading,omitempty"`
+	DownloadedBytes  int64     `json:"downloadedBytes,omitempty"`
+	TotalBytes       int64     `json:"totalBytes,omitempty"`
 	DownloadedPath   string    `json:"downloadedPath,omitempty"`
 	DownloadedSHA256 string    `json:"downloadedSha256,omitempty"`
 	DownloadedAt     time.Time `json:"downloadedAt,omitempty"`
@@ -88,6 +90,27 @@ func (r ReleaseInfo) Ready() bool {
 	}
 	st, err := os.Stat(r.DownloadedPath)
 	return err == nil && !st.IsDir() && st.Size() > 0
+}
+
+// ProgressPercent is the small percentage shown beside FlipAi's version while
+// an update is being staged. A verified installer is always 100%; a resumable
+// partial download uses its persisted byte counts so restarting FlipAi does not
+// make the indicator jump back to zero.
+func (r ReleaseInfo) ProgressPercent() int {
+	if r.Ready() {
+		return 100
+	}
+	if r.TotalBytes <= 0 || r.DownloadedBytes <= 0 {
+		return 0
+	}
+	p := int((r.DownloadedBytes * 100) / r.TotalBytes)
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
 }
 
 // versionLess compares dotted versions numerically, so 0.10.0 is correctly
@@ -327,10 +350,14 @@ func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
 		saveUpdateState(a.statePath, current)
 		return current
 	}
-	if info.Version == current.Version && info.AssetURL == current.AssetURL && current.Ready() {
-		info.DownloadedPath = current.DownloadedPath
-		info.DownloadedSHA256 = current.DownloadedSHA256
-		info.DownloadedAt = current.DownloadedAt
+	if info.Version == current.Version && info.AssetURL == current.AssetURL {
+		info.DownloadedBytes = current.DownloadedBytes
+		info.TotalBytes = current.TotalBytes
+		if current.Ready() {
+			info.DownloadedPath = current.DownloadedPath
+			info.DownloadedSHA256 = current.DownloadedSHA256
+			info.DownloadedAt = current.DownloadedAt
+		}
 	}
 	info.Error = ""
 	saveUpdateState(a.statePath, info)
@@ -378,7 +405,32 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 
 	dlCtx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
-	path, err := downloadUpdate(dlCtx, current)
+	lastPercent := -1
+	lastSaved := time.Time{}
+	progress := func(done, total int64) {
+		p := 0
+		if total > 0 {
+			p = int((done * 100) / total)
+			if p > 100 {
+				p = 100
+			}
+		}
+		if p == lastPercent && time.Since(lastSaved) < 500*time.Millisecond {
+			return
+		}
+		latest := loadUpdateState(a.statePath)
+		if latest.Version != current.Version || latest.AssetURL != current.AssetURL {
+			return
+		}
+		latest.Downloading = true
+		latest.DownloadedBytes = done
+		latest.TotalBytes = total
+		latest.Error = ""
+		saveUpdateState(a.statePath, latest)
+		lastPercent = p
+		lastSaved = time.Now()
+	}
+	path, err := downloadUpdateWithProgress(dlCtx, current, progress)
 	latest := loadUpdateState(a.statePath)
 	if latest.Version != current.Version || latest.AssetURL != current.AssetURL {
 		return
@@ -405,6 +457,10 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 	latest.DownloadedPath = path
 	latest.DownloadedSHA256 = sum
 	latest.DownloadedAt = time.Now()
+	if st, statErr := os.Stat(path); statErr == nil {
+		latest.DownloadedBytes = st.Size()
+		latest.TotalBytes = st.Size()
+	}
 	saveUpdateState(a.statePath, latest)
 }
 
@@ -439,6 +495,10 @@ func updateDownloadDir() (string, error) {
 // update directory and requires a matching SHA256SUMS.txt entry. Nothing from a
 // generic Downloads/TEMP location is accepted as the staged update.
 func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
+	return downloadUpdateWithProgress(ctx, info, nil)
+}
+
+func downloadUpdateWithProgress(ctx context.Context, info ReleaseInfo, progress func(done, total int64)) (string, error) {
 	updateDownloadMu.Lock()
 	defer updateDownloadMu.Unlock()
 	if info.Ready() && info.DownloadedSHA256 != "" {
@@ -484,10 +544,13 @@ func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
 	}
 	dest := filepath.Join(dir, name)
 	if sum, err := sha256File(dest); err == nil && strings.EqualFold(sum, want) {
+		if st, statErr := os.Stat(dest); statErr == nil && progress != nil {
+			progress(st.Size(), st.Size())
+		}
 		return dest, nil
 	}
 	_ = os.Remove(dest)
-	sum, err := download(ctx, info.AssetURL, dest)
+	sum, err := downloadWithProgress(ctx, info.AssetURL, dest, progress)
 	if err != nil {
 		return "", err
 	}
@@ -541,45 +604,144 @@ func downloadSmall(ctx context.Context, rawURL string, max int64) ([]byte, error
 	return b, nil
 }
 
-// download saves a trusted URL atomically and returns the file's SHA-256. A
-// partial network transfer is never left behind under an executable filename.
+// download saves a trusted URL atomically and returns the file's SHA-256.
+// The .part file is deterministic and resumable: if FlipAi or Windows restarts
+// mid-download, the next staging pass continues with an HTTP Range request
+// rather than discarding the bytes already received. The executable filename
+// is created only after the transfer is complete.
 func download(ctx context.Context, rawURL, dest string) (string, error) {
+	return downloadWithProgress(ctx, rawURL, dest, nil)
+}
+
+func updateResponseTotal(resp *http.Response, offset int64) int64 {
+	if resp == nil {
+		return 0
+	}
+	if raw := strings.TrimSpace(resp.Header.Get("Content-Range")); raw != "" {
+		if slash := strings.LastIndex(raw, "/"); slash >= 0 && slash+1 < len(raw) {
+			if total, err := strconv.ParseInt(strings.TrimSpace(raw[slash+1:]), 10, 64); err == nil && total >= 0 {
+				return total
+			}
+		}
+	}
+	if resp.ContentLength >= 0 {
+		return offset + resp.ContentLength
+	}
+	return 0
+}
+
+func downloadWithProgress(ctx context.Context, rawURL, dest string, progress func(done, total int64)) (string, error) {
 	if !trustedUpdateURL(rawURL) {
 		return "", errors.New("download URL is not a trusted GitHub endpoint")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "FlipAi/"+version)
-	resp, err := updateHTTPClient(10 * time.Minute).Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned HTTP %d", resp.StatusCode)
-	}
-	if resp.ContentLength > maxUpdateBytes {
-		return "", errors.New("update installer is larger than the allowed size")
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp(filepath.Dir(dest), ".flipai-update-*.part")
+	part := dest + ".part"
+	offset := int64(0)
+	if st, err := os.Stat(part); err == nil && !st.IsDir() {
+		offset = st.Size()
+		if offset < 0 || offset > maxUpdateBytes {
+			_ = os.Remove(part)
+			offset = 0
+		}
+	}
+
+	request := func(start int64) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "FlipAi/"+version)
+		if start > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", start))
+		}
+		return updateHTTPClient(10 * time.Minute).Do(req)
+	}
+
+	resp, err := request(offset)
 	if err != nil {
 		return "", err
 	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
+	if offset > 0 && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		_ = resp.Body.Close()
+		_ = os.Remove(part)
+		offset = 0
+		resp, err = request(0)
+		if err != nil {
+			return "", err
+		}
+	}
+	defer resp.Body.Close()
+
+	if offset > 0 && resp.StatusCode == http.StatusOK {
+		// The endpoint ignored Range. Restart safely instead of appending a full
+		// response to an existing partial installer.
+		offset = 0
+		_ = os.Remove(part)
+	} else if offset > 0 && resp.StatusCode != http.StatusPartialContent {
+		return "", fmt.Errorf("resumed download returned HTTP %d", resp.StatusCode)
+	} else if offset == 0 && resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+	}
+
+	total := updateResponseTotal(resp, offset)
+	if total > maxUpdateBytes || (resp.ContentLength > maxUpdateBytes && offset == 0) {
+		return "", errors.New("update installer is larger than the allowed size")
+	}
+	if progress != nil {
+		progress(offset, total)
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset == 0 {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(part, flags, 0o600)
+	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxUpdateBytes+1))
-	if copyErr == nil && n > maxUpdateBytes {
-		copyErr = errors.New("update installer is larger than the allowed size")
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			_ = f.Close()
+			return "", err
+		}
+	}
+
+	done := offset
+	buf := make([]byte, 128*1024)
+	var copyErr error
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if done+int64(n) > maxUpdateBytes {
+				copyErr = errors.New("update installer is larger than the allowed size")
+				break
+			}
+			written, writeErr := f.Write(buf[:n])
+			done += int64(written)
+			if progress != nil {
+				progress(done, total)
+			}
+			if writeErr != nil {
+				copyErr = writeErr
+				break
+			}
+			if written != n {
+				copyErr = io.ErrShortWrite
+				break
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			copyErr = readErr
+			break
+		}
+	}
+	if copyErr == nil && total > 0 && done != total {
+		copyErr = fmt.Errorf("update download ended at %d of %d bytes", done, total)
 	}
 	if copyErr == nil {
 		copyErr = f.Sync()
@@ -591,9 +753,20 @@ func download(ctx context.Context, rawURL, dest string) (string, error) {
 	if closeErr != nil {
 		return "", closeErr
 	}
-	_ = os.Remove(dest)
-	if err := os.Rename(tmp, dest); err != nil {
+
+	sum, err := sha256File(part)
+	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	_ = os.Remove(dest)
+	if err := os.Rename(part, dest); err != nil {
+		return "", err
+	}
+	if progress != nil {
+		if total <= 0 {
+			total = done
+		}
+		progress(done, total)
+	}
+	return sum, nil
 }
