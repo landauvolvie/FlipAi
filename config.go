@@ -307,9 +307,7 @@ func verifySecurityCode(cfg Config, code string) bool {
 	if cfg.Security.CodeSalt == "" || cfg.Security.CodeHash == "" {
 		return false
 	}
-	got := hashSecurityCode(cfg.Security.CodeSalt)
-	_ = got
-	got = hashSecurityCode(code, cfg.Security.CodeSalt)
+	got := hashSecurityCode(code, cfg.Security.CodeSalt)
 	return subtle.ConstantTimeCompare([]byte(got), []byte(cfg.Security.CodeHash)) == 1
 }
 
