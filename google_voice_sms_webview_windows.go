@@ -21,10 +21,9 @@ const (
 	googleVoiceSMSWindowTitle = "FlipAi — Google Voice SMS"
 )
 
-// This monitor deliberately reports state from the page to Go instead of using
-// Runtime.evaluate as a heartbeat. v0.46.34 proved why: a WebView can be alive
-// while its DevTools evaluation channel is wedged. A provider connection is
-// only called ready when the actual page says it is signed in and on Messages.
+// The page is used only to establish and preserve the user's Google session.
+// Message receive/send is handled by Go through the authenticated Voice web
+// service. The monitor never opens or selects a conversation.
 const googleVoiceSMSPageMonitorJS = `
 (() => {
   if (globalThis.__flipAiGoogleVoiceSMSMonitor) return;
@@ -39,10 +38,9 @@ const googleVoiceSMSPageMonitorJS = `
   const onVoice=()=>String(location.hostname||'').toLowerCase()==='voice.google.com';
   const onMessages=()=>onVoice() && /\/messages(?:\/|$)/i.test(String(location.pathname||''));
   const signed=()=>onVoice() && !loginPage() && !!document.body;
-  const ready=()=>signed() && onMessages() && (document.readyState==='interactive'||document.readyState==='complete');
   async function tick(){
-    const s=signed(), r=ready(), href=String(location.href||'');
-    try{ if(typeof globalThis.flipGoogleVoiceSMSStatus==='function') await globalThis.flipGoogleVoiceSMSStatus(s,r,href); }catch(_){}
+    const s=signed(), href=String(location.href||'');
+    try{ if(typeof globalThis.flipGoogleVoiceSMSStatus==='function') await globalThis.flipGoogleVoiceSMSStatus(s,onMessages(),href); }catch(_){}
     if(s && !onMessages()){
       const m=String(location.pathname||'').match(/^\/u\/(\d+)/i);
       const target=m?('/u/'+m[1]+'/messages'):'/u/0/messages';
@@ -64,9 +62,7 @@ func googleVoiceSMSHWND() uintptr {
 	return h
 }
 
-func googleVoiceSMSProcessAlive() bool {
-	return googleVoiceSMSHWND() != 0
-}
+func googleVoiceSMSProcessAlive() bool { return googleVoiceSMSHWND() != 0 }
 
 func platformStartGoogleVoiceSMSLogin(dataDir string) error {
 	_ = platformStopGoogleVoiceSMSWorker(dataDir)
@@ -158,6 +154,7 @@ func platformDisconnectGoogleVoiceSMS(dataDir string) error {
 		return err
 	}
 	_ = os.Remove(googleVoiceSMSRuntimePath(dataDir))
+	_ = os.Remove(googleVoiceSMSAPIStatePath(dataDir))
 	return nil
 }
 
@@ -204,50 +201,32 @@ func runGoogleVoiceSMSWebView(dataDir string, visible bool) error {
 	applyFlipAiWindowIcon(uintptr(w.Window()))
 	w.SetSize(800, 600, webview2.HintMin)
 
-	wasSignedIn := false
-	hadConnected := loadGoogleVoiceSMSRuntime(dataDir).Connected
-	_ = w.Bind("flipGoogleVoiceSMSStatus", func(signedIn, ready bool, href string) {
-		changed := signedIn != wasSignedIn
+	_ = w.Bind("flipGoogleVoiceSMSStatus", func(signedIn, _ bool, href string) {
 		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
 			s.Running = true
 			s.Starting = false
 			s.Visible = visible
 			s.LoginActive = visible
 			s.SignedIn = signedIn
-			s.ListenerRunning = signedIn
-			s.Ready = ready
 			s.Page = href
-			s.LastProbeAt = time.Now()
-			if ready {
-				s.Connected = true
-				s.LastError = ""
-				s.LastEvent = "messages-ready"
-			} else if signedIn {
-				s.LastEvent = "opening-messages"
-				s.LastError = "Opening the Google Voice Messages page"
-			} else {
+			if !signedIn {
+				s.Connected = false
+				s.ListenerRunning = false
+				s.Ready = false
 				s.LastEvent = "waiting-for-sign-in"
 				s.LastError = "Sign in to Google Voice in the window FlipAi opened"
+			} else if !s.Ready && s.LastEvent != "background-api-error" {
+				s.LastEvent = "waiting-for-background-api"
+				s.LastError = "Waiting for Google Voice background connection"
 			}
 		})
-		if ready && (!hadConnected || changed) {
-			hadConnected = true
-		}
-		wasSignedIn = signedIn
-	})
-	_ = w.Bind("flipVoiceSMS", func(payload string) {
-		if err := appendDirectGoogleVoiceSMS(dataDir, payload); err == nil {
-			mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
-				s.LastInboundAt = time.Now()
-			})
-		}
 	})
 	w.Init(googleVoiceSMSPageMonitorJS)
-	w.Init(googleVoiceSMSInitScript)
 
 	dev := newWebViewDevTools(w)
 	stop := make(chan struct{})
 	defer close(stop)
+	go runGoogleVoiceSMSAPIInboxLoop(dataDir, dev, stop)
 	go runGoogleVoiceSMSOutboundLoop(dataDir, dev, stop)
 	quitStop := watchQuitAndClose(uintptr(w.Window()))
 	defer close(quitStop)
@@ -261,7 +240,7 @@ func runGoogleVoiceSMSWebView(dataDir string, visible bool) error {
 		s.SignedIn = false
 		s.Ready = false
 		s.LastEvent = "browser-starting"
-		s.LastError = "Waiting for Google Voice"
+		s.LastError = "Waiting for Google Voice background connection"
 	})
 	w.Navigate(googleVoiceSMSWebURL)
 	w.Run()
@@ -302,13 +281,8 @@ func runGoogleVoiceSMSBackgroundSupervisor(ctx context.Context, dataDir string) 
 	}
 }
 
-// The old v0.46.34 listener lived as a second WebView in the Google Voice call
-// process and shared that process's profile. Keep a tiny compatibility stub so
-// the untouched calling code compiles, but force it to fall back without ever
-// creating that broken shared-profile observer. Direct SMS now runs only in the
-// independent process above.
 func createGoogleVoiceSMSObserver(string, func() bool) (webview2.WebView, voiceDevTools, error) {
-	return nil, nil, errors.New("direct Google Voice SMS now runs in its independent browser process")
+	return nil, nil, errors.New("direct Google Voice SMS runs in its independent background browser process")
 }
 
 func googleVoiceSMSWorkerMode() bool {
