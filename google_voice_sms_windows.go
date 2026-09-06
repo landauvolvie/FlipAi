@@ -16,6 +16,7 @@ import (
 type googleVoiceSMSOutboundRequest struct {
 	ID      string    `json:"id"`
 	Phone   string    `json:"phone"`
+	Thread  string    `json:"thread,omitempty"`
 	Body    string    `json:"body"`
 	Created time.Time `json:"created"`
 }
@@ -30,7 +31,15 @@ func googleVoiceSMSOutboxDir(dataDir string) string {
 }
 
 func requestGoogleVoiceText(ctx context.Context, dataDir, phone, body string) error {
+	return requestGoogleVoiceTextThread(ctx, dataDir, phone, "", body)
+}
+
+// requestGoogleVoiceTextThread carries the exact inbound conversation path for
+// replies. An empty thread is permitted only for explicit one-off SendText
+// calls; those still require an exact phone-number suggestion in the page.
+func requestGoogleVoiceTextThread(ctx context.Context, dataDir, phone, thread, body string) error {
 	phone = normalizeUSPhone(phone)
+	thread = normalizeGoogleVoiceSMSThread(thread)
 	body = strings.TrimSpace(body)
 	if phone == "" || body == "" {
 		return errors.New("Google Voice SMS needs a recipient and text")
@@ -63,7 +72,7 @@ func requestGoogleVoiceText(ctx context.Context, dataDir, phone, body string) er
 	if err != nil {
 		return err
 	}
-	req := googleVoiceSMSOutboundRequest{ID: id, Phone: phone, Body: body, Created: time.Now()}
+	req := googleVoiceSMSOutboundRequest{ID: id, Phone: phone, Thread: thread, Body: body, Created: time.Now()}
 	raw, _ := json.Marshal(req)
 	requestPath := filepath.Join(googleVoiceSMSOutboxDir(dataDir), id+".request.json")
 	resultPath := filepath.Join(googleVoiceSMSOutboxDir(dataDir), id+".result.json")
@@ -140,7 +149,7 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 				if time.Since(req.Created) > 5*time.Minute {
 					result.OK = false
 					result.Error = "Google Voice SMS request expired before the browser could send it"
-				} else if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Body); err != nil {
+				} else if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Thread, req.Body); err != nil {
 					result.OK = false
 					result.Error = err.Error()
 				} else {
@@ -157,15 +166,18 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 	}
 }
 
-func sendGoogleVoiceTextInPage(d voiceDevTools, phone, body string) error {
+func sendGoogleVoiceTextInPage(d voiceDevTools, phone, thread, body string) error {
 	phone = normalizeUSPhone(phone)
+	thread = normalizeGoogleVoiceSMSThread(thread)
 	body = strings.TrimSpace(body)
 	if phone == "" || body == "" {
 		return errors.New("Google Voice SMS needs a recipient and text")
 	}
 	phoneJSON, _ := json.Marshal(phone)
+	threadJSON, _ := json.Marshal(thread)
 	bodyJSON, _ := json.Marshal(body)
 	script := strings.ReplaceAll(voiceSendTextJS, "__PHONE__", string(phoneJSON))
+	script = strings.ReplaceAll(script, "__THREAD__", string(threadJSON))
 	script = strings.ReplaceAll(script, "__BODY__", string(bodyJSON))
 	var stage string
 	if err := voiceEval(d, script, true, &stage); err != nil {
@@ -177,8 +189,13 @@ func sendGoogleVoiceTextInPage(d voiceDevTools, phone, body string) error {
 	return nil
 }
 
+// Replies never search by contact name. When Thread is present, FlipAi locates
+// that exact href, verifies the same row carries the expected phone number in
+// trusted identity metadata, and only then clicks it. One-off sends require an
+// exact phone-number suggestion; the old "there is only one choice" fallback is
+// intentionally gone because a single wrong contact is still the wrong chat.
 const voiceSendTextJS = `(async () => {
-  const phone=__PHONE__, body=__BODY__;
+  const phone=__PHONE__, thread=__THREAD__, body=__BODY__;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const docs=()=>{const out=[document];for(let i=0;i<out.length;i++){let fs=[];try{fs=out[i].querySelectorAll('iframe,frame')}catch(_){}for(const f of fs){try{const d=f.contentDocument;if(d&&!out.includes(d))out.push(d)}catch(_){}}}return out};
   const all=sel=>{const out=[];for(const d of docs()){try{out.push(...d.querySelectorAll(sel))}catch(_){}}return out};
@@ -188,26 +205,49 @@ const voiceSendTextJS = `(async () => {
   const clickNamed=re=>{const b=buttons().find(x=>visible(x)&&!x.disabled&&re.test(label(x)));if(!b)return false;b.click();return true};
   const setValue=(el,value)=>{try{const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(el,value)}catch(_){el.value=value}el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))};
   const digits=v=>String(v||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,'');
+  const identityPhone=el=>{
+    if(!el)return '';
+    const attrs=['title','href','data-phone','data-number','data-e164','value'];
+    const values=[];
+    const add=x=>{for(const a of attrs){try{const v=x.getAttribute?.(a);if(v)values.push(v)}catch(_){}}};
+    add(el);
+    let desc=[];try{desc=el.querySelectorAll?.('[title],[href],[data-phone],[data-number],[data-e164],[value]')||[]}catch(_){}
+    for(const x of desc){add(x);if(values.length>180)break;}
+    for(const v of values){const d=digits(v);if(d.length===10)return d;}
+    return '';
+  };
+  const pathOf=el=>{try{const raw=String(el.getAttribute?.('href')||'').trim();if(!raw)return '';if(raw.startsWith('/'))return raw.split(/[?#]/,1)[0];const u=new URL(raw,location.href);return u.hostname.toLowerCase()==='voice.google.com'?u.pathname:''}catch(_){return ''}};
   if(location.hostname.toLowerCase()!=='voice.google.com')return 'not-on-google-voice';
   if(/^\s*sign\s+in\s*$/im.test(String(document.body?.innerText||'').slice(0,1600)))return 'not-signed-in';
   clickNamed(/^(messages|text messages)$/i); await sleep(300);
-  if(!clickNamed(/^(send a message|send new message|new message|compose|start a message)$/i))clickNamed(/(send new message|new message|compose|start message)/i);
-  await sleep(400);
-  let recipient=all('input').find(el=>visible(el)&&/(name|phone|recipient|^to\b)/i.test(label(el)));
-  if(!recipient)return 'recipient-input-missing';
-  recipient.focus();setValue(recipient,phone);await sleep(650);
-  const choices=all('[role="option"],[role="menuitem"],mat-option,gv-contact-list-item').filter(visible);
-  const exact=choices.find(x=>digits(label(x)).includes(phone));
-  if(exact)exact.click();else if(choices.length===1)choices[0].click();else{recipient.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));recipient.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}))}
-  await sleep(450);
-  const composer=all('textarea,input,[contenteditable="true"]').find(el=>visible(el)&&el!==recipient&&/(message|text|sms|type)/i.test(label(el)));
+
+  if(thread){
+    const links=all('a[href*="/messages/"]').filter(visible);
+    const exactLink=links.find(x=>pathOf(x)===thread);
+    if(!exactLink)return 'exact-thread-not-found';
+    const row=exactLink.closest?.('gv-conversation-list-item,gv-message-list-item,[role="listitem"]')||exactLink;
+    if(identityPhone(row)!==phone)return 'thread-phone-mismatch';
+    exactLink.click();
+    await sleep(500);
+  }else{
+    if(!clickNamed(/^(send a message|send new message|new message|compose|start a message)$/i))clickNamed(/(send new message|new message|compose|start message)/i);
+    await sleep(400);
+    let recipient=all('input').find(el=>visible(el)&&/(name|phone|recipient|^to\b)/i.test(label(el)));
+    if(!recipient)return 'recipient-input-missing';
+    recipient.focus();setValue(recipient,phone);await sleep(650);
+    const choices=all('[role="option"],[role="menuitem"],mat-option,gv-contact-list-item').filter(visible);
+    const exact=choices.find(x=>identityPhone(x)===phone);
+    if(!exact)return 'exact-recipient-not-found';
+    exact.click();
+    await sleep(450);
+  }
+
+  const composer=all('textarea,input,[contenteditable="true"]').find(el=>visible(el)&&/(message|text|sms|type)/i.test(label(el)));
   if(!composer)return 'message-input-missing';
   composer.focus();
   if(composer.isContentEditable){composer.textContent=body;composer.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:body}))}else setValue(composer,body);
   await sleep(150);
   const send=buttons().find(x=>visible(x)&&!x.disabled&&/^(send|send message|send text)$/i.test(label(x))&&!/(image|photo)/i.test(label(x)));
-  if(send){send.click();return 'sent'}
-  composer.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
-  composer.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
-  await sleep(150);return 'sent';
+  if(!send)return 'send-button-missing';
+  send.click();return 'sent';
 })()`
