@@ -332,3 +332,123 @@ func TestGoogleVoiceSMSCaptureRecordsRealSendBodies(t *testing.T) {
 		t.Fatal("junk was accepted as a captured send")
 	}
 }
+
+// The capture lives on the globals of whichever frame made the request, and
+// the send is made by the proxy frame. Reading it from the main frame finds
+// nothing, so the format could never be learned no matter how many texts were
+// sent -- the same frame separation that made a main-frame request get refused.
+func TestGoogleVoiceSMSCapturedSendIsReadFromTheSendingFrame(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSCapturedSendRequest(")
+	if start < 0 {
+		t.Fatal("the captured-send reader is gone")
+	}
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "googleVoiceSMSAPIFrameContext(") {
+		t.Fatal("the captured send is no longer read from the frame that made it")
+	}
+	if !strings.Contains(body, "voiceEvalInContext(") {
+		t.Fatal("the captured send is read only from the main frame, where it never exists")
+	}
+}
+
+// The page forgets its capture with the document, so the one-time teaching step
+// has to outlive the page. What persists is the shape, never the message.
+func TestGoogleVoiceSMSSendTemplateSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := loadGoogleVoiceSMSSendTemplate(dir); ok {
+		t.Fatal("an unlearned install reported a template")
+	}
+	real := `[null,null,null,null,"something private the user typed","t.+18455550142",[],null,[123]]`
+	if !saveGoogleVoiceSMSSendTemplate(dir, real) {
+		t.Fatal("a real send was not learned")
+	}
+
+	stored, ok := loadGoogleVoiceSMSSendTemplate(dir)
+	if !ok {
+		t.Fatal("the learned shape did not survive")
+	}
+	if strings.Contains(stored, "something private the user typed") {
+		t.Fatalf("the user's message was persisted, not just the shape: %s", stored)
+	}
+	if strings.Contains(stored, "8455550142") {
+		t.Fatalf("the conversation was persisted, not just the shape: %s", stored)
+	}
+
+	// The stored shape still fills in for a real reply.
+	payload, ok := googleVoiceSMSSendBodyFromCapture(stored, "t.+18453241813", "the answer", 99)
+	if !ok {
+		t.Fatal("the stored shape could not be filled in again")
+	}
+	var fields []any
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields[4] != "the answer" || fields[5] != "t.+18453241813" {
+		t.Fatalf("the stored shape filled the wrong slots: %s", payload)
+	}
+}
+
+func TestGoogleVoiceSMSSendTemplateRefusesAnUnusableCapture(t *testing.T) {
+	dir := t.TempDir()
+	for _, unusable := range []string{"", "not json", "[]", `[null,"only text"]`} {
+		if saveGoogleVoiceSMSSendTemplate(dir, unusable) {
+			t.Fatalf("an unusable capture was learned: %q", unusable)
+		}
+	}
+	if _, ok := loadGoogleVoiceSMSSendTemplate(dir); ok {
+		t.Fatal("a template was stored from an unusable capture")
+	}
+}
+
+// An isolated world shares its frame's storage but not its globals, and an
+// isolated world is the only place FlipAi can run code in the sending frame.
+// Reading the capture from globals alone therefore always found nothing, so it
+// has to cross between worlds through storage.
+func TestGoogleVoiceSMSCaptureCrossesWorldsThroughStorage(t *testing.T) {
+	if !strings.Contains(googleVoiceSMSNetworkCaptureJS, "setItem('__flipAiGVSend'") {
+		t.Fatal("a real send is not left anywhere an isolated world can reach it")
+	}
+	if !strings.Contains(googleVoiceSMSCapturedSendJS, "getItem('__flipAiGVSend')") {
+		t.Fatal("the reader looks only at globals, which an isolated world cannot see")
+	}
+	if !strings.Contains(googleVoiceSMSCapturedSendJS, "__flipAiGVNet") {
+		t.Fatal("the reader no longer checks the same-world globals first")
+	}
+	if !strings.Contains(googleVoiceSMSForgetCapturedSendJS, "removeItem('__flipAiGVSend')") {
+		t.Fatal("the handed-over message is never cleared after the shape is learned")
+	}
+	for _, js := range []string{googleVoiceSMSCapturedSendJS, googleVoiceSMSForgetCapturedSendJS} {
+		for _, forbidden := range []string{".click(", "querySelector", "aria-label"} {
+			if strings.Contains(js, forbidden) {
+				t.Fatalf("a capture helper drives the page through %q", forbidden)
+			}
+		}
+	}
+}
+
+// The learned shape is cleared from the browser once it is safely on disk, so
+// the message it was learned from does not linger in storage.
+func TestGoogleVoiceSMSForgetsTheCaptureOnceLearned(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSLearnSendTemplate(")
+	if start < 0 {
+		t.Fatal("the template learner is gone")
+	}
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "saveGoogleVoiceSMSSendTemplate(") || !strings.Contains(body, "googleVoiceSMSForgetCapturedSend(") {
+		t.Fatal("the capture is not cleared after the shape is stored")
+	}
+}

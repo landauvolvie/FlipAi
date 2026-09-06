@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,6 +69,14 @@ const googleVoiceSMSNetworkCaptureJS = `
       // principles, so its exact body is kept when Google Voice makes one.
       if (isSend(raw) && typeof body === 'string' && body.length > 0 && body.length < 200000) {
         store.send = { at: Date.now(), url: String(raw), key: keyOf(raw), body: body, headers: headers || {} };
+        // Also leave it where a different world in this frame can reach it.
+        // FlipAi reads the capture from an isolated world, which shares this
+        // frame's storage but not its globals, so globalThis alone is
+        // invisible to the only reader that exists.
+        try {
+          const store2 = globalThis.localStorage || globalThis.sessionStorage;
+          if (store2) store2.setItem('__flipAiGVSend', body);
+        } catch (_) {}
       }
       if (!headers || !headers['authorization']) return;
       store.template = { at: Date.now(), url: String(raw), key: keyOf(raw), origin: String(location.origin || ''), headers: headers };
@@ -322,9 +332,28 @@ func googleVoiceSMSAPIStatusError(status int, retryAfter time.Duration, bodyText
 	return nil
 }
 
-// googleVoiceSMSCapturedSendJS hands over the last real send Google Voice made,
-// if it has made one since the browser started.
-const googleVoiceSMSCapturedSendJS = `(()=>{try{return JSON.stringify(globalThis.__flipAiGVNet&&globalThis.__flipAiGVNet.send||{})}catch(_){return '{}'}})()`
+// googleVoiceSMSCapturedSendJS hands over the last real send Google Voice made.
+//
+// It has to work from an isolated world, because that is the only place FlipAi
+// can run code in the frame that issues the send. An isolated world shares its
+// frame's DOM and storage but gets its own globals, so the capture script's
+// globalThis is invisible from it -- reading only that always found nothing.
+// Storage is the crossing point, and the globals are still checked first for
+// the case where both live in the same world.
+const googleVoiceSMSCapturedSendJS = `(()=>{try{
+  const live=globalThis.__flipAiGVNet&&globalThis.__flipAiGVNet.send;
+  if(live&&live.body)return JSON.stringify(live);
+  for(const s of [globalThis.localStorage,globalThis.sessionStorage]){
+    try{const v=s&&s.getItem('__flipAiGVSend');if(v)return JSON.stringify({at:0,url:'',key:'',body:v})}catch(_){}
+  }
+}catch(_){}return '{}'})()`
+
+// googleVoiceSMSForgetCapturedSendJS clears the handed-over copy once FlipAi
+// has learned the shape from it, so the message it was carrying does not sit in
+// the browser's storage afterwards.
+const googleVoiceSMSForgetCapturedSendJS = `(()=>{try{
+  for(const s of [globalThis.localStorage,globalThis.sessionStorage]){try{s&&s.removeItem('__flipAiGVSend')}catch(_){}}
+}catch(_){}return true})()`
 
 // googleVoiceSMSCapturedSend is one real send request, as Google Voice built it.
 type googleVoiceSMSCapturedSend struct {
@@ -332,6 +361,80 @@ type googleVoiceSMSCapturedSend struct {
 	URL  string `json:"url"`
 	Key  string `json:"key"`
 	Body string `json:"body"`
+}
+
+// The learned format is kept as a shape, not as a message. Before it is
+// written anywhere the conversation and the text are replaced with placeholders
+// that satisfy the same slot rules, so what persists is the structure Google
+// Voice uses and never what anyone actually said.
+const (
+	googleVoiceSMSTemplateThread = "t.+15550000000"
+	googleVoiceSMSTemplateText   = "flipai"
+)
+
+func googleVoiceSMSSendTemplatePath(dataDir string) string {
+	return filepath.Join(dataDir, "google-voice-sms-send-template.json")
+}
+
+type googleVoiceSMSSendTemplate struct {
+	Body    string    `json:"body"`
+	Learned time.Time `json:"learned"`
+}
+
+// googleVoiceSMSSendTemplateFrom turns one real send into a reusable shape,
+// keeping nothing of the message it was carrying.
+func googleVoiceSMSSendTemplateFrom(captured string) (string, bool) {
+	stripped, ok := googleVoiceSMSSendBodyFromCapture(captured, googleVoiceSMSTemplateThread, googleVoiceSMSTemplateText, 1)
+	if !ok {
+		return "", false
+	}
+	// A shape that cannot be filled in again is not a usable template.
+	if _, ok := googleVoiceSMSSendBodyFromCapture(string(stripped), googleVoiceSMSTemplateThread, googleVoiceSMSTemplateText, 2); !ok {
+		return "", false
+	}
+	return string(stripped), true
+}
+
+func saveGoogleVoiceSMSSendTemplate(dataDir, captured string) bool {
+	shape, ok := googleVoiceSMSSendTemplateFrom(captured)
+	if !ok {
+		return false
+	}
+	if existing, found := loadGoogleVoiceSMSSendTemplate(dataDir); found && existing == shape {
+		return true
+	}
+	raw, err := json.Marshal(googleVoiceSMSSendTemplate{Body: shape, Learned: time.Now()})
+	if err != nil || os.MkdirAll(dataDir, 0700) != nil {
+		return false
+	}
+	path := googleVoiceSMSSendTemplatePath(dataDir)
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, raw, 0600) != nil {
+		return false
+	}
+	if os.Rename(tmp, path) != nil {
+		_ = os.Remove(tmp)
+		return false
+	}
+	return true
+}
+
+// loadGoogleVoiceSMSSendTemplate returns the shape learned in an earlier
+// session. The page keeps its capture only for the life of one document, so
+// without this the one-time teaching step would be a step before every reply.
+func loadGoogleVoiceSMSSendTemplate(dataDir string) (string, bool) {
+	raw, err := os.ReadFile(googleVoiceSMSSendTemplatePath(dataDir))
+	if err != nil {
+		return "", false
+	}
+	var stored googleVoiceSMSSendTemplate
+	if json.Unmarshal(raw, &stored) != nil {
+		return "", false
+	}
+	if _, ok := googleVoiceSMSSendBodyFromCapture(stored.Body, googleVoiceSMSTemplateThread, googleVoiceSMSTemplateText, 1); !ok {
+		return "", false
+	}
+	return stored.Body, true
 }
 
 func parseGoogleVoiceSMSCapturedSend(raw string) googleVoiceSMSCapturedSend {

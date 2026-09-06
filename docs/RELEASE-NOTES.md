@@ -1,36 +1,38 @@
-# FlipAi v0.46.46
+# FlipAi v0.46.47
 
-FlipAi learns how to send a text by watching Google Voice send one.
+Two fixes to the learned reply format shipped in v0.46.46, without which it could never have worked.
 
-## What the error finally said
+## The format was being read from the wrong place, twice over
 
-With the response body no longer discarded, Google Voice named its own refusal:
+v0.46.46 records the request Google Voice makes when you send a text, so FlipAi can reuse its shape. It recorded it correctly and then looked for it somewhere it could never be.
 
-> RESOURCE_EXHAUSTED — `{"error_code":"RESOURCE_EXHAUSTED","base64_format":"CAI=","protojson_fava_format":"[2]"}`
+First, it asked the main page. The recording lives with whichever part of the page made the request, and the send is made by the small helper frame — the same separation that made v0.46.44's request get refused.
 
-That is a Google Voice error, not a generic quota message: `CAI=` decodes to two bytes meaning field 1 = 2, and `[2]` says the same thing. The service is rejecting the request itself, which is why waiting and retrying never helped and why not one reply has ever gone out.
+Second, and less obvious: the only way FlipAi can run code in that helper frame gives it a separate set of variables from the frame's own. It shares the frame's storage, but not what the recording script had put in memory. Asking the right frame the wrong way would still have found nothing.
 
-## The fix
+The recording is now handed over through the frame's storage, which both sides can reach, and cleared once the shape is safely saved so the message it came from does not linger there. Either way the format would have read as never learned no matter how many texts you sent.
 
-The body FlipAi sends was written from a guess at the shape this endpoint wants, and a guess is what the service keeps refusing.
+## The format is now remembered
 
-Google Voice builds a correct one every time you send a text yourself from the window FlipAi already runs. FlipAi now records that request and reuses its exact structure, changing only what has to change: the conversation, the message, and the tracking id. The slots are found by what they contain rather than by position, so a reordering on Google's side cannot put the message where the conversation belongs — and anything whose slots cannot be identified is refused outright rather than half-rewritten.
+The page keeps what it recorded only until it reloads, so an app restart or a page navigation threw it away and replies fell back to the shape the service refuses. The advertised one-time step would have been a step before every reply.
+
+The learned shape is now saved and restored across restarts. **Only the shape is kept**: the conversation and the message text are replaced with placeholders before anything is written, so what persists is the structure Google Voice uses and never what anyone said.
+
+FlipAi also learns the shape during its ordinary inbox checks, not only when a reply is attempted, so a text you send is picked up within seconds.
 
 ## What this asks of you, once
 
-**Send one text yourself from the Google Voice window FlipAi opens.** Any text, to anyone. That is what teaches FlipAi the format.
+**Send one text yourself from the Google Voice window FlipAi opens.** Any text, to anyone.
 
-The Connections card now says which state it is in:
+The Connections card says which state it is in:
 
-- *reply format learned from Google Voice* — nothing more to do.
-- *reply format not yet learned; send one text yourself from the Google Voice window to teach it* — send that one text.
+- *reply format learned from Google Voice* — nothing more to do, now or after any restart.
+- *reply format not yet learned; send one text yourself from the Google Voice window to teach it*
 
-Until a real send has been observed, FlipAi falls back to the built-in shape, which is the one being refused.
+## Regression coverage
 
-## Unchanged
-
-- Sender authorization: the conversation's own phone number, never a contact name.
-- A reply whose outcome is unknown is still never sent twice.
-- Reading the inbox, and Google Voice calling.
+- The captured send is read from the frame that made it, not the main page.
+- A learned shape survives a restart, still fills in correctly afterwards, and carries neither the conversation nor the message it was learned from.
+- An unusable capture is never stored.
 
 No Authenticode/code-signing certificate is included in this release.

@@ -480,7 +480,7 @@ func googleVoiceSMSAPIFetchInbox(d voiceDevTools) ([]googleVoiceSMSAPIMessage, g
 // end of the attempt. Sending also takes priority over the inbox poll for as
 // long as it runs: they share one quota, and a reply that cannot get out is
 // worse than an inbox that is read a few seconds later.
-func googleVoiceSMSAPISend(d voiceDevTools, threadID, body string, deadline time.Time) error {
+func googleVoiceSMSAPISend(dataDir string, d voiceDevTools, threadID, body string, deadline time.Time) error {
 	googleVoiceSMSOutboundPending.Add(1)
 	defer googleVoiceSMSOutboundPending.Add(-1)
 
@@ -499,7 +499,7 @@ func googleVoiceSMSAPISend(d voiceDevTools, threadID, body string, deadline time
 			}
 			time.Sleep(wait)
 		}
-		err := googleVoiceSMSAPISendOnce(d, threadID, body, nonce)
+		err := googleVoiceSMSAPISendOnce(dataDir, d, threadID, body, nonce)
 		if err == nil {
 			return nil
 		}
@@ -521,9 +521,26 @@ func googleVoiceSMSResendAfterOf(err error) time.Duration {
 	return wait
 }
 
-// googleVoiceSMSCapturedSendRequest asks the page for the last send Google
-// Voice made itself.
+// googleVoiceSMSCapturedSendRequest asks for the last send Google Voice made
+// itself.
+//
+// It has to ask the frame that made it. The capture script runs in every frame
+// and keeps what it saw on that frame's own globals, and the send is issued by
+// the proxy frame on the service's origin -- the same frame separation that
+// made a main-frame request get refused. Reading from the main frame therefore
+// finds nothing, the built-in shape is used, and the card reports the format as
+// never learned no matter how many texts are sent.
 func googleVoiceSMSCapturedSendRequest(d voiceDevTools) googleVoiceSMSCapturedSend {
+	if contextID, ok := googleVoiceSMSAPIFrameContext(d); ok {
+		var raw string
+		if err := voiceEvalInContext(d, googleVoiceSMSCapturedSendJS, false, contextID, &raw); err == nil {
+			if got := parseGoogleVoiceSMSCapturedSend(raw); got.Body != "" {
+				return got
+			}
+		}
+	}
+	// The main frame is still worth asking: which frame issues the send is
+	// Google's choice, not FlipAi's, and it has changed before.
 	var raw string
 	if err := voiceEval(d, googleVoiceSMSCapturedSendJS, false, &raw); err != nil {
 		return googleVoiceSMSCapturedSend{}
@@ -531,16 +548,48 @@ func googleVoiceSMSCapturedSendRequest(d voiceDevTools) googleVoiceSMSCapturedSe
 	return parseGoogleVoiceSMSCapturedSend(raw)
 }
 
-func googleVoiceSMSAPISendOnce(d voiceDevTools, threadID, body string, nonce int64) error {
-	// Prefer the shape Google Voice itself uses. The built-in one was written
-	// from a guess, and a guess is what the service keeps refusing.
-	payload, ok := googleVoiceSMSSendBodyFromCapture(googleVoiceSMSCapturedSendRequest(d).Body, threadID, body, nonce)
-	if !ok {
-		var err error
-		payload, err = googleVoiceSMSAPISendBody(threadID, body, nonce)
-		if err != nil {
-			return err
+// googleVoiceSMSForgetCapturedSend clears the copy the capture script left for
+// FlipAi to collect. Once the shape is on disk the message it came from has no
+// reason to stay in the browser's storage.
+func googleVoiceSMSForgetCapturedSend(d voiceDevTools) {
+	if contextID, ok := googleVoiceSMSAPIFrameContext(d); ok {
+		_ = voiceEvalInContext(d, googleVoiceSMSForgetCapturedSendJS, false, contextID, nil)
+	}
+	_ = voiceEval(d, googleVoiceSMSForgetCapturedSendJS, false, nil)
+}
+
+// googleVoiceSMSLearnSendTemplate keeps whatever shape the page has observed,
+// so the one-time teaching step stays one time. The page forgets its capture
+// with the document; this does not.
+func googleVoiceSMSLearnSendTemplate(dataDir string, d voiceDevTools) {
+	if captured := googleVoiceSMSCapturedSendRequest(d).Body; captured != "" {
+		if saveGoogleVoiceSMSSendTemplate(dataDir, captured) {
+			googleVoiceSMSForgetCapturedSend(d)
 		}
+	}
+}
+
+// googleVoiceSMSSendPayload builds the body for one reply, preferring the shape
+// Google Voice itself uses over the built-in guess the service refuses.
+func googleVoiceSMSSendPayload(dataDir string, d voiceDevTools, threadID, text string, nonce int64) ([]byte, error) {
+	if captured := googleVoiceSMSCapturedSendRequest(d).Body; captured != "" {
+		saveGoogleVoiceSMSSendTemplate(dataDir, captured)
+		if payload, ok := googleVoiceSMSSendBodyFromCapture(captured, threadID, text, nonce); ok {
+			return payload, nil
+		}
+	}
+	if stored, ok := loadGoogleVoiceSMSSendTemplate(dataDir); ok {
+		if payload, ok := googleVoiceSMSSendBodyFromCapture(stored, threadID, text, nonce); ok {
+			return payload, nil
+		}
+	}
+	return googleVoiceSMSAPISendBody(threadID, text, nonce)
+}
+
+func googleVoiceSMSAPISendOnce(dataDir string, d voiceDevTools, threadID, body string, nonce int64) error {
+	payload, err := googleVoiceSMSSendPayload(dataDir, d, threadID, body, nonce)
+	if err != nil {
+		return err
 	}
 	raw, err := googleVoiceSMSAPIRequest(d, "api2thread/sendsms", payload)
 	if err != nil {
@@ -671,8 +720,8 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 	// payload shape FlipAi can use, and that is the one thing a person can
 	// change, so the card says which it is.
 	sendShape := func() string {
-		if _, ok := googleVoiceSMSSendBodyFromCapture(
-			googleVoiceSMSCapturedSendRequest(d).Body, "t.+15550000000", "probe", 1); ok {
+		googleVoiceSMSLearnSendTemplate(dataDir, d)
+		if _, ok := loadGoogleVoiceSMSSendTemplate(dataDir); ok {
 			return "reply format learned from Google Voice"
 		}
 		return "reply format not yet learned; send one text yourself from the Google Voice window to teach it"
