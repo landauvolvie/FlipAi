@@ -13,19 +13,24 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
-	errGoogleVoiceSMSNotAuthenticated = errors.New("Google Voice SMS session is not authenticated")
-	googleVoiceSMSAPIMu               sync.Mutex
-	googleVoiceSMSHTTPClient          = &http.Client{Timeout: 20 * time.Second}
+	googleVoiceSMSAPIMu      sync.Mutex
+	googleVoiceSMSHTTPClient = &http.Client{Timeout: 20 * time.Second}
 
 	// googleVoiceSMSOriginMu guards the origin FlipAi has learned this session.
 	// Once the page's own traffic proves which origin Google signs with, every
 	// later request uses it instead of rediscovering it.
 	googleVoiceSMSOriginMu    sync.Mutex
 	googleVoiceSMSKnownOrigin string
+
+	// googleVoiceSMSOutboundPending counts replies in flight. The inbox poll and
+	// the reply share one quota with Google, so the poll stands aside while a
+	// reply is being delivered.
+	googleVoiceSMSOutboundPending atomic.Int64
 )
 
 type googleVoiceSMSCDPCookie struct {
@@ -255,14 +260,23 @@ func googleVoiceSMSAPIRequestOnce(session googleVoiceSMSAPISession, method strin
 
 	resp, err := googleVoiceSMSHTTPClient.Do(req)
 	if err != nil {
-		return nil, errors.New("Google Voice web service is unreachable")
+		// A connection that never completed says nothing about whether Google
+		// would accept the request, so it is worth asking again.
+		return nil, googleVoiceSMSTransient(errors.New("Google Voice web service is unreachable"), 0)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, errGoogleVoiceSMSNotAuthenticated
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, errors.New("Google Voice web service is rate limiting FlipAi; it will retry more slowly")
+		return nil, googleVoiceSMSTransient(
+			errors.New("Google Voice web service is asking FlipAi to slow down"),
+			parseGoogleVoiceSMSRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
+	}
+	if resp.StatusCode >= 500 {
+		return nil, googleVoiceSMSTransient(
+			fmt.Errorf("Google Voice web service returned HTTP %d", resp.StatusCode),
+			parseGoogleVoiceSMSRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("Google Voice web service returned HTTP %d", resp.StatusCode)
@@ -313,7 +327,48 @@ func googleVoiceSMSAPIFetchInbox(d voiceDevTools) ([]googleVoiceSMSAPIMessage, g
 	return parseGoogleVoiceSMSAPIListResponseDetailed(raw, googleVoiceSMSAPIAccountSlot(d))
 }
 
-func googleVoiceSMSAPISend(d voiceDevTools, threadID, body string) error {
+// googleVoiceSMSAPISend delivers one reply, asking again when Google answers
+// that it is busy rather than that it refuses.
+//
+// The agent has already spent its turn producing this answer, and the person
+// waiting on it has no other way to receive it, so a single 429 must not be the
+// end of the attempt. Sending also takes priority over the inbox poll for as
+// long as it runs: they share one quota, and a reply that cannot get out is
+// worse than an inbox that is read a few seconds later.
+func googleVoiceSMSAPISend(d voiceDevTools, threadID, body string, deadline time.Time) error {
+	googleVoiceSMSOutboundPending.Add(1)
+	defer googleVoiceSMSOutboundPending.Add(-1)
+
+	var lastErr error
+	for attempt := 0; attempt < googleVoiceSMSSendAttempts; attempt++ {
+		if attempt > 0 {
+			wait := googleVoiceSMSSendBackoff(attempt-1, googleVoiceSMSRetryAfterOf(lastErr))
+			if !deadline.IsZero() && time.Now().Add(wait).After(deadline) {
+				break
+			}
+			time.Sleep(wait)
+		}
+		err := googleVoiceSMSAPISendOnce(d, threadID, body)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if _, retryable := googleVoiceSMSRetryable(err); !retryable {
+			return err
+		}
+	}
+	if lastErr == nil {
+		return errors.New("Google Voice did not confirm the SMS send")
+	}
+	return fmt.Errorf("Google Voice would not accept the reply: %w", lastErr)
+}
+
+func googleVoiceSMSRetryAfterOf(err error) time.Duration {
+	wait, _ := googleVoiceSMSRetryable(err)
+	return wait
+}
+
+func googleVoiceSMSAPISendOnce(d voiceDevTools, threadID, body string) error {
 	payload, err := googleVoiceSMSAPISendBody(threadID, body, time.Now().UnixNano()&0x7fffffffffffffff)
 	if err != nil {
 		return err
@@ -403,14 +458,8 @@ func processGoogleVoiceSMSAPIPoll(dataDir string, messages []googleVoiceSMSAPIMe
 //   - Actively: FlipAi asks the same service directly, so a quiet page can
 //     never stall delivery.
 //
-// The active ask backs off when Google is unhappy. Polling a private endpoint
-// on a fixed sub-second timer is what gets a session rate limited, and a rate
-// limited session looks exactly like a broken one.
-const (
-	googleVoiceSMSPollInterval    = 3 * time.Second
-	googleVoiceSMSPollMaxInterval = 60 * time.Second
-	googleVoiceSMSPollTick        = 500 * time.Millisecond
-)
+// The poll cadence lives in google_voice_sms_api.go, next to the readiness
+// window it has to stay inside.
 
 func googleVoiceSMSDrainCaptured(dataDir string, d voiceDevTools) (int, googleVoiceSMSAPIStats) {
 	var total googleVoiceSMSAPIStats
@@ -522,6 +571,11 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 		// starting up.
 		if !loadGoogleVoiceSMSRuntime(dataDir).SignedIn {
 			nextPoll = time.Time{}
+			continue
+		}
+		// A reply in flight has the quota. Reading the inbox can wait; the
+		// person who texted cannot.
+		if googleVoiceSMSOutboundPending.Load() > 0 {
 			continue
 		}
 		if time.Now().Before(nextPoll) {

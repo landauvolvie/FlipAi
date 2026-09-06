@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -298,6 +299,101 @@ func parseGoogleVoiceSMSAPIListResponseDetailed(raw []byte, accountSlot string) 
 	})
 	return out, stats, nil
 }
+
+var errGoogleVoiceSMSNotAuthenticated = errors.New("Google Voice SMS session is not authenticated")
+
+// A reply is the whole point of the bridge, and Google's web service does not
+// promise to accept one on the first ask: it answers 429 when FlipAi has been
+// asking too often, and 5xx when it is simply unhappy. Both are momentary, so
+// both are worth asking again -- an answer the agent already produced must not
+// be thrown away because one HTTP request came back busy.
+type googleVoiceSMSTransientError struct {
+	err        error
+	retryAfter time.Duration
+}
+
+func (e *googleVoiceSMSTransientError) Error() string { return e.err.Error() }
+func (e *googleVoiceSMSTransientError) Unwrap() error { return e.err }
+
+func googleVoiceSMSTransient(err error, retryAfter time.Duration) error {
+	if err == nil {
+		return nil
+	}
+	return &googleVoiceSMSTransientError{err: err, retryAfter: retryAfter}
+}
+
+// googleVoiceSMSRetryable reports whether asking again could plausibly work,
+// and how long Google asked FlipAi to wait before doing so.
+func googleVoiceSMSRetryable(err error) (time.Duration, bool) {
+	var transient *googleVoiceSMSTransientError
+	if errors.As(err, &transient) {
+		return transient.retryAfter, true
+	}
+	return 0, false
+}
+
+// parseGoogleVoiceSMSRetryAfter reads the Retry-After header in both the forms
+// it is served in: a number of seconds, or an HTTP date.
+func parseGoogleVoiceSMSRetryAfter(header string, now time.Time) time.Duration {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(header); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(header)
+	if err != nil {
+		return 0
+	}
+	if wait := when.Sub(now); wait > 0 {
+		return wait
+	}
+	return 0
+}
+
+// googleVoiceSMSSendBackoff is the wait before attempt n of a reply, counting
+// from zero. Google's own Retry-After wins whenever it asks for longer.
+func googleVoiceSMSSendBackoff(attempt int, retryAfter time.Duration) time.Duration {
+	schedule := []time.Duration{2 * time.Second, 5 * time.Second, 12 * time.Second, 25 * time.Second}
+	wait := schedule[len(schedule)-1]
+	if attempt >= 0 && attempt < len(schedule) {
+		wait = schedule[attempt]
+	}
+	if retryAfter > wait {
+		wait = retryAfter
+	}
+	if wait > googleVoiceSMSSendMaxBackoff {
+		wait = googleVoiceSMSSendMaxBackoff
+	}
+	return wait
+}
+
+const (
+	// googleVoiceSMSSendAttempts and the delivery budget go together: the bridge
+	// gives delivery two minutes, and four waits from the schedule above plus
+	// their requests fit inside that with room to spare.
+	googleVoiceSMSSendAttempts   = 5
+	googleVoiceSMSSendMaxBackoff = 30 * time.Second
+
+	// googleVoiceSMSOutboundBudget is how long one reply may keep trying. The
+	// bridge gives delivery two minutes, so a reply still retrying past this
+	// point has already lost the caller waiting on it and should stop.
+	googleVoiceSMSOutboundBudget = 100 * time.Second
+
+	// The active inbox ask is the one that costs quota, so it is deliberately
+	// unhurried. Polling every few seconds is what earns a 429, and that quota
+	// is the same quota a reply needs: a rate-limited session cannot answer
+	// anyone, which is far worse than reading the inbox a few seconds later.
+	// Passive capture already covers the fast case, because the page fetches its
+	// own conversation updates whenever a text actually arrives.
+	googleVoiceSMSPollInterval    = 15 * time.Second
+	googleVoiceSMSPollMaxInterval = 5 * time.Minute
+	googleVoiceSMSPollTick        = 500 * time.Millisecond
+)
 
 // googleVoiceSMSListenerNote turns what one inbox check saw into something a
 // person can act on. A listener that is authenticated but delivering nothing is
