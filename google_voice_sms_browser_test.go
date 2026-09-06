@@ -21,17 +21,17 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 	pw := playwrightModule(t)
 	dir := t.TempDir()
 	fixture := filepath.Join(dir, "voice-sms.html")
-	// Mirror the live failure reported on v0.46.37: the conversation row is a
-	// linkless SPA/custom row with only a saved contact name. Clicking it leaves
-	// location.href on /messages and instead renders trusted itemId metadata in
-	// the opened conversation pane. Keep an unrelated preloaded identity on the
-	// page so the detector must bind to the newly selected/opened conversation.
-	// The SMS body also contains a decoy phone number which may never become the
-	// sender identity.
+	// Mirror the live v0.46.38 failure: the linkless conversation row contains
+	// only a saved contact name. Clicking it leaves location.href on /messages
+	// and the opened Google Voice pane exposes the sender only as visible header
+	// text: "Me" plus "mobile • (845) 555-0142". Keep unrelated preloaded
+	// identity metadata on the page so the detector must bind to the explicitly
+	// opened header. The SMS body also contains a decoy phone number which may
+	// never become sender identity.
 	html := `<!doctype html><html><head><meta charset="utf-8"><title>Voice messages</title></head><body>
 <div id="preloaded" data-conversation-id="t.+19995550123" hidden></div>
-<div id="threadRow" class="voice-thread-row" role="listitem" aria-label="US Mobile">
-  <span class="contact-name">US Mobile</span>
+<div id="threadRow" class="voice-thread-row" role="listitem" aria-label="Me">
+  <span class="contact-name">Me</span>
   <div class="latest-preview"><span id="messageText">old message</span> <a class="body-link" href="tel:+12125550199" title="212-555-0199">212-555-0199</a></div>
   <span class="time">10:17 PM</span>
 </div>
@@ -41,7 +41,7 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
   globalThis.flipVoiceSMS=(payload)=>globalThis.__captured.push(payload);
   document.getElementById('threadRow').addEventListener('click',()=>{
     document.getElementById('threadRow').setAttribute('aria-selected','true');
-    document.getElementById('conversationPane').innerHTML='<header class="conversation-header" data-conversation-id="t.+18455550142"><span>US Mobile</span></header>';
+    document.getElementById('conversationPane').innerHTML='<gv-thread-details><gv-message-list-header><div>Me</div><p>mobile • (845) 555-0142</p></gv-message-list-header></gv-thread-details>';
   });
 </script>
 <script>` + googleVoiceSMSInitScript + `</script></body></html>`
@@ -93,7 +93,7 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		t.Fatalf("fixture unexpectedly exposed sender through browser URL: %q", report.FinalURL)
 	}
 	if len(report.Captured) != 1 {
-		t.Fatalf("linkless contact-name inbound SMS was not captured exactly once: %v", report.Captured)
+		t.Fatalf("saved-contact inbound SMS with visible opened-header phone was not captured exactly once: %v", report.Captured)
 	}
 	var payload struct {
 		Sender string `json:"sender"`
@@ -104,7 +104,7 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload.Sender != "8455550142" {
-		t.Fatalf("sender was not recovered from opened Google Voice conversation metadata while URL stayed unchanged: got %+v", payload)
+		t.Fatalf("sender was not recovered from the opened Google Voice visible phone header while URL stayed unchanged: got %+v", payload)
 	}
 	if payload.Sender == "2125550199" {
 		t.Fatal("clickable SMS-body phone number was incorrectly used as sender")
@@ -119,7 +119,7 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		t.Fatalf("wrong SMS body: %+v", payload)
 	}
 	if len(report.AfterOutgoing) != len(report.Captured) {
-		t.Fatalf("outgoing Voice row was mistaken for inbound SMS: before=%v after=%v", report.Captured, report.AfterOutgoing)
+		t.Fatalf("outgoing Voice row or opened header was mistaken for inbound SMS: before=%v after=%v", report.Captured, report.AfterOutgoing)
 	}
-	fmt.Fprint(os.Stdout, "direct Google Voice SMS no-navigation sender resolution passed\n")
+	fmt.Fprint(os.Stdout, "direct Google Voice SMS visible-header sender resolution passed\n")
 }
