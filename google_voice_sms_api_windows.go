@@ -266,35 +266,75 @@ func googleVoiceSMSAPIRequestOnce(session googleVoiceSMSAPISession, method strin
 		return nil, googleVoiceSMSUnknownOutcome(errors.New("Google Voice web service is unreachable"), 0)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, errGoogleVoiceSMSNotAuthenticated
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		// Google declined to process this request at all, which is the one
-		// answer that makes sending again safe.
-		return nil, googleVoiceSMSRefused(
-			errors.New("Google Voice web service is asking FlipAi to slow down"),
-			parseGoogleVoiceSMSRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
-	}
-	if resp.StatusCode >= 500 {
-		// A server error can be raised on either side of the text actually
-		// going out, so its outcome is unknown.
-		return nil, googleVoiceSMSUnknownOutcome(
-			fmt.Errorf("Google Voice web service returned HTTP %d", resp.StatusCode),
-			parseGoogleVoiceSMSRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Google Voice web service returned HTTP %d", resp.StatusCode)
-	}
 	const maxResponse = 4 << 20
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
-	if err != nil {
-		return nil, errors.New("Google Voice web service response could not be read")
-	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if len(raw) > maxResponse {
 		return nil, errors.New("Google Voice web service response was unexpectedly large")
 	}
+	// The body is read before the status is judged: on a refusal it carries
+	// Google's own words, and discarding it leaves nothing to diagnose but a
+	// number.
+	retryAfter := parseGoogleVoiceSMSRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	if err := googleVoiceSMSAPIStatusError(resp.StatusCode, retryAfter, string(raw)); err != nil {
+		return nil, err
+	}
+	if readErr != nil {
+		return nil, errors.New("Google Voice web service response could not be read")
+	}
 	return raw, nil
+}
+
+// googleVoiceSMSAPIRequestViaPage makes the request from inside the signed-in
+// Google Voice page, which is the caller Google recognizes. See
+// google_voice_sms_netcapture.go for why that distinction matters.
+func googleVoiceSMSAPIRequestViaPage(d voiceDevTools, session googleVoiceSMSAPISession, method string, body []byte, origin string) ([]byte, error) {
+	if d == nil {
+		return nil, errNoVoiceControlChannel
+	}
+	authorization := googleVoiceSMSAuthorization(session.Cookies, origin, time.Now())
+	if authorization == "" {
+		return nil, errGoogleVoiceSMSNotAuthenticated
+	}
+	headers := map[string]string{}
+	merged := googleVoiceSMSMergedHeaders(googleVoiceSMSAPIDefaultHeaders(), session.Template)
+	for i := 0; i+1 < len(merged); i += 2 {
+		headers[merged[i]] = merged[i+1]
+	}
+	// The browser sets these itself and refuses to have them overridden.
+	for _, forbidden := range []string{"origin", "referer", "user-agent", "cookie", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "accept-encoding", "content-length"} {
+		delete(headers, forbidden)
+	}
+	headers["authorization"] = authorization
+	headers["x-goog-authuser"] = session.AuthUser
+
+	endpoint := googleVoiceSMSAPIBase + "/" + strings.TrimPrefix(method, "/") + "?alt=json&key=" + url.QueryEscape(session.APIKey)
+	expression, err := googleVoiceSMSPageRequestJS(endpoint, headers, string(body))
+	if err != nil {
+		return nil, err
+	}
+	var raw string
+	if err := voiceEval(d, expression, true, &raw); err != nil {
+		return nil, err
+	}
+	result, err := parseGoogleVoiceSMSPageResponse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if result.Status == 0 {
+		// The page could not complete the request at all. Whether Google saw it
+		// is unknown, so a reply must not repeat it.
+		detail := strings.TrimSpace(result.Error)
+		if detail == "" {
+			detail = "the Google Voice page could not reach the web service"
+		}
+		return nil, googleVoiceSMSUnknownOutcome(errors.New(detail), 0)
+	}
+	// Google's own requested wait, when the response allows FlipAi to read it.
+	retryAfter := parseGoogleVoiceSMSRetryAfter(result.RetryAfter, time.Now())
+	if err := googleVoiceSMSAPIStatusError(result.Status, retryAfter, result.Text); err != nil {
+		return nil, err
+	}
+	return []byte(result.Text), nil
 }
 
 func googleVoiceSMSAPIRequest(d voiceDevTools, method string, body []byte) ([]byte, error) {
@@ -305,16 +345,43 @@ func googleVoiceSMSAPIRequest(d voiceDevTools, method string, body []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
+	// The page goes first because it is the caller Google recognizes.
+	//
+	// The Go client remains only for a page that could not attempt the request
+	// at all. It is deliberately not a fallback for a request the page did
+	// attempt: once a request has gone out, repeating it through a second
+	// client could be a second text message, and only the page knows whether
+	// its own attempt reached Google. An unauthenticated answer is the one
+	// exception, because nothing was processed either way.
 	var lastErr error
+	pageUsable := true
 	for _, origin := range googleVoiceSMSOriginOrder() {
-		raw, err := googleVoiceSMSAPIRequestOnce(session, method, body, origin)
+		raw, err := googleVoiceSMSAPIRequestViaPage(d, session, method, body, origin)
 		if err == nil {
 			googleVoiceSMSRememberOrigin(origin)
 			return raw, nil
 		}
 		lastErr = err
-		if !errors.Is(err, errGoogleVoiceSMSNotAuthenticated) {
-			return nil, err
+		if errors.Is(err, errGoogleVoiceSMSNotAuthenticated) {
+			continue
+		}
+		if errors.Is(err, errNoVoiceControlChannel) {
+			break
+		}
+		pageUsable = false
+		break
+	}
+	if pageUsable {
+		for _, origin := range googleVoiceSMSOriginOrder() {
+			raw, err := googleVoiceSMSAPIRequestOnce(session, method, body, origin)
+			if err == nil {
+				googleVoiceSMSRememberOrigin(origin)
+				return raw, nil
+			}
+			lastErr = err
+			if !errors.Is(err, errGoogleVoiceSMSNotAuthenticated) {
+				return nil, err
+			}
 		}
 	}
 	// A proven origin that has started failing is no longer proven: forget it
