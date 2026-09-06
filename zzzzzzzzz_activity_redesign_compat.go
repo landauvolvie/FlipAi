@@ -32,6 +32,15 @@ func init() {
 		`var state={events:[],agent:'',query:'',hours:0,page:1,perPage:12};`,
 		`var state={events:[],agent:'',stage:'',query:'',hours:0,page:1,perPage:12};`, 1)
 	body = strings.Replace(body,
+		`if(e.stage==='gmail'||e.stage==='security')return {name:'Incoming',kind:'incoming',arrow:'↓'};`,
+		`if(e.stage==='gmail'||e.stage==='google_voice'||e.stage==='security')return {name:'Incoming',kind:'incoming',arrow:'↓'};`, 1)
+	body = strings.Replace(body,
+		`function source(e){if(e.stage==='reply'||e.stage==='gmail'||e.stage==='security'||e.stage==='routing')return 'Google Voice';if(e.stage==='agent')return 'Agent';return 'FlipAi';}`,
+		`function source(e){if(e.stage==='reply'||e.stage==='gmail'||e.stage==='google_voice'||e.stage==='security'||e.stage==='routing')return 'Google Voice';if(e.stage==='agent')return 'Agent';return 'FlipAi';}`, 1)
+	body = strings.Replace(body,
+		`if(e.stage==='gmail')return {name:'Received',tone:'info'};`,
+		`if(e.stage==='gmail'||e.stage==='google_voice')return {name:'Received',tone:'info'};`, 1)
+	body = strings.Replace(body,
 		`      if(state.agent&&eventAgent(e)!==state.agent)return false;
       if(cutoff&&new Date(e.time).getTime()<cutoff)return false;`,
 		`      if(state.agent&&eventAgent(e)!==state.agent)return false;
