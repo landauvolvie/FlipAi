@@ -25,19 +25,38 @@ const googleVoiceSMSInitScript = `
     }
     return out;
   };
-  // Google Voice often replaces the visible phone number with a saved contact
-  // name. The number is still present on the signed-in Voice row in accessibility
-  // labels, titles, data attributes or a descendant link. Inspect only that row
-  // and its descendants; never infer a sender from the SMS body itself.
-  const phoneOf = (row,text) => {
-    const attrs=['aria-label','title','href','data-phone','data-number','data-e164','data-id','value'];
-    const candidates=[text];
+  // A saved contact name may replace the visible number. Never search the whole
+  // row text for a sender because that text also contains the SMS body: a text
+  // such as "call 212-555-0199" must not turn that unrelated number into the
+  // authenticated sender. Only identity metadata and dedicated contact fields
+  // are allowed to provide the phone number.
+  const phoneOf = row => {
+    const attrs=['title','href','data-phone','data-number','data-e164','value'];
+    const candidates=[];
     const addAttrs=el=>{for(const a of attrs){try{const v=el.getAttribute?.(a);if(v)candidates.push(v)}catch(_){}}};
     addAttrs(row);
-    let descendants=[];try{descendants=row.querySelectorAll?.('[aria-label],[title],[href],[data-phone],[data-number],[data-e164],[data-id],[value]')||[]}catch(_){}
+    let descendants=[];try{descendants=row.querySelectorAll?.('[title],[href],[data-phone],[data-number],[data-e164],[value]')||[]}catch(_){}
     for(const el of descendants){addAttrs(el);if(candidates.length>180)break;}
+    // Some Voice builds render an unsaved number as the contact/header text but
+    // do not repeat it in an attribute. Restrict that fallback to identity-like
+    // elements, never the snippet/message element or the row as a whole.
+    let identities=[];try{identities=row.querySelectorAll?.('[class*="contact" i],[class*="sender" i],[class*="recipient" i],[data-contact],[data-recipient]')||[]}catch(_){}
+    for(const el of identities){const v=norm(el.innerText||el.textContent||'');if(v)candidates.push(v);if(candidates.length>220)break;}
     for(const v of candidates){const p=digits(v);if(p)return p;}
     return '';
+  };
+  const threadOf = row => {
+    let link=null;
+    try{link=row.matches?.('a[href*="/messages/"]')?row:row.querySelector?.('a[href*="/messages/"]')}catch(_){}
+    if(!link)return '';
+    let raw='';try{raw=String(link.getAttribute('href')||'').trim()}catch(_){}
+    if(!raw)return '';
+    if(raw.startsWith('/'))return raw.split(/[?#]/,1)[0];
+    try{
+      const u=new URL(raw,location.href);
+      if(u.hostname.toLowerCase()!=='voice.google.com')return '';
+      return u.pathname;
+    }catch(_){return ''}
   };
   const bodyOf = (row,text,phone) => {
     const preferred=row.querySelector?.('[data-message-text],[class*="snippet"],[class*="message-text"],[aria-label*="message" i]');
@@ -58,21 +77,24 @@ const googleVoiceSMSInitScript = `
     for(const [k,t] of state.recent){if(now-t>30000)state.recent.delete(k)}
     for(const row of rows()){
       const text=norm((row.getAttribute?.('aria-label')||'')+' '+(row.innerText||row.textContent||''));
-      const phone=phoneOf(row,text);
+      const phone=phoneOf(row);
+      const thread=threadOf(row);
       const body=bodyOf(row,text,phone);
-      const sig=phone+'\u0000'+body;
+      const sig=(phone||'unresolved')+'\u0000'+(thread||'no-thread')+'\u0000'+body;
       const old=state.rows.get(row)||'';
       state.rows.set(row,sig);
-      if(!state.armed||!phone||!body||sig===old||/^you\s*:/i.test(body))continue;
-      const recentKey=phone+'\u0000'+body;
+      if(!state.armed||!body||sig===old||/^you\s*:/i.test(body))continue;
+      const recentKey=sig;
       if(state.recent.has(recentKey))continue;
       state.recent.set(recentKey,now);
-      const payload=JSON.stringify({sender:phone,body:body,at:new Date().toISOString()});
+      // Send unresolved identities too. Go logs them as blocked rather than
+      // silently hiding an inbound text from Activity.
+      const payload=JSON.stringify({sender:phone,thread:thread,body:body,at:new Date().toISOString()});
       try{ if(typeof globalThis.flipVoiceSMS==='function') globalThis.flipVoiceSMS(payload); }catch(_){}
     }
     state.armed=true;
   }
   const obs=new MutationObserver(()=>{clearTimeout(globalThis.__flipAiDirectSMSTimer);globalThis.__flipAiDirectSMSTimer=setTimeout(scan,80)});
-  const start=()=>{try{obs.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-label','title','href','class','data-phone','data-number','data-e164','data-id','value']})}catch(_){} scan(); setInterval(scan,800)};
+  const start=()=>{try{obs.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-label','title','href','class','data-phone','data-number','data-e164','value']})}catch(_){} scan(); setInterval(scan,800)};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
 })()`
