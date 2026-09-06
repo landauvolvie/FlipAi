@@ -127,7 +127,7 @@ func TestBothQueuedCommandsRunInOrder(t *testing.T) {
 	qm := &queueMailClient{
 		msgs: map[string]GmailMessage{
 			"m1": voiceMessage("m1", "482913 STATUS"),
-			"m2": voiceMessage("m2", "482913 A NEW"),
+			"m2": voiceMessage("m2", "482913 AL NEW"),
 		},
 		// List returns newest first; poll walks it oldest-first.
 		ids: []string{"m2", "m1"},

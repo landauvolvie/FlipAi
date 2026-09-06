@@ -8,6 +8,10 @@ import (
 )
 
 const (
+	// These are the legacy/internal parser defaults. Public SMS routing uses the
+	// provider-grouped shortcuts in sms_routes.go (O/OC/OW, A/AC/AW/AL, G/M/X).
+	// Keeping the internal defaults stable avoids changing unrelated voice,
+	// permission, and direct-parser behavior while the public SMS layer changes.
 	defaultCodexPrefix       = "C"
 	defaultClaudePrefix      = "A"
 	defaultChatGPTPrefix     = "G"
