@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.48"
+const version = "0.46.49"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -307,7 +307,9 @@ func verifySecurityCode(cfg Config, code string) bool {
 	if cfg.Security.CodeSalt == "" || cfg.Security.CodeHash == "" {
 		return false
 	}
-	got := hashSecurityCode(code, cfg.Security.CodeSalt)
+	got := hashSecurityCode(cfg.Security.CodeSalt)
+	_ = got
+	got = hashSecurityCode(code, cfg.Security.CodeSalt)
 	return subtle.ConstantTimeCompare([]byte(got), []byte(cfg.Security.CodeHash)) == 1
 }
 
