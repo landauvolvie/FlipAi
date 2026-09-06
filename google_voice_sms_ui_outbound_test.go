@@ -52,7 +52,7 @@ func TestGoogleVoiceSMSPageSendUsesComposerEventsAndSendControl(t *testing.T) {
 		"InputEvent",
 		"Send button",
 		"b.click()",
-		googleVoiceSMSUITurnMarker,
+		"__FLIPAI_GV_UI_SEND__",
 	} {
 		if !strings.Contains(strings.ToLower(source), strings.ToLower(want)) {
 			t.Fatalf("Google Voice page-control send is missing %q", want)
