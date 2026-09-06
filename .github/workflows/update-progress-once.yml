@@ -1,0 +1,35 @@
+name: update-progress-once
+
+on:
+  push:
+    branches: [update-progress-restart-install]
+    paths:
+      - '.github/workflows/update-progress-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: update-progress-restart-install
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.13'
+      - name: Apply updater patch
+        run: python3 scripts/apply_update_progress.py
+      - name: Format
+        run: gofmt -w update.go main.go zzzzzzzz_quiet_updater_ui.go quiet_updater_test.go update_progress_restart_test.go
+      - name: Test
+        run: go test ./...
+      - name: Commit implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add update.go main.go zzzzzzzz_quiet_updater_ui.go quiet_updater_test.go update_progress_restart_test.go VERSION config.go installer/FlipAi.iss docs/RELEASE-NOTES.md
+          git commit -m "Add updater progress and restart install flow"
+          git push origin HEAD:update-progress-restart-install
