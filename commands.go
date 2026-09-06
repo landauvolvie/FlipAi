@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	defaultCodexPrefix       = "C"
-	defaultClaudePrefix      = "A"
-	defaultChatGPTPrefix     = "G"
-	defaultClaudeChatPrefix  = "H"
-	defaultGeminiChatPrefix  = "M"
+	defaultCodexPrefix       = "OC"
+	defaultClaudePrefix      = "AL"
+	defaultChatGPTPrefix     = "O"
+	defaultClaudeChatPrefix  = "A"
+	defaultGeminiChatPrefix  = "G"
 	defaultGrokChatPrefix    = "X"
-	defaultCopilotChatPrefix = "P"
+	defaultCopilotChatPrefix = "M"
 	defaultNewSessionCommand = "NEW"
 )
 
