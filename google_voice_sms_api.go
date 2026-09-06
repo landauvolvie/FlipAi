@@ -303,19 +303,41 @@ func parseGoogleVoiceSMSAPIListResponseDetailed(raw []byte, accountSlot string) 
 var errGoogleVoiceSMSNotAuthenticated = errors.New("Google Voice SMS session is not authenticated")
 
 // A reply is the whole point of the bridge, and Google's web service does not
-// promise to accept one on the first ask: it answers 429 when FlipAi has been
-// asking too often, and 5xx when it is simply unhappy. Both are momentary, so
-// both are worth asking again -- an answer the agent already produced must not
-// be thrown away because one HTTP request came back busy.
+// promise to accept one on the first ask. But asking again is only safe when
+// Google said it did not act on the first ask, and that is not the same
+// question as "did the request fail".
+//
+//   - 429 is Google refusing to process the request at all. Nothing was sent,
+//     so sending again delivers the message once.
+//   - A 5xx, or a connection that dropped while FlipAi was reading the reply,
+//     says nothing about whether the text went out. Google may have accepted
+//     and sent it, and the response simply never came back. Sending again on
+//     those would text the person the same answer twice, and they pay for it.
+//
+// So the two are tracked separately: Refused may be resent, Unknown may only be
+// retried where a duplicate costs nothing -- reading the inbox, where the seen
+// set discards the repeat.
 type googleVoiceSMSTransientError struct {
 	err        error
 	retryAfter time.Duration
+	refused    bool
 }
 
 func (e *googleVoiceSMSTransientError) Error() string { return e.err.Error() }
 func (e *googleVoiceSMSTransientError) Unwrap() error { return e.err }
 
-func googleVoiceSMSTransient(err error, retryAfter time.Duration) error {
+// googleVoiceSMSRefused marks a request Google declined to act on. Safe to send
+// again.
+func googleVoiceSMSRefused(err error, retryAfter time.Duration) error {
+	if err == nil {
+		return nil
+	}
+	return &googleVoiceSMSTransientError{err: err, retryAfter: retryAfter, refused: true}
+}
+
+// googleVoiceSMSUnknownOutcome marks a request that may or may not have been
+// acted on. Safe to repeat only when repeating is harmless.
+func googleVoiceSMSUnknownOutcome(err error, retryAfter time.Duration) error {
 	if err == nil {
 		return nil
 	}
@@ -323,10 +345,22 @@ func googleVoiceSMSTransient(err error, retryAfter time.Duration) error {
 }
 
 // googleVoiceSMSRetryable reports whether asking again could plausibly work,
-// and how long Google asked FlipAi to wait before doing so.
+// and how long Google asked FlipAi to wait. Use it only where a repeated
+// request cannot be seen by anyone -- reading, never sending.
 func googleVoiceSMSRetryable(err error) (time.Duration, bool) {
 	var transient *googleVoiceSMSTransientError
 	if errors.As(err, &transient) {
+		return transient.retryAfter, true
+	}
+	return 0, false
+}
+
+// googleVoiceSMSResendable is the stricter question a reply has to ask: did
+// Google tell us it did nothing? Anything less certain is left alone, because
+// the cost of guessing wrong is the same text message delivered twice.
+func googleVoiceSMSResendable(err error) (time.Duration, bool) {
+	var transient *googleVoiceSMSTransientError
+	if errors.As(err, &transient) && transient.refused {
 		return transient.retryAfter, true
 	}
 	return 0, false
@@ -393,6 +427,11 @@ const (
 	googleVoiceSMSPollInterval    = 15 * time.Second
 	googleVoiceSMSPollMaxInterval = 5 * time.Minute
 	googleVoiceSMSPollTick        = 500 * time.Millisecond
+
+	// Taking what the page has already received asks Google for nothing, so it
+	// runs on its own brisk cadence and keeps running while a reply holds the
+	// quota.
+	googleVoiceSMSDrainInterval = 2 * time.Second
 )
 
 // googleVoiceSMSListenerNote turns what one inbox check saw into something a

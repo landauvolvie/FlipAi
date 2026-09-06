@@ -260,21 +260,26 @@ func googleVoiceSMSAPIRequestOnce(session googleVoiceSMSAPISession, method strin
 
 	resp, err := googleVoiceSMSHTTPClient.Do(req)
 	if err != nil {
-		// A connection that never completed says nothing about whether Google
-		// would accept the request, so it is worth asking again.
-		return nil, googleVoiceSMSTransient(errors.New("Google Voice web service is unreachable"), 0)
+		// The connection may have dropped while the response was being read, in
+		// which case Google could already have sent the text. Reading may repeat
+		// this; a reply may not.
+		return nil, googleVoiceSMSUnknownOutcome(errors.New("Google Voice web service is unreachable"), 0)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, errGoogleVoiceSMSNotAuthenticated
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, googleVoiceSMSTransient(
+		// Google declined to process this request at all, which is the one
+		// answer that makes sending again safe.
+		return nil, googleVoiceSMSRefused(
 			errors.New("Google Voice web service is asking FlipAi to slow down"),
 			parseGoogleVoiceSMSRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
 	if resp.StatusCode >= 500 {
-		return nil, googleVoiceSMSTransient(
+		// A server error can be raised on either side of the text actually
+		// going out, so its outcome is unknown.
+		return nil, googleVoiceSMSUnknownOutcome(
 			fmt.Errorf("Google Voice web service returned HTTP %d", resp.StatusCode),
 			parseGoogleVoiceSMSRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
@@ -339,21 +344,29 @@ func googleVoiceSMSAPISend(d voiceDevTools, threadID, body string, deadline time
 	googleVoiceSMSOutboundPending.Add(1)
 	defer googleVoiceSMSOutboundPending.Add(-1)
 
+	// One tracking id for the whole reply, not one per attempt. It is the
+	// nearest thing this endpoint offers to an idempotency key, so a resend
+	// carries the identity of the message it is resending rather than looking
+	// like a second, unrelated text.
+	nonce := time.Now().UnixNano() & 0x7fffffffffffffff
+
 	var lastErr error
 	for attempt := 0; attempt < googleVoiceSMSSendAttempts; attempt++ {
 		if attempt > 0 {
-			wait := googleVoiceSMSSendBackoff(attempt-1, googleVoiceSMSRetryAfterOf(lastErr))
+			wait := googleVoiceSMSSendBackoff(attempt-1, googleVoiceSMSResendAfterOf(lastErr))
 			if !deadline.IsZero() && time.Now().Add(wait).After(deadline) {
 				break
 			}
 			time.Sleep(wait)
 		}
-		err := googleVoiceSMSAPISendOnce(d, threadID, body)
+		err := googleVoiceSMSAPISendOnce(d, threadID, body, nonce)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
-		if _, retryable := googleVoiceSMSRetryable(err); !retryable {
+		// Only an answer that means "I did nothing with this" may be sent
+		// again. Anything else could already be on its way to the phone.
+		if _, resendable := googleVoiceSMSResendable(err); !resendable {
 			return err
 		}
 	}
@@ -363,13 +376,13 @@ func googleVoiceSMSAPISend(d voiceDevTools, threadID, body string, deadline time
 	return fmt.Errorf("Google Voice would not accept the reply: %w", lastErr)
 }
 
-func googleVoiceSMSRetryAfterOf(err error) time.Duration {
-	wait, _ := googleVoiceSMSRetryable(err)
+func googleVoiceSMSResendAfterOf(err error) time.Duration {
+	wait, _ := googleVoiceSMSResendable(err)
 	return wait
 }
 
-func googleVoiceSMSAPISendOnce(d voiceDevTools, threadID, body string) error {
-	payload, err := googleVoiceSMSAPISendBody(threadID, body, time.Now().UnixNano()&0x7fffffffffffffff)
+func googleVoiceSMSAPISendOnce(d voiceDevTools, threadID, body string, nonce int64) error {
+	payload, err := googleVoiceSMSAPISendBody(threadID, body, nonce)
 	if err != nil {
 		return err
 	}
@@ -492,10 +505,34 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 		return
 	}
 	interval := googleVoiceSMSPollInterval
-	var nextPoll time.Time
+	var nextPoll, nextDrain time.Time
+
+	// drain takes whatever the page has already received. It asks Google for
+	// nothing, so it keeps running even while a reply holds the quota -- an
+	// inbound text that arrives during a retry sequence is still delivered
+	// immediately. An update it processed also proves the listener is alive.
+	drain := func() (int, googleVoiceSMSAPIStats) {
+		captured, stats := googleVoiceSMSDrainCaptured(dataDir, d)
+		if captured > 0 {
+			now := time.Now()
+			note := googleVoiceSMSListenerNote(stats, captured)
+			mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
+				s.Running, s.Starting = true, false
+				s.Connected, s.SignedIn = true, true
+				s.ListenerRunning, s.Ready = true, true
+				s.LastProbeAt = now
+				s.LastEvent = "background-observed"
+				s.LastError = ""
+				s.LastNote = note
+				s.ObservedRows = stats.Threads
+				s.ObserverCandidates = stats.Items
+			})
+		}
+		return captured, stats
+	}
 
 	poll := func() {
-		captured, capturedStats := googleVoiceSMSDrainCaptured(dataDir, d)
+		captured, capturedStats := drain()
 		messages, stats, err := googleVoiceSMSAPIFetchInbox(d)
 		if err == nil {
 			err = processGoogleVoiceSMSAPIPoll(dataDir, messages)
@@ -573,15 +610,23 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 			nextPoll = time.Time{}
 			continue
 		}
-		// A reply in flight has the quota. Reading the inbox can wait; the
-		// person who texted cannot.
+		// A reply in flight has the quota, so the request to Google waits. What
+		// the page has already received does not, because taking it costs
+		// Google nothing -- a text arriving mid-retry is still delivered now
+		// rather than up to a hundred seconds later.
 		if googleVoiceSMSOutboundPending.Load() > 0 {
+			if !time.Now().Before(nextDrain) {
+				drain()
+				nextDrain = time.Now().Add(googleVoiceSMSDrainInterval)
+			}
 			continue
 		}
 		if time.Now().Before(nextPoll) {
 			continue
 		}
 		poll()
-		nextPoll = time.Now().Add(interval)
+		now := time.Now()
+		nextPoll = now.Add(interval)
+		nextDrain = now.Add(googleVoiceSMSDrainInterval)
 	}
 }
