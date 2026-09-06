@@ -42,6 +42,12 @@ const (
 	// intentionally longer than an ordinary probe but much shorter than a model
 	// turn.
 	googleVoiceSMSUITurnDevToolsTimeout = 15 * time.Second
+
+	// MMS capture reads the actual media bytes from the signed-in Google Voice
+	// page. A phone photo or voice note can need more than the generic 8-second
+	// probe window to come out of Google's cache, so only this marked expression
+	// gets a longer deadline.
+	googleVoiceMediaCaptureDevToolsTimeout = 30 * time.Second
 )
 
 func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
@@ -76,6 +82,9 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	if await && strings.Contains(expression, googleVoiceSMSUITurnMarker) {
 		return googleVoiceSMSUITurnDevToolsTimeout
 	}
+	if await && strings.Contains(expression, googleVoiceMediaCaptureMarker) {
+		return googleVoiceMediaCaptureDevToolsTimeout
+	}
 	// A Google Voice web-service request runs in the page and can take as long
 	// as any network call. The generic probe deadline is far shorter, and a
 	// fetch the host stops waiting for is not cancelled -- it can still deliver
@@ -91,7 +100,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 		return errNoVoiceControlChannel
 	}
 
-	// Browser-chat image turns carry a private marker inside the prompt sent to
+	// Browser-chat media turns carry a private marker inside the prompt sent to
 	// the worker. Strip it before the page sees the prompt, upload those local
 	// temp files through the site's own file input, then run the normal provider
 	// turn unchanged. The nested DevTools calls contain no marker, so they do not
