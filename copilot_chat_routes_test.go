@@ -59,9 +59,9 @@ func TestCopilotChatUsesSetupOnlyVisibleWindowAndBackgroundWebView(t *testing.T)
 	mode := string(modeRaw)
 	for _, want := range []string{
 		`DataPath: copilotChatProfilePath(dataDir)`,
-		`X: -30000`,
-		`Y: -30000`,
-		`NoActivate: true`,
+		`opts.WindowOptions.X = -30000`,
+		`opts.WindowOptions.Y = -30000`,
+		`opts.WindowOptions.NoActivate = true`,
 		`copilotChatWebURL`,
 		`.click()`,
 		`textarea#userInput`,
@@ -72,7 +72,7 @@ func TestCopilotChatUsesSetupOnlyVisibleWindowAndBackgroundWebView(t *testing.T)
 			t.Fatalf("Microsoft Copilot Chat background architecture is missing %q", want)
 		}
 	}
-	if !strings.Contains(windows, `runCopilotChatWebView(dataDir, visible bool)`) {
+	if !strings.Contains(windows, `runCopilotChatWebView(dataDir string, visible bool)`) {
 		t.Fatal("Copilot WebView does not keep visible setup mode separate from the background worker")
 	}
 	if !strings.Contains(mode, `mode == "--copilot-chat-login"`) || !strings.Contains(mode, `mode == "--copilot-chat-worker"`) {
