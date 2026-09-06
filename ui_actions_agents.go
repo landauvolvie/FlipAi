@@ -18,6 +18,8 @@ func agentFromForm(r *http.Request, field string) string {
 		return "M"
 	case "X":
 		return "X"
+	case "P":
+		return "P"
 	default:
 		return "C"
 	}
@@ -41,7 +43,7 @@ func (a *App) addAgentNumber(w http.ResponseWriter, r *http.Request) {
 	err := a.updateConfig(func(cfg *Config) error {
 		s := agentSettings(*cfg, agent)
 		access := normalizeAccess(r.FormValue("newAccess"))
-		if agent == "G" || agent == "H" || agent == "M" || agent == "X" {
+		if agent == "G" || agent == "H" || agent == "M" || agent == "X" || agent == "P" {
 			access = AccessSMS
 		}
 		s.Phones = append(s.Phones, AgentPhone{Number: number, Label: r.FormValue("newLabel"), Access: access})
@@ -64,7 +66,7 @@ func (a *App) removeAgentNumber(w http.ResponseWriter, r *http.Request) {
 	}
 	agent, number, _ := strings.Cut(r.FormValue("number"), ":")
 	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" {
+	if agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" && agent != "P" {
 		agent = "C"
 	}
 	number = normalizeUSPhone(number)
@@ -97,7 +99,7 @@ func applyAgentAccessForm(cfg *Config, r *http.Request, agent string) error {
 	}
 
 	s := agentSettings(*cfg, agent)
-	browserChat := agent == "G" || agent == "H" || agent == "M" || agent == "X"
+	browserChat := agent == "G" || agent == "H" || agent == "M" || agent == "X" || agent == "P"
 	for i, p := range s.Phones {
 		if v := r.FormValue("access-" + agent + "-" + p.Number); v != "" {
 			if browserChat {
