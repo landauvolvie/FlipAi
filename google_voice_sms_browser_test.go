@@ -18,31 +18,31 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not available; skipping the browser SMS harness")
 	}
+	if strings.Contains(googleVoiceSMSInitScript, ".click(") ||
+		strings.Contains(googleVoiceSMSInitScript, "aria-selected") ||
+		strings.Contains(googleVoiceSMSInitScript, "gv-message-list-header") {
+		t.Fatal("direct SMS inbound detector must not click, select, or open a Google Voice conversation")
+	}
+
 	pw := playwrightModule(t)
 	dir := t.TempDir()
 	fixture := filepath.Join(dir, "voice-sms.html")
-	// Mirror the live v0.46.38 failure: the linkless conversation row contains
-	// only a saved contact name. Clicking it leaves location.href on /messages
-	// and the opened Google Voice pane exposes the sender only as visible header
-	// text: "Me" plus "mobile • (845) 555-0142". Keep unrelated preloaded
-	// identity metadata on the page so the detector must bind to the explicitly
-	// opened header. The SMS body also contains a decoy phone number which may
-	// never become sender identity.
+	// Match the real background case: the visible Messages list shows only the
+	// saved contact name "Me". The conversation is never selected or opened.
+	// A Google Voice background response carries the exact t.+1 sender/thread,
+	// then the list preview changes. A phone number inside the SMS body and an
+	// unrelated conversation identity must never become the sender.
 	html := `<!doctype html><html><head><meta charset="utf-8"><title>Voice messages</title></head><body>
-<div id="preloaded" data-conversation-id="t.+19995550123" hidden></div>
 <div id="threadRow" class="voice-thread-row" role="listitem" aria-label="Me">
   <span class="contact-name">Me</span>
-  <div class="latest-preview"><span id="messageText">old message</span> <a class="body-link" href="tel:+12125550199" title="212-555-0199">212-555-0199</a></div>
+  <div class="latest-preview"><span id="messageText">old message</span></div>
   <span class="time">10:17 PM</span>
 </div>
-<div id="conversationPane"></div>
 <script>
   globalThis.__captured=[];
+  globalThis.__rowClicks=0;
   globalThis.flipVoiceSMS=(payload)=>globalThis.__captured.push(payload);
-  document.getElementById('threadRow').addEventListener('click',()=>{
-    document.getElementById('threadRow').setAttribute('aria-selected','true');
-    document.getElementById('conversationPane').innerHTML='<gv-thread-details><gv-message-list-header><div>Me</div><p>mobile • (845) 555-0142</p></gv-message-list-header></gv-thread-details>';
-  });
+  document.getElementById('threadRow').addEventListener('click',()=>globalThis.__rowClicks++);
 </script>
 <script>` + googleVoiceSMSInitScript + `</script></body></html>`
 	if err := os.WriteFile(fixture, []byte(html), 0600); err != nil {
@@ -79,6 +79,8 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		DetectorReady bool     `json:"detectorReady"`
 		DetectorRows  int      `json:"detectorRows"`
 		FinalURL      string   `json:"finalURL"`
+		RowClicks     int      `json:"rowClicks"`
+		Selected      string   `json:"selected"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &report); err != nil {
 		t.Fatalf("could not parse SMS browser report: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
@@ -87,13 +89,16 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		t.Fatalf("SMS detector raised browser errors: %v", report.Errors)
 	}
 	if !report.DetectorReady || report.DetectorRows < 1 {
-		t.Fatalf("detector claimed ready without seeing the linkless Google Voice row: %+v", report)
+		t.Fatalf("background detector claimed ready without seeing the Google Voice list row: %+v", report)
+	}
+	if report.RowClicks != 0 || report.Selected != "" {
+		t.Fatalf("background SMS detector interacted with the conversation UI: %+v", report)
 	}
 	if strings.Contains(report.FinalURL, "itemId") || !strings.HasSuffix(report.FinalURL, "/u/2/messages") {
-		t.Fatalf("fixture unexpectedly exposed sender through browser URL: %q", report.FinalURL)
+		t.Fatalf("background detector navigated away from the Messages list: %q", report.FinalURL)
 	}
 	if len(report.Captured) != 1 {
-		t.Fatalf("saved-contact inbound SMS with visible opened-header phone was not captured exactly once: %v", report.Captured)
+		t.Fatalf("background inbound SMS was not captured exactly once: %v", report.Captured)
 	}
 	var payload struct {
 		Sender string `json:"sender"`
@@ -104,13 +109,13 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload.Sender != "8455550142" {
-		t.Fatalf("sender was not recovered from the opened Google Voice visible phone header while URL stayed unchanged: got %+v", payload)
+		t.Fatalf("sender was not recovered from Google Voice background data: got %+v", payload)
 	}
 	if payload.Sender == "2125550199" {
-		t.Fatal("clickable SMS-body phone number was incorrectly used as sender")
+		t.Fatal("phone number inside SMS body was incorrectly used as sender")
 	}
 	if payload.Sender == "9995550123" {
-		t.Fatal("unrelated preloaded conversation identity was incorrectly used as sender")
+		t.Fatal("unrelated conversation identity was incorrectly used as sender")
 	}
 	if payload.Thread != "/u/2/messages?itemId=t.%2B18455550142" {
 		t.Fatalf("wrong Google Voice itemId thread: %+v", payload)
@@ -119,7 +124,7 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		t.Fatalf("wrong SMS body: %+v", payload)
 	}
 	if len(report.AfterOutgoing) != len(report.Captured) {
-		t.Fatalf("outgoing Voice row or opened header was mistaken for inbound SMS: before=%v after=%v", report.Captured, report.AfterOutgoing)
+		t.Fatalf("outgoing Voice preview was mistaken for inbound SMS: before=%v after=%v", report.Captured, report.AfterOutgoing)
 	}
-	fmt.Fprint(os.Stdout, "direct Google Voice SMS visible-header sender resolution passed\n")
+	fmt.Fprint(os.Stdout, "direct Google Voice SMS background-only sender resolution passed\n")
 }
