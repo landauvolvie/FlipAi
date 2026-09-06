@@ -14,9 +14,10 @@ await page.goto('https://voice.google.com/u/2/messages');
 await page.waitForTimeout(1000);
 
 // The row intentionally shows only a saved contact name. The trusted phone
-// number lives in a descendant title attribute, which mirrors the real Voice UI
-// case that v0.46.33 missed.
-await page.locator('#snippet').evaluate(el => { el.textContent = 'X: hi'; });
+// number lives in a descendant title attribute. The SMS body contains a
+// different valid-looking phone number to prove FlipAi never mistakes body text
+// for sender identity.
+await page.locator('#snippet').evaluate(el => { el.textContent = 'X: call 212-555-0199'; });
 await page.waitForTimeout(1000);
 let captured = await page.evaluate(() => globalThis.__captured || []);
 
