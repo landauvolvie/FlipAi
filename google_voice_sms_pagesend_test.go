@@ -406,3 +406,49 @@ func TestGoogleVoiceSMSSendTemplateRefusesAnUnusableCapture(t *testing.T) {
 		t.Fatal("a template was stored from an unusable capture")
 	}
 }
+
+// An isolated world shares its frame's storage but not its globals, and an
+// isolated world is the only place FlipAi can run code in the sending frame.
+// Reading the capture from globals alone therefore always found nothing, so it
+// has to cross between worlds through storage.
+func TestGoogleVoiceSMSCaptureCrossesWorldsThroughStorage(t *testing.T) {
+	if !strings.Contains(googleVoiceSMSNetworkCaptureJS, "setItem('__flipAiGVSend'") {
+		t.Fatal("a real send is not left anywhere an isolated world can reach it")
+	}
+	if !strings.Contains(googleVoiceSMSCapturedSendJS, "getItem('__flipAiGVSend')") {
+		t.Fatal("the reader looks only at globals, which an isolated world cannot see")
+	}
+	if !strings.Contains(googleVoiceSMSCapturedSendJS, "__flipAiGVNet") {
+		t.Fatal("the reader no longer checks the same-world globals first")
+	}
+	if !strings.Contains(googleVoiceSMSForgetCapturedSendJS, "removeItem('__flipAiGVSend')") {
+		t.Fatal("the handed-over message is never cleared after the shape is learned")
+	}
+	for _, js := range []string{googleVoiceSMSCapturedSendJS, googleVoiceSMSForgetCapturedSendJS} {
+		for _, forbidden := range []string{".click(", "querySelector", "aria-label"} {
+			if strings.Contains(js, forbidden) {
+				t.Fatalf("a capture helper drives the page through %q", forbidden)
+			}
+		}
+	}
+}
+
+// The learned shape is cleared from the browser once it is safely on disk, so
+// the message it was learned from does not linger in storage.
+func TestGoogleVoiceSMSForgetsTheCaptureOnceLearned(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSLearnSendTemplate(")
+	if start < 0 {
+		t.Fatal("the template learner is gone")
+	}
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "saveGoogleVoiceSMSSendTemplate(") || !strings.Contains(body, "googleVoiceSMSForgetCapturedSend(") {
+		t.Fatal("the capture is not cleared after the shape is stored")
+	}
+}

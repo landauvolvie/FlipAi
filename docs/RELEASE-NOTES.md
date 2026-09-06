@@ -2,13 +2,15 @@
 
 Two fixes to the learned reply format shipped in v0.46.46, without which it could never have worked.
 
-## The format was being read from the wrong place
+## The format was being read from the wrong place, twice over
 
-v0.46.46 records the request Google Voice makes when you send a text, so FlipAi can reuse its shape. It recorded it correctly and then looked for it in the wrong frame.
+v0.46.46 records the request Google Voice makes when you send a text, so FlipAi can reuse its shape. It recorded it correctly and then looked for it somewhere it could never be.
 
-The recording lives with whichever part of the page made the request, and the send is made by the small helper frame — the same separation that made v0.46.44's request get refused. FlipAi was asking the main page, which never has it. The format would have read as never learned no matter how many texts you sent.
+First, it asked the main page. The recording lives with whichever part of the page made the request, and the send is made by the small helper frame — the same separation that made v0.46.44's request get refused.
 
-FlipAi now asks the frame that made the request, and falls back to the main page in case Google moves it.
+Second, and less obvious: the only way FlipAi can run code in that helper frame gives it a separate set of variables from the frame's own. It shares the frame's storage, but not what the recording script had put in memory. Asking the right frame the wrong way would still have found nothing.
+
+The recording is now handed over through the frame's storage, which both sides can reach, and cleared once the shape is safely saved so the message it came from does not linger there. Either way the format would have read as never learned no matter how many texts you sent.
 
 ## The format is now remembered
 

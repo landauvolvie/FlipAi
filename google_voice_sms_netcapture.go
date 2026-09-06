@@ -69,6 +69,14 @@ const googleVoiceSMSNetworkCaptureJS = `
       // principles, so its exact body is kept when Google Voice makes one.
       if (isSend(raw) && typeof body === 'string' && body.length > 0 && body.length < 200000) {
         store.send = { at: Date.now(), url: String(raw), key: keyOf(raw), body: body, headers: headers || {} };
+        // Also leave it where a different world in this frame can reach it.
+        // FlipAi reads the capture from an isolated world, which shares this
+        // frame's storage but not its globals, so globalThis alone is
+        // invisible to the only reader that exists.
+        try {
+          const store2 = globalThis.localStorage || globalThis.sessionStorage;
+          if (store2) store2.setItem('__flipAiGVSend', body);
+        } catch (_) {}
       }
       if (!headers || !headers['authorization']) return;
       store.template = { at: Date.now(), url: String(raw), key: keyOf(raw), origin: String(location.origin || ''), headers: headers };
@@ -324,9 +332,28 @@ func googleVoiceSMSAPIStatusError(status int, retryAfter time.Duration, bodyText
 	return nil
 }
 
-// googleVoiceSMSCapturedSendJS hands over the last real send Google Voice made,
-// if it has made one since the browser started.
-const googleVoiceSMSCapturedSendJS = `(()=>{try{return JSON.stringify(globalThis.__flipAiGVNet&&globalThis.__flipAiGVNet.send||{})}catch(_){return '{}'}})()`
+// googleVoiceSMSCapturedSendJS hands over the last real send Google Voice made.
+//
+// It has to work from an isolated world, because that is the only place FlipAi
+// can run code in the frame that issues the send. An isolated world shares its
+// frame's DOM and storage but gets its own globals, so the capture script's
+// globalThis is invisible from it -- reading only that always found nothing.
+// Storage is the crossing point, and the globals are still checked first for
+// the case where both live in the same world.
+const googleVoiceSMSCapturedSendJS = `(()=>{try{
+  const live=globalThis.__flipAiGVNet&&globalThis.__flipAiGVNet.send;
+  if(live&&live.body)return JSON.stringify(live);
+  for(const s of [globalThis.localStorage,globalThis.sessionStorage]){
+    try{const v=s&&s.getItem('__flipAiGVSend');if(v)return JSON.stringify({at:0,url:'',key:'',body:v})}catch(_){}
+  }
+}catch(_){}return '{}'})()`
+
+// googleVoiceSMSForgetCapturedSendJS clears the handed-over copy once FlipAi
+// has learned the shape from it, so the message it was carrying does not sit in
+// the browser's storage afterwards.
+const googleVoiceSMSForgetCapturedSendJS = `(()=>{try{
+  for(const s of [globalThis.localStorage,globalThis.sessionStorage]){try{s&&s.removeItem('__flipAiGVSend')}catch(_){}}
+}catch(_){}return true})()`
 
 // googleVoiceSMSCapturedSend is one real send request, as Google Voice built it.
 type googleVoiceSMSCapturedSend struct {

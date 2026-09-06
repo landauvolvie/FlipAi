@@ -548,12 +548,24 @@ func googleVoiceSMSCapturedSendRequest(d voiceDevTools) googleVoiceSMSCapturedSe
 	return parseGoogleVoiceSMSCapturedSend(raw)
 }
 
+// googleVoiceSMSForgetCapturedSend clears the copy the capture script left for
+// FlipAi to collect. Once the shape is on disk the message it came from has no
+// reason to stay in the browser's storage.
+func googleVoiceSMSForgetCapturedSend(d voiceDevTools) {
+	if contextID, ok := googleVoiceSMSAPIFrameContext(d); ok {
+		_ = voiceEvalInContext(d, googleVoiceSMSForgetCapturedSendJS, false, contextID, nil)
+	}
+	_ = voiceEval(d, googleVoiceSMSForgetCapturedSendJS, false, nil)
+}
+
 // googleVoiceSMSLearnSendTemplate keeps whatever shape the page has observed,
 // so the one-time teaching step stays one time. The page forgets its capture
 // with the document; this does not.
 func googleVoiceSMSLearnSendTemplate(dataDir string, d voiceDevTools) {
 	if captured := googleVoiceSMSCapturedSendRequest(d).Body; captured != "" {
-		saveGoogleVoiceSMSSendTemplate(dataDir, captured)
+		if saveGoogleVoiceSMSSendTemplate(dataDir, captured) {
+			googleVoiceSMSForgetCapturedSend(d)
+		}
 	}
 }
 
