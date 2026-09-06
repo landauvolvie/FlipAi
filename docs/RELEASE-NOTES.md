@@ -1,20 +1,15 @@
-# FlipAi v0.46.51
+# FlipAi v0.46.52
 
-Google Voice media now travels through FlipAi's direct browser-backed SMS connection instead of depending on Gmail forwarding.
+FlipAi now routes SMS shortcuts to the exact AI experience requested instead of treating every provider shortcut as a generic chat alias.
 
 ## What changed
 
-- Incoming Google Voice MMS photos, voice/audio clips, and supported videos are captured from the signed-in Google Voice WebView as the actual file and attached directly to supported browser-chat agents. FlipAi does not transcribe the media and does not give the model a download link instead of the file.
-- ChatGPT Chat, Claude Chat, Gemini Chat, Grok Chat, and Microsoft Copilot Chat now support the same direct inbound media handoff through their existing hidden WebView2 sessions.
-- When a browser model returns an image, FlipAi captures the returned image and attempts to send it back as a real Google Voice MMS. Protected generated images can also be captured from the rendered browser content when their CDN URL cannot be fetched directly.
-- Returned video, audio, files, oversized/unsupported media, or an image Google Voice cannot deliver fall back to the exact model conversation URL so the result is still reachable from the phone.
-- Removed the Gmail / Google Voice connection controls from the visible app. The legacy Gmail implementation remains in the repository and is preserved on `archive/gmail-voice-bridge-v0.46.50` for rollback.
-- FlipAi now starts its background bridge hidden automatically when the Windows user signs in, without requiring the main window to be opened. The optional boot setting starts the host earlier at Windows boot.
-- Improved recovery of the direct Google Voice SMS background worker after reboot so a tray-running FlipAi does not remain idle until the main window is opened.
-
-## Background behavior
-
-Normal Google Voice and browser-agent operation remains off-screen. A visible browser window is used only when an account needs first-time sign-in or reconnection. Browser-backed agents still require an interactive signed-in Windows desktop session because WebView2 cannot run those signed-in browser sessions before any Windows user has logged in.
+- Added provider-grouped SMS shortcuts: `O:` for ChatGPT Chat, `OW:` for ChatGPT Work, `OC:` for Codex, `A:` for Claude Chat, `AW:` for Claude Cowork, `AC:` for Claude Code Web, `AL:` for local Claude Code, `G:` for Gemini, `M:` for Microsoft Copilot, and `X:` for Grok.
+- ChatGPT Work and Claude Cowork are actively selected and verified in their signed-in browser sessions before FlipAi submits the task. If the requested mode cannot be verified, FlipAi fails safely instead of silently sending the task to regular chat.
+- Claude Code Web opens the dedicated Claude Code web workflow and requires a repository-ready state before starting the task; FlipAi does not guess a repository or fall back to Claude Chat.
+- Codex, Gemini, Microsoft Copilot, Grok, Claude Chat, and local Claude Code continue to use their existing dedicated execution paths under the new shortcut scheme.
+- Browser-mode selection is preserved for incoming messages that include attachments, preventing Work or Cowork requests with files from falling back to ordinary chat.
+- Existing installations retain permission-aware compatibility for older configured shortcuts while the new shortcut destination takes precedence when it is available.
 
 ## Validation
 
