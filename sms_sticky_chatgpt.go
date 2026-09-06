@@ -34,6 +34,7 @@ func explicitSMSAgent(raw string, cfg Config) string {
 			{"H", configuredClaudeChatPrefix(cfg)},
 			{"M", configuredGeminiChatPrefix(cfg)},
 			{"X", configuredGrokChatPrefix(cfg)},
+			{"P", configuredCopilotChatPrefix(cfg)},
 		} {
 			if _, ok := stripAgentCommandPrefix(v, x.prefix); ok || isAgentNewSession(v, x.prefix, newWord) {
 				return x.agent
@@ -47,7 +48,7 @@ func smsTargetAllowed(sourceAgent, target string) bool {
 	sourceAgent = strings.ToUpper(strings.TrimSpace(sourceAgent))
 	target = strings.ToUpper(strings.TrimSpace(target))
 	if sourceAgent == "B" {
-		return target == "C" || target == "A" || target == "G" || target == "H" || target == "M" || target == "X"
+		return target == "C" || target == "A" || target == "G" || target == "H" || target == "M" || target == "X" || target == "P"
 	}
 	return target != "" && strings.Contains(sourceAgent, target)
 }
@@ -63,10 +64,10 @@ func selectStickySMSAgent(raw string, cfg Config, sourceAgent, sticky string) (s
 	if smsTargetAllowed(sourceAgent, sticky) {
 		return sticky, nil
 	}
-	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" || sourceAgent == "M" || sourceAgent == "X" {
+	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" || sourceAgent == "M" || sourceAgent == "X" || sourceAgent == "P" {
 		return sourceAgent, nil
 	}
-	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, H: for Claude Chat, M: for Gemini Chat, or X: for Grok Chat")
+	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, H: for Claude Chat, M: for Gemini Chat, X: for Grok Chat, or P: for Microsoft Copilot Chat")
 }
 
 func authorizeChatGPTRaw(raw string, cfg Config, _ string) (string, error) {
@@ -122,6 +123,8 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 			return parseGeminiChatSMSCommand(raw, cfg)
 		case "X":
 			return parseGrokChatSMSCommand(raw, cfg)
+		case "P":
+			return parseCopilotChatSMSCommand(raw, cfg)
 		default:
 			return parseRemoteCommand(raw, cfg, target)
 		}
@@ -151,7 +154,7 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 
 func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
 	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" {
+	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" && agent != "P" {
 		return fmt.Errorf("unknown sticky SMS agent %q", agent)
 	}
 	key := stickySMSKey(sender)

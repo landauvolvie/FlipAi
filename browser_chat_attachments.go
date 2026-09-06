@@ -28,7 +28,7 @@ var browserChatAttachmentTurnMu sync.Mutex
 
 func isBrowserChatAgent(agent string) bool {
 	switch strings.ToUpper(strings.TrimSpace(agent)) {
-	case "G", "H", "M", "X":
+	case "G", "H", "M", "X", "P":
 		return true
 	default:
 		return false
@@ -251,6 +251,8 @@ func (b *Bridge) runBrowserChatSMSWithAttachments(ctx context.Context, agent, co
 		return b.runGeminiChatSMS(ctx, command)
 	case "X":
 		return b.runGrokChatSMS(ctx, command)
+	case "P":
+		return b.runCopilotChatSMS(ctx, command)
 	default:
 		return "", errors.New("unknown browser chat agent")
 	}

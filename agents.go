@@ -100,6 +100,8 @@ func agentSettings(cfg Config, agent string) AgentSettings {
 		return cfg.GeminiChat.AgentSettings
 	case "X":
 		return cfg.GrokChat.AgentSettings
+	case "P":
+		return cfg.CopilotChat.AgentSettings
 	default:
 		return cfg.Codex.AgentSettings
 	}
@@ -117,6 +119,8 @@ func putAgentSettingsConfig(cfg *Config, agent string, s AgentSettings) {
 		cfg.GeminiChat.AgentSettings = s
 	case "X":
 		cfg.GrokChat.AgentSettings = s
+	case "P":
+		cfg.CopilotChat.AgentSettings = s
 	default:
 		cfg.Codex.AgentSettings = s
 	}
@@ -129,7 +133,7 @@ func agentDisplayName(agent string) string {
 	}
 	var names []string
 	for _, item := range []struct{ key, name string }{
-		{"C", "Codex"}, {"A", "Claude"}, {"G", "ChatGPT Chat"}, {"H", "Claude Chat"}, {"M", "Gemini Chat"}, {"X", "Grok Chat"},
+		{"C", "Codex"}, {"A", "Claude"}, {"G", "ChatGPT Chat"}, {"H", "Claude Chat"}, {"M", "Gemini Chat"}, {"X", "Grok Chat"}, {"P", "Microsoft Copilot Chat"},
 	} {
 		if strings.Contains(marker, item.key) {
 			names = append(names, item.name)
@@ -182,7 +186,7 @@ func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok 
 	var marker strings.Builder
 	found := false
 	sms, voice := false, false
-	for _, candidate := range []string{"C", "A", "G", "H", "M", "X"} {
+	for _, candidate := range []string{"C", "A", "G", "H", "M", "X", "P"} {
 		p, exists := agentPhoneForSender(cfg, candidate, raw)
 		if !exists {
 			continue
@@ -215,7 +219,7 @@ func agentForSender(cfg Config, raw string) (agent string, phone AgentPhone, ok 
 
 func allAgentPhones(cfg Config) []AgentPhone {
 	var out []AgentPhone
-	for _, agent := range []string{"C", "A", "G", "H", "M", "X"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P"} {
 		out = append(out, agentSettings(cfg, agent).Phones...)
 	}
 	return out
@@ -263,13 +267,13 @@ func normalizeAgentPhones(list []AgentPhone, _ map[string]string) ([]AgentPhone,
 
 func normalizeAgents(cfg *Config) error {
 	claimedNames := map[string]string{}
-	for _, agent := range []string{"C", "A", "G", "H", "M", "X"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P"} {
 		settings := agentSettings(*cfg, agent)
 		cleaned, err := normalizeAgentPhones(settings.Phones, nil)
 		if err != nil {
 			return fmt.Errorf("%s numbers: %w", agentDisplayName(agent), err)
 		}
-		browserChat := agent == "G" || agent == "H" || agent == "M" || agent == "X"
+		browserChat := agent == "G" || agent == "H" || agent == "M" || agent == "X" || agent == "P"
 		if browserChat {
 			for i := range cleaned {
 				cleaned[i].Access = AccessSMS
@@ -306,6 +310,7 @@ func migrateAgentSettings(cfg *Config) {
 		migrateClaudeChatAgent(cfg)
 		migrateGeminiChatAgent(cfg)
 		migrateGrokChatAgent(cfg)
+		migrateCopilotChatAgent(cfg)
 		return
 	}
 	cfg.Security.AgentsMigrated = true
@@ -355,6 +360,7 @@ func migrateAgentSettings(cfg *Config) {
 	migrateClaudeChatAgent(cfg)
 	migrateGeminiChatAgent(cfg)
 	migrateGrokChatAgent(cfg)
+	migrateCopilotChatAgent(cfg)
 }
 
 func migrateChatGPTAgent(cfg *Config) {
@@ -388,6 +394,15 @@ func migrateGrokChatAgent(cfg *Config) {
 	}
 	// Grok Chat is a separate account/security boundary: never inherit a phone or PIN.
 	cfg.Security.GrokChatAgentMigrated = true
+}
+
+func migrateCopilotChatAgent(cfg *Config) {
+	if cfg.Security.CopilotChatAgentMigrated {
+		return
+	}
+	// Microsoft Copilot Chat is a separate account/security boundary: never
+	// inherit an allowed phone number or PIN from another agent.
+	cfg.Security.CopilotChatAgentMigrated = true
 }
 
 func migrateBrowserChatAgent(cfg *Config, target string, sources []string) {
@@ -432,7 +447,7 @@ func migrateBrowserChatAgent(cfg *Config, target string, sources []string) {
 }
 
 func ensureAgentReplyDefaults(cfg *Config) {
-	for _, agent := range []string{"C", "A", "G", "H", "M", "X"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P"} {
 		s := agentSettings(*cfg, agent)
 		if s.ReplyAck == nil {
 			s.ReplyAck = boolPtr(true)
@@ -479,11 +494,11 @@ func verifyAgentCode(s AgentSettings, code string) bool {
 
 func salvageAgents(cfg *Config) {
 	claimedNames := map[string]bool{}
-	for _, agent := range []string{"C", "A", "G", "H", "M", "X"} {
+	for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P"} {
 		s := agentSettings(*cfg, agent)
 		seenNumbers := map[string]bool{}
 		kept := make([]AgentPhone, 0, len(s.Phones))
-		browserChat := agent == "G" || agent == "H" || agent == "M" || agent == "X"
+		browserChat := agent == "G" || agent == "H" || agent == "M" || agent == "X" || agent == "P"
 		for _, p := range s.Phones {
 			number := normalizeUSPhone(p.Number)
 			if number == "" || seenNumbers[number] {
