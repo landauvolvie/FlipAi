@@ -13,16 +13,15 @@ await page.route('https://voice.google.com/**', route => route.fulfill({ status:
 await page.goto('https://voice.google.com/u/2/messages');
 await page.waitForTimeout(1000);
 
-// The row intentionally shows only a saved contact name. The trusted phone
-// number lives in a descendant title attribute. The SMS body contains a
-// different valid-looking phone number to prove FlipAi never mistakes body text
-// for sender identity.
-await page.locator('#snippet').evaluate(el => { el.textContent = 'X: call 212-555-0199'; });
+// The row shows a saved contact name. Its actual phone lives in dedicated
+// contact metadata. A different, clickable tel: phone stays inside the SMS body
+// throughout the mutation, proving body links cannot become sender identity.
+await page.locator('#messageText').evaluate(el => { el.textContent = 'X: call'; });
 await page.waitForTimeout(1000);
 let captured = await page.evaluate(() => globalThis.__captured || []);
 
 // Outgoing DOM updates must never be delivered back into FlipAi as inbound SMS.
-await page.locator('#snippet').evaluate(el => { el.textContent = 'You: reply'; });
+await page.locator('#messageText').evaluate(el => { el.textContent = 'You: reply'; });
 await page.waitForTimeout(1000);
 const afterOutgoing = await page.evaluate(() => globalThis.__captured || []);
 
