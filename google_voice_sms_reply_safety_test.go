@@ -15,19 +15,22 @@ func TestGoogleVoiceSMSReplyRequiresExactBackgroundThread(t *testing.T) {
 	for _, want := range []string{
 		"ExactThread bool",
 		"exact conversation thread is required",
-		"googleVoiceSMSAPITarget",
-		"googleVoiceSMSAPISend",
+		"googleVoiceSMSUIThreadPath",
+		"googleVoiceSMSThreadPhone",
+		"conversation phone does not match recipient",
+		"normalizeGoogleVoiceSMSThread",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("direct Google Voice SMS exact-thread safety is missing %q", want)
 		}
 	}
 	for _, forbidden := range []string{
-		"voiceSendTextJS", ".click()", "querySelector", "aria-label",
-		"Send new message", "recipient-input", "message-input", "send-button",
+		"googleVoiceSMSAPITarget",
+		"googleVoiceSMSAPISend",
+		"api2thread/sendsms",
 	} {
-		if strings.Contains(strings.ToLower(s), strings.ToLower(forbidden)) {
-			t.Fatalf("direct Google Voice SMS reply path still uses UI automation %q", forbidden)
+		if strings.Contains(s, forbidden) {
+			t.Fatalf("Google Voice SMS exact reply still bypasses the page through %q", forbidden)
 		}
 	}
 }
