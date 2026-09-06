@@ -25,23 +25,24 @@ const googleVoiceSMSInitScript = `
     }
     return out;
   };
-  // A saved contact name may replace the visible number. Never search the whole
-  // row text for a sender because that text also contains the SMS body: a text
-  // such as "call 212-555-0199" must not turn that unrelated number into the
-  // authenticated sender. Only identity metadata and dedicated contact fields
-  // are allowed to provide the phone number.
+  // A saved contact name may replace the visible number. Sender identity comes
+  // only from the conversation link itself or dedicated contact/sender fields.
+  // Never scan arbitrary descendants: an SMS body can contain a phone number,
+  // a tel: link, or a titled link and none of those may become the sender.
   const phoneOf = row => {
-    const attrs=['title','href','data-phone','data-number','data-e164','value'];
     const candidates=[];
-    const addAttrs=el=>{for(const a of attrs){try{const v=el.getAttribute?.(a);if(v)candidates.push(v)}catch(_){}}};
-    addAttrs(row);
-    let descendants=[];try{descendants=row.querySelectorAll?.('[title],[href],[data-phone],[data-number],[data-e164],[value]')||[]}catch(_){}
-    for(const el of descendants){addAttrs(el);if(candidates.length>180)break;}
-    // Some Voice builds render an unsaved number as the contact/header text but
-    // do not repeat it in an attribute. Restrict that fallback to identity-like
-    // elements, never the snippet/message element or the row as a whole.
-    let identities=[];try{identities=row.querySelectorAll?.('[class*="contact" i],[class*="sender" i],[class*="recipient" i],[data-contact],[data-recipient]')||[]}catch(_){}
-    for(const el of identities){const v=norm(el.innerText||el.textContent||'');if(v)candidates.push(v);if(candidates.length>220)break;}
+    const identityAttrs=['title','aria-label','href','data-phone','data-number','data-e164','value'];
+    const rowAttrs=['title','data-phone','data-number','data-e164'];
+    const addAttrs=(el,attrs)=>{for(const a of attrs){try{const v=el.getAttribute?.(a);if(v)candidates.push(v)}catch(_){}}};
+    if(row.matches?.('a[href*="/messages/"]')) addAttrs(row,identityAttrs); else addAttrs(row,rowAttrs);
+    let conversation=null;try{conversation=row.matches?.('a[href*="/messages/"]')?row:row.querySelector?.('a[href*="/messages/"]')}catch(_){}
+    if(conversation)addAttrs(conversation,identityAttrs);
+    let identities=[];try{identities=row.querySelectorAll?.('[class*="contact" i],[class*="sender" i],[class*="recipient" i],[data-contact],[data-recipient],[data-phone],[data-number],[data-e164]')||[]}catch(_){}
+    for(const el of identities){
+      addAttrs(el,identityAttrs);
+      const v=norm(el.innerText||el.textContent||'');if(v)candidates.push(v);
+      if(candidates.length>220)break;
+    }
     for(const v of candidates){const p=digits(v);if(p)return p;}
     return '';
   };
