@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,7 +22,7 @@ const GmailMethodGoogleVoice = "google_voice"
 // directGoogleVoiceSMS is a message observed inside FlipAi's own signed-in
 // Google Voice SMS WebView. Sender is always a normalized 10-digit phone number
 // before an authorized message is written to the spool. Thread is the exact
-// Google Voice Messages path observed on that same conversation row; replies
+// Google Voice Messages locator observed on that same conversation row; replies
 // fail closed if that identity can no longer be verified.
 type directGoogleVoiceSMS struct {
 	ID     string    `json:"id"`
@@ -48,9 +49,6 @@ func (g *GoogleVoiceSMSClient) Test(ctx context.Context) error {
 	if g == nil || strings.TrimSpace(g.dataDir) == "" {
 		return errors.New("Google Voice SMS is not configured")
 	}
-	// Direct SMS owns a completely separate browser/profile from calling. The
-	// old test checked the call browser, which is how v0.46.34 could report a
-	// healthy SMS connection while the SMS renderer itself was dead.
 	if err := platformEnsureGoogleVoiceSMSWorker(g.dataDir); err != nil {
 		return err
 	}
@@ -85,30 +83,85 @@ func googleVoiceSMSSpoolPath(dataDir string) string {
 	return filepath.Join(dataDir, "google-voice-sms.jsonl")
 }
 
-// normalizeGoogleVoiceSMSThread accepts only a same-site Messages path. Never
-// preserve a contact name or arbitrary URL as a reply locator.
+func asciiDigitsOnly(v string) bool {
+	if v == "" {
+		return false
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func googleVoiceSMSItemPhone(item string) string {
+	const prefix = "t.+1"
+	if !strings.HasPrefix(item, prefix) {
+		return ""
+	}
+	phone := strings.TrimPrefix(item, prefix)
+	if len(phone) != 10 || !asciiDigitsOnly(phone) {
+		return ""
+	}
+	return phone
+}
+
+// normalizeGoogleVoiceSMSThread accepts only a same-site Google Voice Messages
+// conversation locator. Current Google Voice identifies ordinary 1:1 threads
+// as /u/N/messages?itemId=t.%2B1XXXXXXXXXX. The itemId is preserved because it
+// is both the exact reply target and an independent phone-number identity check.
+// A legacy /u/N/messages/<id> path remains accepted for old spool entries.
 func normalizeGoogleVoiceSMSThread(raw string) string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if raw == "" || strings.ContainsAny(raw, "\\\r\n\t") || strings.Contains(raw, "..") {
 		return ""
 	}
-	lower := strings.ToLower(raw)
-	const origin = "https://voice.google.com"
-	if strings.HasPrefix(lower, origin+"/") {
-		raw = raw[len(origin):]
-	} else if strings.Contains(lower, "://") {
+	u, err := url.Parse(raw)
+	if err != nil {
 		return ""
 	}
-	if !strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, "\\\r\n\t") || strings.Contains(raw, "..") {
+	if u.IsAbs() {
+		if !strings.EqualFold(u.Scheme, "https") || !strings.EqualFold(u.Host, "voice.google.com") {
+			return ""
+		}
+	} else if u.Host != "" {
 		return ""
 	}
-	if i := strings.IndexAny(raw, "?#"); i >= 0 {
-		raw = raw[:i]
-	}
-	if !strings.Contains(strings.ToLower(raw), "/messages/") {
+	if u.Fragment != "" || !strings.HasPrefix(u.Path, "/") {
 		return ""
 	}
-	return raw
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "u" || !asciiDigitsOnly(parts[1]) || parts[2] != "messages" {
+		return ""
+	}
+	if len(parts) == 3 {
+		q, err := url.ParseQuery(u.RawQuery)
+		if err != nil || len(q) != 1 {
+			return ""
+		}
+		items, ok := q["itemId"]
+		if !ok || len(items) != 1 || googleVoiceSMSItemPhone(items[0]) == "" {
+			return ""
+		}
+		return "/u/" + parts[1] + "/messages?itemId=" + url.QueryEscape(items[0])
+	}
+	if len(parts) != 4 || strings.TrimSpace(parts[3]) == "" || u.RawQuery != "" {
+		return ""
+	}
+	return "/u/" + parts[1] + "/messages/" + parts[3]
+}
+
+func googleVoiceSMSThreadPhone(thread string) string {
+	thread = normalizeGoogleVoiceSMSThread(thread)
+	if thread == "" {
+		return ""
+	}
+	u, err := url.Parse(thread)
+	if err != nil {
+		return ""
+	}
+	return googleVoiceSMSItemPhone(u.Query().Get("itemId"))
 }
 
 func (g *GoogleVoiceSMSClient) readAll() ([]directGoogleVoiceSMS, error) {
@@ -146,8 +199,6 @@ func (g *GoogleVoiceSMSClient) List(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Gmail returns newest first and Bridge walks the list backwards so older
-	// messages execute first. Preserve that ordering for the direct transport.
 	sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].At.After(msgs[j].At) })
 	seen := make(map[string]struct{}, len(msgs))
 	ids := make([]string, 0, len(msgs))
@@ -174,10 +225,6 @@ func (g *GoogleVoiceSMSClient) Get(ctx context.Context, id string) (GmailMessage
 		if m.ID != id {
 			continue
 		}
-		// This is an internal trusted envelope: the sender was normalized and
-		// authorized from Google Voice row identity metadata before it reached the
-		// spool. Reusing the existing parser keeps security-code/routing behavior
-		// identical to Gmail after this transport-specific gate.
 		phrase := "new text message from"
 		if cfg, cfgErr := loadConfig(filepath.Join(g.dataDir, "bridge.json"), g.dataDir); cfgErr == nil {
 			if p := strings.TrimSpace(cfg.GoogleVoice.RequiredSubjectPhrase); p != "" {
@@ -208,14 +255,12 @@ func (g *GoogleVoiceSMSClient) SendText(ctx context.Context, to, body string) er
 	if phone == "" {
 		return errors.New("could not determine the Google Voice SMS recipient")
 	}
-	// One-off sends have no inbound thread to bind to; the page sender therefore
-	// accepts only an exact phone-number suggestion and refuses ambiguity.
 	return requestGoogleVoiceText(ctx, g.dataDir, phone, body)
 }
 
 // directReplyIdentity binds a reply to both identities captured from the inbound
-// event: the structured sender envelope and the exact Google Voice thread path.
-// A mismatch is a hard failure; FlipAi never falls back to a contact name.
+// event: the structured sender envelope and the exact Google Voice thread. When
+// the thread itself carries an itemId phone, all three identities must agree.
 func (g *GoogleVoiceSMSClient) directReplyIdentity(original GmailMessage) (phone, thread string, err error) {
 	for _, candidate := range []string{original.ReplyTo, original.From} {
 		if n, ok := senderFromVoiceAddress(candidate); ok {
@@ -242,6 +287,9 @@ func (g *GoogleVoiceSMSClient) directReplyIdentity(original GmailMessage) (phone
 		if thread == "" {
 			return "", "", errors.New("Google Voice reply blocked: exact inbound conversation thread is unavailable")
 		}
+		if threadPhone := googleVoiceSMSThreadPhone(thread); threadPhone != "" && threadPhone != phone {
+			return "", "", errors.New("Google Voice reply blocked: conversation itemId phone does not match the inbound sender")
+		}
 		return phone, thread, nil
 	}
 	return "", "", errors.New("Google Voice reply blocked: original inbound message is not in the trusted direct-SMS spool")
@@ -265,13 +313,10 @@ func directGoogleVoiceActivity(dataDir string) *ActivityLog {
 	return activityLogForStatePath(filepath.Join(dataDir, "state.json"))
 }
 
-// appendDirectGoogleVoiceSMS is called by the dedicated SMS WebView binding. A
-// pre-v0.46.35 fallback binding still exists in the untouched calling window;
-// ignore it there so the call process can never become a second SMS reader.
-//
-// This is also the first security gate. Every inbound DOM event is logged, then
-// authorization is decided exclusively from the normalized phone number. A
-// blocked/unresolved sender never reaches the spool, queue, agent, or reply path.
+// appendDirectGoogleVoiceSMS is the first security gate. Every inbound DOM
+// event is logged, then authorization is decided exclusively from the normalized
+// phone number. For current Google Voice itemId threads, that thread phone is an
+// independent identity source and must agree with any DOM sender metadata.
 func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 	if len(os.Args) > 1 && strings.EqualFold(os.Args[1], "--google-voice") {
 		return nil
@@ -282,6 +327,10 @@ func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 	}
 	m.Sender = normalizeUSPhone(m.Sender)
 	m.Thread = normalizeGoogleVoiceSMSThread(m.Thread)
+	threadPhone := googleVoiceSMSThreadPhone(m.Thread)
+	if m.Sender == "" && threadPhone != "" {
+		m.Sender = threadPhone
+	}
 	m.Body = strings.TrimSpace(m.Body)
 	if m.Body == "" {
 		return nil
@@ -316,6 +365,10 @@ func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 		activity.Add("warn", "security", "Blocked Google Voice SMS: exact conversation thread could not be verified; no reply sent", m.Sender, "", m.ID)
 		return nil
 	}
+	if threadPhone != "" && threadPhone != m.Sender {
+		activity.Add("warn", "security", "Blocked Google Voice SMS: conversation phone does not match sender; no reply sent", m.Sender, "", m.ID)
+		return nil
+	}
 
 	cfg, err := loadConfig(filepath.Join(dataDir, "bridge.json"), dataDir)
 	if err != nil {
@@ -335,9 +388,6 @@ func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 		activity.Add("warn", "security", "Blocked Google Voice SMS: phone number is allowed for calls only; no reply sent", m.Sender, "", m.ID)
 		return nil
 	}
-	// Keep the legacy aggregate allowlist as a second independent assertion.
-	// loadConfig rebuilds it from the per-agent phone permissions, so disagreement
-	// means configuration is inconsistent and the safe action is to refuse.
 	if !allowedPhone(cfg.GoogleVoice.AllowedFrom, m.Sender) {
 		activity.Add("warn", "security", "Blocked Google Voice SMS: phone-number permission check did not agree; no reply sent", m.Sender, "", m.ID)
 		return nil
