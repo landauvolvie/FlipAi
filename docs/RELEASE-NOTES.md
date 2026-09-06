@@ -1,25 +1,25 @@
-# FlipAi v0.46.38
+# FlipAi v0.46.39
 
-Google Voice SMS sender-resolution fix for saved-contact conversations.
+Google Voice SMS sender-resolution fix for conversations saved under a contact name such as **Me**.
 
 ## Google Voice SMS
 
-- Fixed the case where FlipAi detected an incoming Google Voice SMS but then blocked it with **“exact sender phone number could not be resolved”** even though the sender's phone number was already allowed for the agent.
-- This occurs when Google Voice shows only a saved contact name such as **US Mobile** and opening the conversation does not change the browser URL to an `itemId` URL.
-- After opening the changed conversation, FlipAi now resolves the exact Google Voice `t.+1XXXXXXXXXX` identity from trusted opened-conversation metadata, browser history state, or newly observed same-origin Google Voice resource metadata.
-- Conversation headers are identity sources only; they cannot be mistaken for a second incoming SMS.
-- The direct SMS listener still never treats a saved contact name or a phone number written inside the SMS body as sender identity.
+- Fixed the remaining case where FlipAi detected an incoming direct Google Voice SMS but blocked it with **“exact sender phone number could not be resolved”** even though the phone number was already allowed for the selected agent.
+- Google Voice can keep the browser on `/messages`, show only the saved contact name in the conversation list, and expose the sender number only in the opened conversation header, for example **`mobile • (845) 555-0142`**.
+- FlipAi now recognizes the dedicated opened Google Voice conversation header (`gv-message-list-header`) and resolves the sender when that header contains exactly one normalized US/Canada phone number.
+- The resulting sender/thread still uses the exact normalized `t.+1XXXXXXXXXX` Google Voice identity expected by the direct SMS bridge.
 
-## Security and routing
+## Safety and routing
 
-- The normalized sender phone must still match the exact Google Voice thread identity before the message reaches an agent.
-- Existing per-agent phone permissions, routing codes, security codes, sticky-agent behavior, STATUS, NEW, acknowledgements, and progress updates remain unchanged.
-- Unauthorized, unresolved, calls-only, or mismatched identities remain blocked and logged in Activity without a reply.
+- Visible phone text is accepted only from the explicitly opened conversation header, not from arbitrary page text, contact names, conversation previews, or SMS message bodies.
+- If the opened header contains zero or multiple phone numbers, FlipAi continues to fail closed unless trusted Google Voice metadata already provides the exact identity.
+- If trusted identity metadata and the visible opened-header number disagree, the message remains blocked.
+- Existing per-agent phone permissions, routing codes, sticky-agent behavior, security codes, STATUS, NEW, acknowledgements, and progress updates are unchanged.
 
 ## Regression coverage
 
-- Added a real Chromium regression matching the reported live failure: a linkless Google Voice row labeled only with a saved contact name, an unchanged `/messages` browser URL, unrelated preloaded conversation metadata, and a decoy phone number inside the SMS body.
-- The test verifies that FlipAi resolves the newly opened conversation's exact sender/thread, captures the SMS exactly once, ignores the decoy identities, and does not treat the opened conversation header as a message.
+- Added a real Chromium regression matching the reported screen: saved contact name **Me**, unchanged `/messages` URL, sender exposed only as `mobile • (845) 555-0142` in the opened header, unrelated preloaded conversation metadata, and a decoy phone number inside the SMS body.
+- The regression verifies that FlipAi resolves the opened header phone, creates the correct thread identity, captures the SMS exactly once, ignores unrelated/decoy phone numbers, and never treats the conversation header as a second SMS.
 
 ## Calling isolation
 
