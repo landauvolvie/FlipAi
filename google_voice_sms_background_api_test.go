@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestGoogleVoiceSMSIsBackgroundAPIOnlyAfterSignIn(t *testing.T) {
+func TestGoogleVoiceSMSKeepsBackgroundBrowserWithPageControlledOutbound(t *testing.T) {
 	webviewRaw, err := os.ReadFile("google_voice_sms_webview_windows.go")
 	if err != nil {
 		t.Fatal(err)
@@ -23,29 +23,26 @@ func TestGoogleVoiceSMSIsBackgroundAPIOnlyAfterSignIn(t *testing.T) {
 		"runGoogleVoiceSMSOutboundLoop",
 		"googleVoiceSMSPageMonitorJS",
 		"DataPath:  googleVoiceSMSProfilePath(dataDir)",
+		"WindowOptions.X = -30000",
 	} {
 		if !strings.Contains(webview, want) {
 			t.Fatalf("Google Voice SMS background browser is missing %q", want)
 		}
 	}
-	for _, want := range []string{"googleVoiceSMSAPITarget", "googleVoiceSMSAPISend"} {
+	for _, want := range []string{
+		"googleVoiceSMSUIThreadPath",
+		"googleVoiceSMSUIOpenConversation",
+		"googleVoiceSMSUISendExpression",
+		"InputEvent",
+		"b.click()",
+	} {
 		if !strings.Contains(send, want) {
-			t.Fatalf("Google Voice SMS background sender is missing %q", want)
+			t.Fatalf("Google Voice SMS page-controlled sender is missing %q", want)
 		}
 	}
-
-	for _, forbidden := range []string{
-		"googleVoiceSMSInitScript",
-		`Bind("flipVoiceSMS"`,
-		"voiceSendTextJS",
-		".click()",
-		"send new message",
-		"recipient-input",
-		"message-input",
-		"send-button",
-	} {
-		if strings.Contains(webview, forbidden) || strings.Contains(strings.ToLower(send), strings.ToLower(forbidden)) {
-			t.Fatalf("direct Google Voice SMS still contains UI conversation automation %q", forbidden)
+	for _, forbidden := range []string{"googleVoiceSMSAPITarget", "googleVoiceSMSAPISend", "api2thread/sendsms"} {
+		if strings.Contains(send, forbidden) {
+			t.Fatalf("Google Voice SMS outbound still constructs the web-service send through %q", forbidden)
 		}
 	}
 }
