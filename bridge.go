@@ -789,6 +789,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		case "X":
 			err = b.newGrokChatConversation(ctx)
 			final = "New Grok Chat conversation started."
+		case "P":
+			err = b.newCopilotChatConversation(ctx)
+			final = "New Microsoft Copilot Chat conversation started."
 		default:
 			// Claude sessions are created by the CLI on the turn that uses them.
 			b.startNewClaudeSession()
@@ -812,6 +815,9 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	} else if rc.Agent == "X" {
 		b.event("info", "agent", "Grok Chat command started", rc.Sender, "X", m.ID)
 		final, err = b.runGrokChatSMS(ctx, rc.Text)
+	} else if rc.Agent == "P" {
+		b.event("info", "agent", "Microsoft Copilot Chat command started", rc.Sender, "P", m.ID)
+		final, err = b.runCopilotChatSMS(ctx, rc.Text)
 	} else {
 		b.event("info", "agent", "Codex command started", rc.Sender, "C", m.ID)
 		final, err = b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)

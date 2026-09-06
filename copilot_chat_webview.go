@@ -39,8 +39,12 @@ type CopilotChatWebRuntime struct {
 
 var copilotChatRuntimeMu sync.Mutex
 
-func copilotChatRuntimePath(dataDir string) string { return filepath.Join(dataDir, copilotChatRuntimeFile) }
-func copilotChatProfilePath(dataDir string) string { return filepath.Join(dataDir, copilotChatProfileDirName) }
+func copilotChatRuntimePath(dataDir string) string {
+	return filepath.Join(dataDir, copilotChatRuntimeFile)
+}
+func copilotChatProfilePath(dataDir string) string {
+	return filepath.Join(dataDir, copilotChatProfileDirName)
+}
 
 func migrateCopilotChatRuntime(s *CopilotChatWebRuntime) {
 	if s.SignedIn && !s.Connected {
@@ -132,7 +136,9 @@ func waitForCopilotChatReady(ctx context.Context, dataDir string) (CopilotChatWe
 			b, code, err := copilotChatControlRequest(probeCtx, s, http.MethodGet, "/health", nil)
 			cancel()
 			if err == nil && code == http.StatusOK {
-				var health struct{ SignedIn bool `json:"signedIn"` }
+				var health struct {
+					SignedIn bool `json:"signedIn"`
+				}
 				if json.Unmarshal(b, &health) == nil && health.SignedIn {
 					mutateCopilotChatRuntime(dataDir, func(v *CopilotChatWebRuntime) {
 						v.Connected, v.SignedIn, v.Starting = true, true, false

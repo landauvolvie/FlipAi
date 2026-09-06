@@ -348,6 +348,23 @@ func startCopilotChatControlEndpoint(dataDir string, w webview2.WebView, dev voi
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Microsoft Copilot Chat is not ready inside FlipAi. Press Connect and complete sign-in first."})
 			return
 		}
+		cleanPrompt, attachments, marked, markerErr := extractBrowserChatAttachmentMarker(prompt)
+		if marked {
+			if markerErr != nil {
+				rw.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": markerErr.Error()})
+				return
+			}
+			if err := uploadBrowserChatImages(dev, attachments); err != nil {
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+				return
+			}
+			prompt = strings.TrimSpace(cleanPrompt)
+			if prompt == "" {
+				prompt = browserChatImageOnlyPrompt(len(attachments))
+			}
+		}
 		expr := fmt.Sprintf(copilotChatTurnJS, copilotChatJSString(prompt))
 		var got copilotChatTurnResult
 		if err := copilotChatEval(dev, expr, true, &got); err != nil {
