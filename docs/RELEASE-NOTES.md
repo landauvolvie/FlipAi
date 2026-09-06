@@ -1,25 +1,29 @@
-# FlipAi v0.46.36
+# FlipAi v0.46.37
 
-Google Voice SMS phone-authorization and exact-thread reply hardening.
+Google Voice SMS live-message detection fix.
 
-## Google Voice SMS security
+## Google Voice SMS detection
 
-- Direct Google Voice SMS authorization is now based only on the sender's normalized phone number. A saved Google Voice contact name is never treated as permission.
-- When Google Voice displays a contact name instead of the number, FlipAi resolves the phone number from Google Voice identity metadata before authorization.
-- Phone numbers written inside the SMS body cannot be mistaken for the sender. The real-browser regression test includes a different valid-looking phone number inside the message text.
-- Every inbound Google Voice text is logged before authorization. Unauthorized, unresolved, calls-only, or unverifiable conversations are blocked before they can reach the queue or any AI agent, and no reply is sent.
-- Activity shows blocked Google Voice SMS events with **Blocked** status, the reason, and the normalized sender phone number.
-- SMS permission continues to respect each agent's existing phone permissions; a calls-only number cannot gain SMS access through the direct Google Voice transport.
+- Fixed Direct Google Voice SMS showing **Connected / Ready** while detecting zero live conversation rows and therefore producing no Activity entries.
+- The SMS listener now handles Google Voice's linkless SPA/custom conversation rows instead of depending on an `<a href=".../messages">` element being present.
+- When a changed linkless row does not expose the sender directly, FlipAi opens that row only inside its dedicated hidden SMS browser and resolves the trusted Google Voice `itemId` conversation identity.
+- Current Google Voice `/messages?itemId=t.%2B1XXXXXXXXXX` conversation locators are supported end-to-end for inbound detection and exact-thread replies.
+- The Connections card now gates **Connected / Ready** on a live detector heartbeat that can actually see conversation rows (or a verified empty inbox), not merely on the Messages page having loaded.
 
-## Exact reply targeting
+## Sender and reply safety
 
-- Replies are bound to both the exact inbound Google Voice Messages thread and the same normalized sender phone number.
-- Before sending, FlipAi verifies that the exact conversation row still resolves to the expected phone number. A missing or mismatched thread fails closed instead of sending elsewhere.
-- Contact-name searching and the old ambiguous "single suggestion" fallback are not used for replies.
+- Sender authorization remains based only on the normalized phone number from trusted Google Voice identity metadata / `itemId`; saved contact names never authorize a sender.
+- Phone numbers written inside an SMS body cannot be used as sender identity. The real-browser regression test includes a decoy phone number in the message body.
+- Unauthorized, unresolved, calls-only, or mismatched sender/thread identities remain blocked before reaching any AI agent, with Activity logging and no reply sent.
+- Replies remain fail-closed to the exact stored Google Voice thread plus the same phone number. No contact-name or ambiguous single-result fallback is used.
 
-## Routing and calling
+## Regression coverage
 
-- Existing routing codes, security codes, sticky-agent behavior, STATUS, NEW, acknowledgements, progress updates, and all supported agents remain unchanged.
-- Google Voice calling remains separate and untouched.
+- Added a real Chromium regression case matching the reported live failure: saved contact name, linkless Google Voice conversation row, no visible sender number, and a decoy phone number inside the SMS body.
+- The test verifies the changed row resolves to the correct Google Voice `itemId`, captures the inbound message exactly once, and ignores an outgoing `You:` update.
+
+## Calling isolation
+
+- Existing Google Voice calling behavior, profile, settings, and call state machine are unchanged.
 
 No Authenticode/code-signing certificate is included in this release.
