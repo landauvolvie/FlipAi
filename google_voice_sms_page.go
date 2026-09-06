@@ -19,6 +19,7 @@ const googleVoiceSMSInitScript = `
     return '';
   };
   const accountSlot = () => (String(location.pathname||'').match(/^\/u\/(\d+)/i)||[])[1]||'0';
+  const threadForPhone = phone => phone ? '/u/'+accountSlot()+'/messages?itemId='+encodeURIComponent('t.+1'+phone) : '';
   const itemInfo = raw => {
     let v=String(raw||'').trim();
     try{v=decodeURIComponent(v)}catch(_){}
@@ -68,7 +69,75 @@ const googleVoiceSMSInitScript = `
       const item=itemInfo(v);if(item.thread)return item;
       if(!phone){const p=digits(v);if(p)phone=p;}
     }
-    return {thread:'',phone};
+    return {thread:threadForPhone(phone),phone};
+  };
+  const infoKey = info => info&&info.thread&&info.phone ? info.thread+'\u0000'+info.phone : '';
+  const uniqueInfos = infos => {
+    const out=new Map();
+    for(const info of infos||[]){const k=infoKey(info);if(k)out.set(k,info)}
+    return [...out.values()];
+  };
+  const historyInfos = () => {
+    const out=[],seen=new Set();let budget=0;
+    const visit=v=>{
+      if(v==null||budget++>500)return;
+      if(typeof v==='string'){
+        const u=voiceURL(v);if(u.thread&&u.phone)out.push(u);
+        const it=itemInfo(v);if(it.thread&&it.phone)out.push(it);
+        return;
+      }
+      if(typeof v!=='object'||seen.has(v))return;
+      seen.add(v);
+      if(Array.isArray(v)){for(const x of v)visit(x);return}
+      let vals=[];try{vals=Object.values(v)}catch(_){return}
+      for(const x of vals)visit(x);
+    };
+    try{visit(history.state)}catch(_){}
+    return uniqueInfos(out);
+  };
+  const pageIdentityInfos = () => {
+    const out=[];
+    const here=voiceURL(location.href);if(here.thread&&here.phone)out.push(here);
+    out.push(...historyInfos());
+    let els=[];try{els=[...document.querySelectorAll('a[href*="/messages"],[data-item-id],[data-thread-id],[data-conversation-id]')]}catch(_){}
+    for(const el of els){
+      if(el.matches?.('a[href*="/messages"]')){const u=voiceURL(el.getAttribute?.('href')||'');if(u.thread&&u.phone)out.push(u)}
+      for(const a of ['data-item-id','data-thread-id','data-conversation-id']){
+        let v='';try{v=el.getAttribute?.(a)||''}catch(_){}
+        const it=itemInfo(v);if(it.thread&&it.phone)out.push(it);
+      }
+      if(out.length>600)break;
+    }
+    return uniqueInfos(out);
+  };
+  const resourceNames = () => {
+    try{return new Set(performance.getEntriesByType('resource').map(e=>String(e.name||'')).filter(Boolean))}catch(_){return new Set()}
+  };
+  const newResourceInfos = before => {
+    const out=[];
+    let entries=[];try{entries=performance.getEntriesByType('resource')}catch(_){}
+    for(const e of entries){
+      const name=String(e?.name||'');if(!name||before.has(name))continue;
+      try{const u=new URL(name,location.href);if(u.protocol!=='https:'||u.hostname.toLowerCase()!=='voice.google.com')continue}catch(_){continue}
+      const vi=voiceURL(name);if(vi.thread&&vi.phone)out.push(vi);
+      const it=itemInfo(name);if(it.thread&&it.phone)out.push(it);
+    }
+    return uniqueInfos(out);
+  };
+  const selectedConversationInfo = () => {
+    const candidates=[];
+    const selectors=[
+      '[aria-selected="true"]','[aria-current="true"]','[data-selected="true"]',
+      'gv-conversation-header','gv-thread-header','[class*="conversation-header" i]',
+      '[class*="thread-header" i]','[class*="contact-header" i]'
+    ];
+    for(const sel of selectors){
+      let list=[];try{list=document.querySelectorAll(sel)}catch(_){}
+      for(const el of list){const info=trustedInfo(el);if(info.thread&&info.phone)candidates.push(info);if(candidates.length>80)break}
+      if(candidates.length>80)break;
+    }
+    const unique=uniqueInfos(candidates);
+    return unique.length===1?unique[0]:{thread:'',phone:''};
   };
   const previewSelector='[data-message-text],[data-message-snippet],[data-last-message],[class*="snippet" i],[class*="preview" i],[class*="last-message" i],[class*="message-text" i]';
   const isConversationRow = el => !!el && (
@@ -119,6 +188,10 @@ const googleVoiceSMSInitScript = `
       let target=null;
       if(row.matches?.('a[href*="/messages"]')&&voiceURL(row.getAttribute?.('href')||'').thread)target=row;
       if(!target){for(const a of row.querySelectorAll?.('a[href*="/messages"]')||[]){if(voiceURL(a.getAttribute?.('href')||'').thread){target=a;break}}}
+      if(!target){
+        let clickable=[];try{clickable=row.querySelectorAll?.('button,[role="button"],[tabindex]:not([tabindex="-1"])')||[]}catch(_){}
+        for(const el of clickable){if(!el.disabled){target=el;break}}
+      }
       (target||row).click();return true;
     }catch(_){return false}
   };
@@ -126,17 +199,38 @@ const googleVoiceSMSInitScript = `
     let info=initial||trustedInfo(row);
     if(info.thread&&info.phone){emit(info.phone,info.thread,body);return}
     const before=String(location.href||''),beforeInfo=voiceURL(before);
+    const beforePage=new Map(pageIdentityInfos().map(x=>[infoKey(x),x]));
+    const beforeResources=resourceNames();
     if(!clickRow(row)){emit(info.phone,info.thread,body);return}
-    for(let i=0;i<10;i++){
+    for(let i=0;i<24;i++){
       await new Promise(r=>setTimeout(r,100));
       const href=String(location.href||''),current=voiceURL(href),changed=href!==before;
-      const selected=row.matches?.('[aria-selected="true"],[aria-current="true"],.selected,.active');
-      if(current.thread&&(changed||(info.phone&&current.phone===info.phone)||(!beforeInfo.thread&&selected))){
+      const selected=selectedConversationInfo();
+      if(selected.thread&&selected.phone){
+        if(info.phone&&selected.phone!==info.phone){emit(info.phone,'',body);return}
+        emit(selected.phone,selected.thread,body);return;
+      }
+      if(current.thread&&(changed||(info.phone&&current.phone===info.phone)||!beforeInfo.thread)){
         if(info.phone&&current.phone&&info.phone!==current.phone){emit(info.phone,'',body);return}
         emit(current.phone||info.phone,current.thread,body);return;
       }
+      const newPage=pageIdentityInfos().filter(x=>!beforePage.has(infoKey(x)));
+      if(newPage.length===1){
+        const opened=newPage[0];
+        if(info.phone&&opened.phone!==info.phone){emit(info.phone,'',body);return}
+        emit(opened.phone,opened.thread,body);return;
+      }
+      const newResources=newResourceInfos(beforeResources);
+      if(newResources.length===1){
+        const opened=newResources[0];
+        if(info.phone&&opened.phone!==info.phone){emit(info.phone,'',body);return}
+        emit(opened.phone,opened.thread,body);return;
+      }
     }
     info=trustedInfo(row);
+    if(!(info.thread&&info.phone)){
+      const selected=selectedConversationInfo();if(selected.thread&&selected.phone)info=selected;
+    }
     emit(info.phone,info.thread,body);
   };
   const detectorHeartbeat = rowCount => {
@@ -180,6 +274,6 @@ const googleVoiceSMSInitScript = `
     state.armed=true;
   }
   const obs=new MutationObserver(()=>{clearTimeout(globalThis.__flipAiDirectSMSTimer);globalThis.__flipAiDirectSMSTimer=setTimeout(scan,70)});
-  const start=()=>{installStatusGate();try{obs.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-label','title','href','class','data-phone','data-phone-number','data-number','data-e164','data-item-id','data-thread-id','data-conversation-id','data-message-text','data-message-snippet','data-last-message','value']})}catch(_){}scan();setInterval(scan,700)};
+  const start=()=>{installStatusGate();try{obs.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-label','aria-selected','aria-current','title','href','class','data-selected','data-phone','data-phone-number','data-number','data-e164','data-item-id','data-thread-id','data-conversation-id','data-message-text','data-message-snippet','data-last-message','value']})}catch(_){}scan();setInterval(scan,700)};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
 })()`
