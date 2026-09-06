@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.35"
+const version = "0.46.36"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -222,7 +222,6 @@ type SecurityConfig struct {
 	RequireCode bool   `json:"requireCode"`
 	CodeSalt    string `json:"codeSalt,omitempty"`
 	CodeHash    string `json:"codeHash,omitempty"`
-
 	AgentsMigrated          bool `json:"agentsMigrated,omitempty"`
 	ChatGPTAgentMigrated    bool `json:"chatgptAgentMigrated,omitempty"`
 	ClaudeChatAgentMigrated bool `json:"claudeChatAgentMigrated,omitempty"`
