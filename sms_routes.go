@@ -7,21 +7,24 @@ import (
 )
 
 const (
-	smsRouteChatGPTChat    = "O"
-	smsRouteChatGPTWork    = "OW"
-	smsRouteCodex          = "OC"
-	smsRouteClaudeChat     = "A"
-	smsRouteClaudeCodeWeb  = "AC"
-	smsRouteClaudeCowork   = "AW"
+	smsRouteChatGPTChat     = "O"
+	smsRouteChatGPTWork     = "OW"
+	smsRouteCodex           = "OC"
+	smsRouteClaudeChat      = "A"
+	smsRouteClaudeCodeWeb   = "AC"
+	smsRouteClaudeCowork    = "AW"
 	smsRouteClaudeCodeLocal = "AL"
-	smsRouteGemini         = "G"
-	smsRouteCopilot        = "M"
-	smsRouteGrok           = "X"
+	smsRouteGemini          = "G"
+	smsRouteCopilot         = "M"
+	smsRouteGrok            = "X"
 
 	browserModeChat   = "chat"
 	browserModeWork   = "work"
 	browserModeCode   = "code"
 	browserModeCowork = "cowork"
+
+	browserModeMarkerStart = "[[FLIPAI_BROWSER_MODE:"
+	browserModeMarkerEnd   = "]]"
 )
 
 type smsRouteSpec struct {
@@ -32,20 +35,22 @@ type smsRouteSpec struct {
 	Display string
 }
 
-func smsRouteSpecs(cfg Config) []smsRouteSpec {
-	// Longer prefixes are intentionally checked first. This guarantees that
-	// OW:/OC:/AC:/AW:/AL: can never be swallowed by O: or A: handling.
+func smsRouteSpecs(_ Config) []smsRouteSpec {
+	// Public shortcuts are intentionally fixed and provider-grouped. Longer
+	// prefixes come first so OW:/OC:/AC:/AW:/AL: can never be swallowed by O:
+	// or A:. The old configurable prefixes remain usable internally while old
+	// bridge.json files migrate naturally through rewriteSMSRoutePrefix.
 	return []smsRouteSpec{
 		{ID: smsRouteChatGPTWork, Agent: "G", Mode: browserModeWork, Prefix: "OW", Display: "ChatGPT Work"},
-		{ID: smsRouteCodex, Agent: "C", Prefix: configuredCodexPrefix(cfg), Display: "Codex"},
+		{ID: smsRouteCodex, Agent: "C", Prefix: "OC", Display: "Codex"},
 		{ID: smsRouteClaudeCodeWeb, Agent: "H", Mode: browserModeCode, Prefix: "AC", Display: "Claude Code Web"},
 		{ID: smsRouteClaudeCowork, Agent: "H", Mode: browserModeCowork, Prefix: "AW", Display: "Claude Cowork"},
-		{ID: smsRouteClaudeCodeLocal, Agent: "A", Prefix: configuredClaudePrefix(cfg), Display: "Claude Code Local"},
-		{ID: smsRouteChatGPTChat, Agent: "G", Mode: browserModeChat, Prefix: configuredChatGPTPrefix(cfg), Display: "ChatGPT Chat"},
-		{ID: smsRouteClaudeChat, Agent: "H", Mode: browserModeChat, Prefix: configuredClaudeChatPrefix(cfg), Display: "Claude Chat"},
-		{ID: smsRouteGemini, Agent: "M", Prefix: configuredGeminiChatPrefix(cfg), Display: "Gemini Chat"},
-		{ID: smsRouteCopilot, Agent: "P", Prefix: configuredCopilotChatPrefix(cfg), Display: "Microsoft Copilot Chat"},
-		{ID: smsRouteGrok, Agent: "X", Prefix: configuredGrokChatPrefix(cfg), Display: "Grok Chat"},
+		{ID: smsRouteClaudeCodeLocal, Agent: "A", Prefix: "AL", Display: "Claude Code Local"},
+		{ID: smsRouteChatGPTChat, Agent: "G", Mode: browserModeChat, Prefix: "O", Display: "ChatGPT Chat"},
+		{ID: smsRouteClaudeChat, Agent: "H", Mode: browserModeChat, Prefix: "A", Display: "Claude Chat"},
+		{ID: smsRouteGemini, Agent: "M", Prefix: "G", Display: "Gemini Chat"},
+		{ID: smsRouteCopilot, Agent: "P", Prefix: "M", Display: "Microsoft Copilot Chat"},
+		{ID: smsRouteGrok, Agent: "X", Prefix: "X", Display: "Grok Chat"},
 	}
 }
 
@@ -116,9 +121,8 @@ func smsRouteAllowed(sourceAgent string, route smsRouteSpec) bool {
 }
 
 func legacyStickySMSRoute(sticky string) string {
-	// Before provider-grouped shortcuts, LastAgentBySender stored the internal
-	// engine ID directly. New sticky values are prefixed with "route:" so old G
-	// (ChatGPT) cannot be confused with the new G shortcut (Gemini).
+	// LastAgentBySender historically stored internal engine IDs. Keep reading
+	// those values so upgrades do not point an old ChatGPT sticky G at Gemini.
 	switch strings.ToUpper(strings.TrimSpace(sticky)) {
 	case "C":
 		return smsRouteCodex
@@ -163,8 +167,6 @@ func selectStickySMSRoute(raw string, cfg Config, sourceAgent, sticky string) (s
 			return route, nil
 		}
 	}
-	// A phone authorized for exactly one internal engine gets that engine's
-	// primary route automatically. Multi-agent numbers must make a selection.
 	clean := strings.ToUpper(strings.TrimSpace(sourceAgent))
 	if len(clean) == 1 {
 		if route, ok := smsRouteByID(cfg, defaultSMSRouteForAgent(clean)); ok && smsRouteAllowed(sourceAgent, route) {
@@ -222,4 +224,33 @@ func rewriteSMSRoutePrefix(raw, from, to string) string {
 		}
 	}
 	return raw
+}
+
+func markBrowserModeCommand(command, mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case browserModeChat, browserModeWork, browserModeCode, browserModeCowork:
+		return browserModeMarkerStart + mode + browserModeMarkerEnd + strings.TrimSpace(command)
+	default:
+		return strings.TrimSpace(command)
+	}
+}
+
+func extractBrowserModeCommand(command string) (string, string) {
+	command = strings.TrimSpace(command)
+	if !strings.HasPrefix(command, browserModeMarkerStart) {
+		return "", command
+	}
+	end := strings.Index(command, browserModeMarkerEnd)
+	if end < len(browserModeMarkerStart) {
+		return "", command
+	}
+	mode := strings.ToLower(strings.TrimSpace(command[len(browserModeMarkerStart):end]))
+	rest := strings.TrimSpace(command[end+len(browserModeMarkerEnd):])
+	switch mode {
+	case browserModeChat, browserModeWork, browserModeCode, browserModeCowork:
+		return mode, rest
+	default:
+		return "", command
+	}
 }
