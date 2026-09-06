@@ -21,9 +21,11 @@ const (
 	googleVoiceSMSWindowTitle = "FlipAi — Google Voice SMS"
 )
 
-// The page is used only to establish and preserve the user's Google session.
-// Message receive/send is handled by Go through the authenticated Voice web
-// service. The monitor never opens or selects a conversation.
+// The page establishes and preserves the user's Google session, passively
+// exposes the inbox traffic Google Voice is already receiving, and now owns
+// outbound delivery too: replies are typed into the real message composer and
+// sent through the page's own Send control. The monitor itself never opens or
+// selects a conversation; the outbound worker does that only for a queued send.
 const googleVoiceSMSPageMonitorJS = `
 (() => {
   if (globalThis.__flipAiGoogleVoiceSMSMonitor) return;
