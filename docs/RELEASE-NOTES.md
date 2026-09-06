@@ -1,29 +1,28 @@
-# FlipAi v0.46.37
+# FlipAi v0.46.38
 
-Google Voice SMS live-message detection fix.
+Google Voice SMS sender-resolution fix for saved-contact conversations.
 
-## Google Voice SMS detection
+## Google Voice SMS
 
-- Fixed Direct Google Voice SMS showing **Connected / Ready** while detecting zero live conversation rows and therefore producing no Activity entries.
-- The SMS listener now handles Google Voice's linkless SPA/custom conversation rows instead of depending on an `<a href=".../messages">` element being present.
-- When a changed linkless row does not expose the sender directly, FlipAi opens that row only inside its dedicated hidden SMS browser and resolves the trusted Google Voice `itemId` conversation identity.
-- Current Google Voice `/messages?itemId=t.%2B1XXXXXXXXXX` conversation locators are supported end-to-end for inbound detection and exact-thread replies.
-- The Connections card now gates **Connected / Ready** on a live detector heartbeat that can actually see conversation rows (or a verified empty inbox), not merely on the Messages page having loaded.
+- Fixed the case where FlipAi detected an incoming Google Voice SMS but then blocked it with **“exact sender phone number could not be resolved”** even though the sender's phone number was already allowed for the agent.
+- This occurs when Google Voice shows only a saved contact name such as **US Mobile** and opening the conversation does not change the browser URL to an `itemId` URL.
+- After opening the changed conversation, FlipAi now resolves the exact Google Voice `t.+1XXXXXXXXXX` identity from trusted opened-conversation metadata, browser history state, or newly observed same-origin Google Voice resource metadata.
+- Conversation headers are identity sources only; they cannot be mistaken for a second incoming SMS.
+- The direct SMS listener still never treats a saved contact name or a phone number written inside the SMS body as sender identity.
 
-## Sender and reply safety
+## Security and routing
 
-- Sender authorization remains based only on the normalized phone number from trusted Google Voice identity metadata / `itemId`; saved contact names never authorize a sender.
-- Phone numbers written inside an SMS body cannot be used as sender identity. The real-browser regression test includes a decoy phone number in the message body.
-- Unauthorized, unresolved, calls-only, or mismatched sender/thread identities remain blocked before reaching any AI agent, with Activity logging and no reply sent.
-- Replies remain fail-closed to the exact stored Google Voice thread plus the same phone number. No contact-name or ambiguous single-result fallback is used.
+- The normalized sender phone must still match the exact Google Voice thread identity before the message reaches an agent.
+- Existing per-agent phone permissions, routing codes, security codes, sticky-agent behavior, STATUS, NEW, acknowledgements, and progress updates remain unchanged.
+- Unauthorized, unresolved, calls-only, or mismatched identities remain blocked and logged in Activity without a reply.
 
 ## Regression coverage
 
-- Added a real Chromium regression case matching the reported live failure: saved contact name, linkless Google Voice conversation row, no visible sender number, and a decoy phone number inside the SMS body.
-- The test verifies the changed row resolves to the correct Google Voice `itemId`, captures the inbound message exactly once, and ignores an outgoing `You:` update.
+- Added a real Chromium regression matching the reported live failure: a linkless Google Voice row labeled only with a saved contact name, an unchanged `/messages` browser URL, unrelated preloaded conversation metadata, and a decoy phone number inside the SMS body.
+- The test verifies that FlipAi resolves the newly opened conversation's exact sender/thread, captures the SMS exactly once, ignores the decoy identities, and does not treat the opened conversation header as a message.
 
 ## Calling isolation
 
-- Existing Google Voice calling behavior, profile, settings, and call state machine are unchanged.
+- Google Voice calling behavior, profile, settings, and call state machine are unchanged.
 
 No Authenticode/code-signing certificate is included in this release.
