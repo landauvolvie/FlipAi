@@ -746,9 +746,14 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
+	// A NEW modifier may be reset-only (OW NEW:) or reset-and-run
+	// (OW NEW: research this). Treat the latter as a real agent turn for
+	// attachments, progress, health, and the final reply.
+	freshTurn := rc.New && remoteCommandHasTurn(rc)
+
 	// Optional heartbeat so a long turn reports in, the way watching the
 	// desktop app does. Stops as soon as the turn returns.
-	if agentSettings(b.cfg, rc.Agent).progressEnabled() && !rc.Status && !rc.New {
+	if agentSettings(b.cfg, rc.Agent).progressEnabled() && !rc.Status && (!rc.New || freshTurn) {
 		stop := make(chan struct{})
 		defer close(stop)
 		go b.heartbeat(ctx, stop, m, rc)
@@ -757,7 +762,7 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	var inbound []InboundAttachment
 	var cleanupInbound func()
 	var prepErr error
-	if !rc.Status && !rc.New && len(m.Attachments) > 0 {
+	if !rc.Status && (!rc.New || freshTurn) && len(m.Attachments) > 0 {
 		inbound, cleanupInbound, prepErr = prepareInboundAttachments(m.Attachments)
 		if cleanupInbound != nil {
 			defer cleanupInbound()
@@ -771,6 +776,12 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	} else if rc.Status {
 		b.event("info", "agent", "STATUS command executing", rc.Sender, "", m.ID)
 		final = b.statusLine()
+	} else if freshTurn {
+		b.event("info", "agent", "Starting a fresh agent conversation and first turn", rc.Sender, rc.Agent, m.ID)
+		final, err = b.runFreshAgentTurn(ctx, rc, inbound)
+	} else if rc.New && remoteCommandHasBrowserMode(rc) {
+		b.event("info", "agent", "Starting a new browser-mode conversation", rc.Sender, rc.Agent, m.ID)
+		final, err = b.resetAgentConversation(ctx, rc)
 	} else if rc.New {
 		b.event("info", "agent", "Starting a new agent conversation", rc.Sender, rc.Agent, m.ID)
 		switch rc.Agent {
@@ -831,8 +842,8 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	}
 	// A real turn is the most authoritative health signal there is, better than
 	// any probe: it is the exact work the Agents page claims to describe. Status
-	// and new-conversation commands never reach an agent, so they say nothing.
-	if !rc.Status && !rc.New {
+	// Reset-only commands never reach an agent, but NEW plus a prompt does.
+	if !rc.Status && (!rc.New || freshTurn) {
 		if err != nil {
 			b.recordAgentResult(rc.Agent, false, friendlyAgentError(err))
 		} else {

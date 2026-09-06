@@ -1,22 +1,20 @@
-# FlipAi v0.46.53
+# FlipAi v0.46.54
 
-This release finishes the direct Google Voice media/startup work from v0.46.51 and gives FlipAi a much cleaner update experience without changing the rest of the app layout.
+The Agents page now matches FlipAi's public SMS routing, and every shortcut supports starting a fresh chat or session. This release includes all updater improvements from v0.46.53.
 
-## Update experience
+## Agents and SMS routing
 
-- New releases begin downloading automatically in the background as soon as FlipAi detects them.
-- The small control beside the FlipAi version now shows live percentage progress instead of a generic download icon.
-- At 100%, the progress control becomes a compact **Install update** button; the user chooses when to click it.
-- Partial installer downloads are kept as private `.part` files and resume after an app or computer restart when the server supports HTTP Range requests.
-- A fully downloaded, checksum-verified update installs automatically the next time FlipAi or Windows restarts if the user has not installed it manually first.
-- After either manual or restart-triggered installation, FlipAi always reopens the application window.
-- Update banners and update controls remain removed from Settings; only the small version-area updater is shown.
+- The Agents page shows the real public shortcuts: `O:` ChatGPT Chat, `OW:` ChatGPT Work, `OC:` Codex, `A:` Claude Chat, `AW:` Claude Cowork, `AC:` Claude Code Web, `AL:` Claude Code Local, `G:` Gemini, `M:` Microsoft Copilot, and `X:` Grok.
+- Stale internal shortcut letters are no longer presented as the primary UI routing codes; stored legacy aliases remain compatible behind the scenes.
+- Add the configured new-session word after any shortcut to start fresh. With the default word: `OW NEW: research this`, `AC NEW: fix this repository`, or `X NEW: explain this`.
+- `OW NEW:` with no prompt resets only that exact destination. `OW NEW: <prompt>` resets it and runs the first task in the new session as one queued operation.
+- Fresh browser sessions preserve the exact requested mode: ChatGPT Work remains Work, Claude Cowork remains Cowork, and Claude Code Web remains Code Web.
+- Codex, Claude Code Local, Gemini, Microsoft Copilot, Grok, ChatGPT Chat, and Claude Chat also start their corresponding fresh conversation or session.
+- Fresh turns retain normal attachment, progress, health, and reply handling.
 
-## Included direct Google Voice work
+## Validation
 
-- Incoming Google Voice MMS photos, audio/voice notes, and supported video are delivered to browser-backed AI agents as the actual file rather than the text “MMS received.”
-- Browser-agent returned images/files are captured from the provider page. Images are sent back through Google Voice MMS when supported; unsupported/oversized media falls back to the exact provider conversation link.
-- Gmail forwarding is no longer exposed in the app UI; the old Gmail implementation remains preserved in Git history/rollback branch.
-- FlipAi starts hidden at Windows sign-in and recovers the direct Google Voice background listener without requiring the main window to be opened manually.
+- Added tests for `NEW` across every public shortcut, reset-only syntax, custom new-session words, and the Agents-page shortcut map.
+- The release pipeline runs the full Linux and Windows tests, real-browser checks, vet/race checks, Google Voice smoke tests, Defender scans, installer smoke tests, SBOM generation, checksums, and provenance before publishing.
 
-No transcription is added.
+No Authenticode/code-signing certificate is included in this release.

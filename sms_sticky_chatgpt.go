@@ -86,7 +86,8 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 	if err != nil {
 		return remoteCommand{}, err
 	}
-	rewritten := rewriteSMSRoutePrefix(raw, route.Prefix, underlyingPrefixForRoute(cfg, route))
+	underlyingPrefix := underlyingPrefixForRoute(cfg, route)
+	rewritten, fresh := rewriteSMSRouteCommand(raw, []string{route.Prefix, underlyingPrefix}, underlyingPrefix, configuredNewSessionCommand(cfg))
 	var rc remoteCommand
 	if strings.TrimSpace(raw) != "" {
 		switch route.Agent {
@@ -114,10 +115,12 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 	if rc.Status {
 		return rc, nil
 	}
-	if rc.New && route.Mode != "" && route.Mode != browserModeChat {
-		return remoteCommand{}, fmt.Errorf("%s NEW is not supported yet; send the task with %s: and FlipAi will enter the correct mode before submitting it", route.Display, route.Prefix)
+	if fresh {
+		rc.New = true
 	}
-	if !rc.New && route.Mode != "" {
+	// Keep the requested browser mode even on NEW commands. That lets execution
+	// distinguish O NEW: from OW NEW:, and A NEW: from AW/AC NEW:.
+	if route.Mode != "" {
 		rc.Text = markBrowserModeCommand(rc.Text, route.Mode)
 	}
 	return rc, nil
@@ -199,14 +202,22 @@ func chatGPTBrowserSend(ctx context.Context, dataDir, prompt string) (string, er
 }
 
 func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
+	return chatGPTBrowserNewConversationMode(ctx, dataDir, browserModeChat)
+}
+
+func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string) error {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
 		return err
 	}
+	if mode == "" {
+		mode = browserModeChat
+	}
+	payload, _ := json.Marshal(map[string]any{"mode": mode})
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	b, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{"mode":"chat"}`))
+	b, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
 		return err
@@ -245,4 +256,8 @@ func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, err
 
 func (b *Bridge) newChatGPTConversation(ctx context.Context) error {
 	return chatGPTBrowserNewConversation(ctx, filepath.Dir(b.statePath))
+}
+
+func (b *Bridge) newChatGPTConversationMode(ctx context.Context, mode string) error {
+	return chatGPTBrowserNewConversationMode(ctx, filepath.Dir(b.statePath), mode)
 }
