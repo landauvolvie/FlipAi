@@ -1,0 +1,74 @@
+name: Finalize v0.46.54 metadata
+
+on:
+  push:
+    branches:
+      - feature/sms-new-modifier-ui-v04653
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/sms-new-modifier-ui-v04653
+          fetch-depth: 0
+      - name: Restore config and bump every version source
+        shell: python
+        run: |
+          import subprocess
+          from pathlib import Path
+
+          subprocess.run(["git", "fetch", "origin", "main"], check=True)
+          subprocess.run(["git", "checkout", "origin/main", "--", "config.go"], check=True)
+
+          p = Path("config.go")
+          s = p.read_text()
+          old = 'const version = "0.46.53"'
+          assert s.count(old) == 1, "compiled version anchor changed"
+          p.write_text(s.replace(old, 'const version = "0.46.54"', 1))
+
+          Path("VERSION").write_text("0.46.54\n")
+
+          p = Path("installer/FlipAi.iss")
+          s = p.read_text()
+          old = '#define MyVersion "0.46.53"'
+          assert s.count(old) == 1, "installer version anchor changed"
+          p.write_text(s.replace(old, '#define MyVersion "0.46.54"', 1))
+
+          Path("docs/RELEASE-NOTES.md").write_text('''# FlipAi v0.46.54
+
+This release makes the Agents page match FlipAi's provider-grouped SMS routing and adds a universal fresh-session modifier for every public shortcut. It includes all updater improvements from v0.46.53.
+
+## Agents and SMS routing
+
+- The Agents page now shows the public shortcuts users actually text: `O:` ChatGPT Chat, `OW:` ChatGPT Work, `OC:` Codex, `A:` Claude Chat, `AW:` Claude Cowork, `AC:` Claude Code Web, `AL:` Claude Code Local, `G:` Gemini, `M:` Microsoft Copilot, and `X:` Grok.
+- Stale internal/legacy shortcut letters are no longer presented as the primary UI routing codes. Existing stored aliases remain compatible behind the scenes.
+- The configurable new-session word now works after every public shortcut, case-insensitively. With the default word, examples include `OW NEW: research this`, `AC NEW: fix this repository`, and `X NEW: explain this`.
+- A route followed by `NEW:` with no prompt resets only that exact destination. A route followed by `NEW: <prompt>` resets it and sends the first task in the fresh session as one queued operation.
+- Browser-backed routes preserve their exact mode when starting fresh: ChatGPT Work stays Work, Claude Cowork stays Cowork, and Claude Code Web stays Code Web instead of falling back to regular chat.
+- Codex, Claude Code Local, Gemini, Microsoft Copilot, Grok, and normal Chat/Claude Chat all start their corresponding fresh conversation/session as well.
+- Fresh turns keep attachment, progress, health, and reply handling consistent with ordinary turns.
+
+## Validation
+
+- Added route-level tests covering `NEW` for every public shortcut, reset-only forms, custom new-session words, and Agents-page shortcut text.
+- The normal release pipeline still runs the full Linux and Windows tests, real-browser flow tests, vet/race checks, Google Voice smoke tests, Defender scans, installer install/uninstall smoke tests, SBOM generation, checksums, and build provenance before publishing.
+
+No Authenticode/code-signing certificate is included in this release.
+''')
+      - name: Format and test
+        run: |
+          gofmt -w config.go bridge.go sms_routes.go sms_sticky_chatgpt.go sms_claude_chat.go sms_fresh_turn.go zzzzzzzzzzzzzz_sms_route_ui.go sms_fresh_turn_test.go sms_route_ui_test.go
+          go test ./...
+      - name: Commit finalized metadata and remove helper
+        run: |
+          rm .github/workflows/finalize-v04654.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Finalize FlipAi v0.46.54"
+          git push origin HEAD:feature/sms-new-modifier-ui-v04653
