@@ -141,8 +141,8 @@ const googleVoiceSMSInitScript = `
   };
   const previewSelector='[data-message-text],[data-message-snippet],[data-last-message],[class*="snippet" i],[class*="preview" i],[class*="last-message" i],[class*="message-text" i]';
   const isConversationRow = el => !!el && (
-    el.matches?.('gv-conversation-list-item,gv-message-list-item,gv-thread-list-item,[data-conversation-id],[data-thread-id],[data-item-id]') ||
-    /conversation|thread-(?:row|item)|message-(?:row|list-item)/i.test(String(el.className||''))
+    el.matches?.('gv-conversation-list-item,gv-message-list-item,gv-thread-list-item') ||
+    /conversation-(?:list-)?item|conversation-row|thread-(?:list-)?item|thread-row|message-(?:list-)?item|message-row/i.test(String(el.className||''))
   );
   const messageLinks = () => {
     let list=[];try{list=[...document.querySelectorAll('a[href*="/messages"]')]}catch(_){}
@@ -164,7 +164,7 @@ const googleVoiceSMSInitScript = `
     const out=[],seen=new Set();
     const add=el=>{if(el&&!seen.has(el)){seen.add(el);out.push(el)}};
     for(const a of messageLinks())add(linkContainer(a));
-    const sels=['gv-conversation-list-item','gv-message-list-item','gv-thread-list-item','[data-conversation-id]','[data-thread-id]','[data-item-id]','[class*="conversation-list-item" i]','[class*="conversation-row" i]','[class*="thread-list-item" i]','[class*="thread-row" i]'];
+    const sels=['gv-conversation-list-item','gv-message-list-item','gv-thread-list-item','[class*="conversation-list-item" i]','[class*="conversation-row" i]','[class*="thread-list-item" i]','[class*="thread-row" i]','[data-conversation-id][role="listitem"]','[data-thread-id][role="listitem"]','[data-item-id][role="listitem"]'];
     for(const sel of sels){let list=[];try{list=document.querySelectorAll(sel)}catch(_){}for(const el of list)add(el)}
     let generic=[];try{generic=document.querySelectorAll('[role="listitem"]')}catch(_){}
     for(const el of generic){let p=null;try{p=el.querySelector?.(previewSelector)}catch(_){}if(p||isConversationRow(el))add(el)}
