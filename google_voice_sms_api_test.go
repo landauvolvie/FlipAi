@@ -23,14 +23,25 @@ func TestGoogleVoiceSMSAPIParsesExactPhoneWithoutContactName(t *testing.T) {
 	}
 }
 
-func TestGoogleVoiceSMSAPIMismatchRemainsVisibleToSecurityGate(t *testing.T) {
-	raw := []byte(`{"thread":[{"id":"t.+18453241813","item":[{"id":"bad","startTime":"1788667200000","did":"+18456043655","messageText":"X: hi","type":"smsIn"}]}]}`)
+// A real inbound text carries a "did" that is this account's own Google Voice
+// number, not the person texting. Reading it as the sender made every genuine
+// text disagree with its own conversation, and the identity cross-check then
+// blocked all of them: "conversation phone does not match sender". The
+// conversation's own t.+1 identity is the sender; the did is only recorded.
+func TestGoogleVoiceSMSAPISenderIsTheConversationNotTheAccountNumber(t *testing.T) {
+	raw := []byte(`{"thread":[{"id":"t.+18453241813","item":[{"id":"in","startTime":"1788667200000","did":"+18456043655","messageText":"X: hi","type":"smsIn"}]}]}`)
 	msgs, err := parseGoogleVoiceSMSAPIListResponse(raw, "2")
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("parse: %v %+v", err, msgs)
 	}
-	if msgs[0].Sender != "8456043655" || googleVoiceSMSThreadPhone(msgs[0].Thread) != "8453241813" {
-		t.Fatalf("mismatch was hidden instead of being available for fail-closed validation: %+v", msgs[0])
+	if msgs[0].Sender != "8453241813" {
+		t.Fatalf("the sender was not taken from the conversation: %+v", msgs[0])
+	}
+	if msgs[0].AccountNumber != "8456043655" {
+		t.Fatalf("this account's own Google Voice number was not recorded separately: %+v", msgs[0])
+	}
+	if googleVoiceSMSThreadPhone(msgs[0].Thread) != "8453241813" {
+		t.Fatalf("the reply target drifted from the sender: %+v", msgs[0])
 	}
 }
 
