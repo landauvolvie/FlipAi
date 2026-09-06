@@ -1,34 +1,29 @@
-# FlipAi v0.46.43
+# FlipAi v0.46.44
 
-An agent's answer is no longer thrown away when Google asks FlipAi to slow down.
+The reply is now sent by the signed-in Google Voice page itself, not by a separate HTTP client.
 
 ## The fix
 
-Texting an agent worked: the message was authenticated, routed, and answered. Delivering that answer back then failed with **"Google Voice reply failed: Google Voice web service is rate limiting FlipAi"**, and the reply was lost.
+Replies kept failing with **"Google Voice web service is asking FlipAi to slow down"**, and slowing down did not help. Across three releases not one reply ever succeeded: the Outgoing count stayed at zero while inbound texts arrived normally.
 
-The reply got exactly one attempt. Google answered `429` — its "you are asking too often" response — and FlipAi treated that as final. The agent had already spent its turn producing the answer, and the person waiting on it had no other way to receive it.
+That pattern rules out a passing rate limit. Reading the inbox worked and sending never did, from the same session, with the same cookies and the same authorization — so the difference is not the credentials, it is who is asking. Sending a text is the operation abuse protection cares about, and a Go HTTP client is not the caller Google is willing to accept it from.
 
-Three things changed:
+Inbound kept working because FlipAi already reads the conversation updates the page receives on its own. Outbound had no such path, so it failed every time.
 
-- **A refused reply is now sent again.** When Google answers `429` it has declined to process the request at all, so nothing went out and sending again delivers the message exactly once. Those are retried on a growing schedule that fits inside the delivery budget, honoring Google's own `Retry-After` when it asks for longer, and all attempts of one reply carry a single tracking id.
-- **A reply whose outcome is unknown is never sent again.** A `5xx`, or a connection dropping while FlipAi was reading the response, may mean Google already sent the text. Sending again would deliver the same answer twice and charge for it, so those stop after one attempt. Reading the inbox still repeats freely, because a repeated read costs nothing and is discarded.
-- A refusal on the merits stays final in both directions.
-- **A reply now has priority over asking Google for the inbox.** Both share one quota, so the request to Google stands aside while a reply is being delivered. What the page has already received is still taken immediately, because that costs Google nothing — a text arriving mid-retry is delivered right away rather than waiting out the whole retry sequence.
-- **FlipAi asks for the inbox far less often.** The active poll moves from every 3 seconds to every 15, backing off to 5 minutes while Google is unhappy. Frequent polling is what earned the rate limit in the first place, and it was spending the same quota the reply needed. Inbound text is not slower for it: the page's own conversation updates are still read as they arrive, which is what carries a newly arrived text.
+FlipAi now issues the request from inside the signed-in Google Voice page, using the page's own `fetch` with its own session. This is what the capture script had already demonstrated was possible: it wraps `fetch` on the Voice page and sees the page's calls to the web service, which means those calls are ordinary requests from that page rather than something routed through a hidden frame. A request FlipAi makes there is the same request, from the same origin, with the same cookies.
 
-## Also fixed
+The separate HTTP client remains only for a page that could not attempt the request at all. It is deliberately not a fallback for a request the page did attempt: once a request has gone out, repeating it through a second client could be a second text message.
 
-- The message shown when a reply failed said "it will retry more slowly", which described the inbox poll and not the reply. Nothing retried. The reply now genuinely retries, and the message says what actually happened.
-- Readiness and the poll that proves it are now held together by a test. Slowing the poll without widening the readiness window would have declared a healthy listener dead between two of its own heartbeats — flickering "Not connected" and blocking replies for the gap.
+## Failures now say what Google said
+
+The response body was discarded on every error, leaving a status code and nothing else to work from. Google's own explanation — a quota name, a rejected field, a reason — is now read before the status is judged and carried into the message shown in Activity, for both request paths.
 
 ## Regression coverage
 
-- A rate-limited reply is sent again and Google's requested wait is honored; a reply whose outcome is unknown never is; a refusal on the merits is final for both.
-- All attempts of one reply produce an identical payload, carrying one tracking id.
-- A reply in flight does not suppress the passive drain.
-- `Retry-After` is understood as seconds and as an HTTP date, and nonsense values are ignored.
-- The retry schedule grows, stays capped, and fits inside the delivery budget the bridge allows.
-- The readiness window outlasts the poll interval with margin for a missed poll.
+- The message body reaches the page as one encoded literal that decodes back to exactly what went in, so nothing in a text can become code in a signed-in Google session.
+- Both request paths agree on what each status means, and carry Google's own words with it.
+- A request the page could not complete is never sent again; a refusal is.
+- The page is tried before the HTTP client, and the fallback stays limited to a page that never attempted the request.
 
 ## Unchanged
 

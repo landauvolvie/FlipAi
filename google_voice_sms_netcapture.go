@@ -4,6 +4,9 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,6 +162,126 @@ var googleVoiceSMSCaptureDrainJS = `(()=>{try{
   }
   return JSON.stringify(out);
 }catch(_){return '[]'}})()`
+
+// The signed-in page is Google Voice's own client, and Google treats it as one.
+// A Go HTTP client making the same call from the same machine is not the same
+// caller: reading an inbox that way is tolerated, but sending a text -- the
+// operation abuse protection actually cares about -- is refused outright, and
+// refused persistently rather than for a while.
+//
+// So the request is issued from inside the page instead. The capture script
+// proves this works: it wraps fetch on voice.google.com and sees the page's own
+// calls to clients6.google.com, which means those calls are ordinary
+// cross-origin requests from that page rather than something tunnelled through
+// the gapi proxy frame. A fetch FlipAi runs there is the same request from the
+// same origin with the same cookies, and Google answers it the same way.
+//
+// FlipAi still computes the authorization itself, because the value is
+// time-bound and a captured one goes stale.
+
+// googleVoiceSMSPageResponse is what the page reports back about the request it
+// made on FlipAi's behalf.
+type googleVoiceSMSPageResponse struct {
+	Status int    `json:"status"`
+	Text   string `json:"text"`
+	Error  string `json:"error,omitempty"`
+}
+
+// googleVoiceSMSPageRequestJS builds the expression that performs one request in
+// the page. Every value is JSON-encoded into the source, so nothing in a URL,
+// header or message body can end the expression and become code.
+func googleVoiceSMSPageRequestJS(url string, headers map[string]string, body string) (string, error) {
+	encodedURL, err := json.Marshal(url)
+	if err != nil {
+		return "", err
+	}
+	encodedHeaders, err := json.Marshal(headers)
+	if err != nil {
+		return "", err
+	}
+	encodedBody, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	return `(async()=>{try{` +
+		`const r=await fetch(` + string(encodedURL) + `,{method:'POST',credentials:'include',headers:` + string(encodedHeaders) + `,body:` + string(encodedBody) + `});` +
+		`let t='';try{t=await r.text()}catch(_){}` +
+		`return JSON.stringify({status:r.status,text:t.length>` + strconv.Itoa(googleVoiceSMSPageResponseLimit) + `?t.slice(0,` + strconv.Itoa(googleVoiceSMSPageResponseLimit) + `):t})` +
+		`}catch(e){return JSON.stringify({status:0,error:String((e&&e.message)||e)})}})()`, nil
+}
+
+const googleVoiceSMSPageResponseLimit = 1 << 20
+
+func parseGoogleVoiceSMSPageResponse(raw string) (googleVoiceSMSPageResponse, error) {
+	var out googleVoiceSMSPageResponse
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return out, errors.New("the Google Voice page returned nothing")
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return out, errors.New("the Google Voice page returned an unreadable result")
+	}
+	return out, nil
+}
+
+// googleVoiceSMSServiceMessage digs Google's own words out of an error body, so
+// a failure says what Google said rather than only its status code. Falling
+// back to a short snippet keeps an unrecognized shape from being silent.
+func googleVoiceSMSServiceMessage(raw string) string {
+	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), ")]}'"))
+	if raw == "" {
+		return ""
+	}
+	var decoded struct {
+		Error struct {
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(raw), &decoded) == nil {
+		if msg := strings.TrimSpace(decoded.Error.Message); msg != "" {
+			return truncateGoogleVoiceSMSMessage(msg)
+		}
+		if status := strings.TrimSpace(decoded.Error.Status); status != "" {
+			return truncateGoogleVoiceSMSMessage(status)
+		}
+	}
+	return truncateGoogleVoiceSMSMessage(strings.Join(strings.Fields(raw), " "))
+}
+
+func truncateGoogleVoiceSMSMessage(v string) string {
+	const limit = 240
+	if len([]rune(v)) <= limit {
+		return v
+	}
+	return string([]rune(v)[:limit]) + "…"
+}
+
+// googleVoiceSMSAPIStatusError turns one HTTP status into the same error both
+// request paths agree on, carrying whatever Google said about it.
+func googleVoiceSMSAPIStatusError(status int, retryAfter time.Duration, bodyText string) error {
+	detail := googleVoiceSMSServiceMessage(bodyText)
+	withDetail := func(base string) error {
+		if detail == "" {
+			return errors.New(base)
+		}
+		return fmt.Errorf("%s: %s", base, detail)
+	}
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return errGoogleVoiceSMSNotAuthenticated
+	case status == http.StatusTooManyRequests:
+		// Google declined to process the request, which is the one answer that
+		// makes sending again safe.
+		return googleVoiceSMSRefused(withDetail("Google Voice web service is asking FlipAi to slow down"), retryAfter)
+	case status >= 500:
+		// A server error can be raised on either side of the text going out.
+		return googleVoiceSMSUnknownOutcome(withDetail(fmt.Sprintf("Google Voice web service returned HTTP %d", status)), retryAfter)
+	case status < 200 || status >= 300:
+		return withDetail(fmt.Sprintf("Google Voice web service returned HTTP %d", status))
+	}
+	return nil
+}
 
 // googleVoiceSMSAuthTemplate is what the page observed about its own request.
 type googleVoiceSMSAuthTemplate struct {

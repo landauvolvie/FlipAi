@@ -1,0 +1,148 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Every value goes into the expression JSON-encoded, so nothing in a message
+// body can end the expression and become code running in a signed-in Google
+// session.
+func TestGoogleVoiceSMSPageRequestCannotBeEscapedByMessageText(t *testing.T) {
+	hostile := "');alert(1);globalThis.x=(('" + "\n\"\\`${}" + "</script>"
+	expression, err := googleVoiceSMSPageRequestJS(
+		"https://clients6.google.com/voice/v1/voiceclient/api2thread/sendsms?alt=json&key=AIza",
+		map[string]string{"authorization": "SAPISIDHASH 1_2'\"</script>"},
+		hostile,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The body must appear only as one JSON string literal that decodes back to
+	// exactly what went in. That is what keeps it data: a quote or a newline
+	// that survived raw could close the literal and start executing.
+	encoded, err := json.Marshal(hostile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(expression, "body:"+string(encoded)) {
+		t.Fatalf("the message body is not carried as an encoded literal: %s", expression)
+	}
+	var roundTripped string
+	if err := json.Unmarshal(encoded, &roundTripped); err != nil || roundTripped != hostile {
+		t.Fatalf("the encoded body does not decode back to the original: %q", roundTripped)
+	}
+	for _, raw := range []string{"</script>", "\n"} {
+		if strings.Contains(expression, raw) {
+			t.Fatalf("raw %q survived encoding into the expression", raw)
+		}
+	}
+	if !strings.Contains(expression, "credentials:'include'") {
+		t.Fatal("the page request does not carry the signed-in session")
+	}
+	if !strings.Contains(expression, "method:'POST'") {
+		t.Fatal("the page request is not a POST")
+	}
+}
+
+func TestGoogleVoiceSMSPageResponseIsUnderstood(t *testing.T) {
+	raw, err := json.Marshal(googleVoiceSMSPageResponse{Status: 200, Text: `)]}'` + "\n" + `{"threadItemId":"x"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseGoogleVoiceSMSPageResponse(string(raw))
+	if err != nil || got.Status != 200 || !strings.Contains(got.Text, "threadItemId") {
+		t.Fatalf("a good page response was not understood: %+v err=%v", got, err)
+	}
+	if _, err := parseGoogleVoiceSMSPageResponse("not json"); err == nil {
+		t.Fatal("junk from the page was accepted")
+	}
+	if _, err := parseGoogleVoiceSMSPageResponse(""); err == nil {
+		t.Fatal("an empty page result was accepted")
+	}
+}
+
+// A request the page could not complete has an unknown outcome: Google may
+// already have sent the text, so it must never be repeated.
+func TestGoogleVoiceSMSPageFailureIsNeverResent(t *testing.T) {
+	if _, resendable := googleVoiceSMSResendable(googleVoiceSMSAPIStatusError(503, 0, "")); resendable {
+		t.Fatal("a 503 from the page path was marked safe to send again")
+	}
+	if _, resendable := googleVoiceSMSResendable(googleVoiceSMSAPIStatusError(429, 0, "")); !resendable {
+		t.Fatal("a 429 refusal is safe to send again and was not")
+	}
+	if got := googleVoiceSMSAPIStatusError(200, 0, ""); got != nil {
+		t.Fatalf("a successful status produced an error: %v", got)
+	}
+}
+
+// Both request paths must agree about what a status means, or a reply would be
+// resent by one and abandoned by the other.
+func TestGoogleVoiceSMSStatusErrorsCarryGooglesOwnWords(t *testing.T) {
+	body := `)]}'` + "\n" + `{"error":{"code":429,"message":"Quota exceeded for quota metric 'Requests'","status":"RESOURCE_EXHAUSTED"}}`
+	err := googleVoiceSMSAPIStatusError(429, 5*time.Second, body)
+	if err == nil || !strings.Contains(err.Error(), "Quota exceeded") {
+		t.Fatalf("Google's own explanation was discarded: %v", err)
+	}
+	wait, resendable := googleVoiceSMSResendable(err)
+	if !resendable || wait != 5*time.Second {
+		t.Fatalf("the refusal lost its retry timing: wait=%v resendable=%v", wait, resendable)
+	}
+
+	if err := googleVoiceSMSAPIStatusError(401, 0, ""); err != errGoogleVoiceSMSNotAuthenticated {
+		t.Fatalf("401 is not reported as a sign-in problem: %v", err)
+	}
+	if err := googleVoiceSMSAPIStatusError(400, 0, `{"error":{"message":"Invalid value at 'thread_id'"}}`); err == nil || !strings.Contains(err.Error(), "thread_id") {
+		t.Fatalf("a refusal on the merits lost its reason: %v", err)
+	}
+}
+
+func TestGoogleVoiceSMSServiceMessageFallsBackToASnippet(t *testing.T) {
+	if got := googleVoiceSMSServiceMessage(""); got != "" {
+		t.Fatalf("an empty body produced %q", got)
+	}
+	if got := googleVoiceSMSServiceMessage("upstream connect error   \n  reset"); got != "upstream connect error reset" {
+		t.Fatalf("an unrecognized body was not reported readably: %q", got)
+	}
+	long := strings.Repeat("x", 900)
+	if got := googleVoiceSMSServiceMessage(long); len([]rune(got)) > 241 {
+		t.Fatalf("a long body was not truncated: %d runes", len([]rune(got)))
+	}
+}
+
+// The reply goes through the page, because that is the caller Google accepts.
+// The Go client may not quietly become the normal path again.
+func TestGoogleVoiceSMSPrefersThePageForRequests(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSAPIRequest(")
+	if start < 0 {
+		t.Fatal("the Google Voice request entry point is gone")
+	}
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	viaPage := strings.Index(body, "googleVoiceSMSAPIRequestViaPage(")
+	viaGo := strings.Index(body, "googleVoiceSMSAPIRequestOnce(")
+	if viaPage < 0 {
+		t.Fatal("requests no longer go through the signed-in page")
+	}
+	if viaGo >= 0 && viaGo < viaPage {
+		t.Fatal("the Go client is tried before the page again")
+	}
+	if !strings.Contains(body, "pageUsable") {
+		t.Fatal("the Go fallback is no longer limited to a page that could not attempt the request")
+	}
+}
+
+func readGoogleVoiceSMSSource(t *testing.T, name string) (string, error) {
+	t.Helper()
+	raw, err := os.ReadFile(name)
+	return string(raw), err
+}
