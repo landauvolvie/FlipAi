@@ -16,12 +16,13 @@ const detectorReady = await page.evaluate(() => globalThis.__flipAiGoogleVoiceSM
 const detectorRows = await page.evaluate(() => Number(globalThis.__flipAiGoogleVoiceSMSDetectorRows || 0));
 
 await page.locator('#messageText').evaluate(el => { el.textContent = 'X: call'; });
-await page.waitForTimeout(1500);
+await page.waitForTimeout(1800);
 let captured = await page.evaluate(() => globalThis.__captured || []);
+const finalURL = page.url();
 
 await page.locator('#messageText').evaluate(el => { el.textContent = 'You: reply'; });
 await page.waitForTimeout(1000);
 const afterOutgoing = await page.evaluate(() => globalThis.__captured || []);
 
-console.log(JSON.stringify({ errors, captured, afterOutgoing, detectorReady, detectorRows }));
+console.log(JSON.stringify({ errors, captured, afterOutgoing, detectorReady, detectorRows, finalURL }));
 await browser.close();
