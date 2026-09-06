@@ -175,7 +175,7 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 					// delivered, and an answered reply is a paid SMS loop, so
 					// the harmless failure is the one to prefer.
 					rememberGoogleVoiceSMSSent(dataDir, req.Phone, req.Body)
-					if err := sendGoogleVoiceTextInPage(d, req.Phone, req.Thread, req.Body, req.ExactThread, req.Created.Add(googleVoiceSMSOutboundBudget)); err != nil {
+					if err := sendGoogleVoiceTextInPage(dataDir, d, req.Phone, req.Thread, req.Body, req.ExactThread, req.Created.Add(googleVoiceSMSOutboundBudget)); err != nil {
 						result.OK = false
 						result.Error = err.Error()
 					} else {
@@ -196,7 +196,7 @@ func runGoogleVoiceSMSOutboundLoop(dataDir string, d voiceDevTools, stop <-chan 
 // Historical name retained for the outbox call site. This function no longer
 // edits the Google Voice page: the browser contributes only its authenticated
 // session, and the exact Voice web-service thread is used for delivery.
-func sendGoogleVoiceTextInPage(d voiceDevTools, phone, thread, body string, exactThread bool, deadline time.Time) error {
+func sendGoogleVoiceTextInPage(dataDir string, d voiceDevTools, phone, thread, body string, exactThread bool, deadline time.Time) error {
 	phone = normalizeUSPhone(phone)
 	body = strings.TrimSpace(body)
 	if phone == "" || body == "" {
@@ -206,5 +206,5 @@ func sendGoogleVoiceTextInPage(d voiceDevTools, phone, thread, body string, exac
 	if err != nil {
 		return err
 	}
-	return googleVoiceSMSAPISend(d, threadID, body, deadline)
+	return googleVoiceSMSAPISend(dataDir, d, threadID, body, deadline)
 }

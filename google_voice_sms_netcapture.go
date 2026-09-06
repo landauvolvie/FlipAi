@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -332,6 +334,80 @@ type googleVoiceSMSCapturedSend struct {
 	URL  string `json:"url"`
 	Key  string `json:"key"`
 	Body string `json:"body"`
+}
+
+// The learned format is kept as a shape, not as a message. Before it is
+// written anywhere the conversation and the text are replaced with placeholders
+// that satisfy the same slot rules, so what persists is the structure Google
+// Voice uses and never what anyone actually said.
+const (
+	googleVoiceSMSTemplateThread = "t.+15550000000"
+	googleVoiceSMSTemplateText   = "flipai"
+)
+
+func googleVoiceSMSSendTemplatePath(dataDir string) string {
+	return filepath.Join(dataDir, "google-voice-sms-send-template.json")
+}
+
+type googleVoiceSMSSendTemplate struct {
+	Body    string    `json:"body"`
+	Learned time.Time `json:"learned"`
+}
+
+// googleVoiceSMSSendTemplateFrom turns one real send into a reusable shape,
+// keeping nothing of the message it was carrying.
+func googleVoiceSMSSendTemplateFrom(captured string) (string, bool) {
+	stripped, ok := googleVoiceSMSSendBodyFromCapture(captured, googleVoiceSMSTemplateThread, googleVoiceSMSTemplateText, 1)
+	if !ok {
+		return "", false
+	}
+	// A shape that cannot be filled in again is not a usable template.
+	if _, ok := googleVoiceSMSSendBodyFromCapture(string(stripped), googleVoiceSMSTemplateThread, googleVoiceSMSTemplateText, 2); !ok {
+		return "", false
+	}
+	return string(stripped), true
+}
+
+func saveGoogleVoiceSMSSendTemplate(dataDir, captured string) bool {
+	shape, ok := googleVoiceSMSSendTemplateFrom(captured)
+	if !ok {
+		return false
+	}
+	if existing, found := loadGoogleVoiceSMSSendTemplate(dataDir); found && existing == shape {
+		return true
+	}
+	raw, err := json.Marshal(googleVoiceSMSSendTemplate{Body: shape, Learned: time.Now()})
+	if err != nil || os.MkdirAll(dataDir, 0700) != nil {
+		return false
+	}
+	path := googleVoiceSMSSendTemplatePath(dataDir)
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, raw, 0600) != nil {
+		return false
+	}
+	if os.Rename(tmp, path) != nil {
+		_ = os.Remove(tmp)
+		return false
+	}
+	return true
+}
+
+// loadGoogleVoiceSMSSendTemplate returns the shape learned in an earlier
+// session. The page keeps its capture only for the life of one document, so
+// without this the one-time teaching step would be a step before every reply.
+func loadGoogleVoiceSMSSendTemplate(dataDir string) (string, bool) {
+	raw, err := os.ReadFile(googleVoiceSMSSendTemplatePath(dataDir))
+	if err != nil {
+		return "", false
+	}
+	var stored googleVoiceSMSSendTemplate
+	if json.Unmarshal(raw, &stored) != nil {
+		return "", false
+	}
+	if _, ok := googleVoiceSMSSendBodyFromCapture(stored.Body, googleVoiceSMSTemplateThread, googleVoiceSMSTemplateText, 1); !ok {
+		return "", false
+	}
+	return stored.Body, true
 }
 
 func parseGoogleVoiceSMSCapturedSend(raw string) googleVoiceSMSCapturedSend {
