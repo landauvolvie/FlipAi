@@ -35,7 +35,6 @@ func smsTargetAllowed(sourceAgent, target string) bool {
 	return target != "" && strings.Contains(sourceAgent, target)
 }
 
-// selectStickySMSAgent remains as an internal-engine compatibility wrapper.
 func selectStickySMSAgent(raw string, cfg Config, sourceAgent, sticky string) (string, error) {
 	route, err := selectStickySMSRoute(raw, cfg, sourceAgent, sticky)
 	if err != nil {
@@ -112,12 +111,14 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 	if err != nil {
 		return remoteCommand{}, err
 	}
-	if !rc.Status {
-		rc.Route = route.ID
-		rc.Mode = route.Mode
-		if rc.Agent == "" {
-			rc.Agent = route.Agent
-		}
+	if rc.Status {
+		return rc, nil
+	}
+	if rc.New && route.Mode != "" && route.Mode != browserModeChat {
+		return remoteCommand{}, fmt.Errorf("%s NEW is not supported yet; send the task with %s: and FlipAi will enter the correct mode before submitting it", route.Display, route.Prefix)
+	}
+	if !rc.New && route.Mode != "" {
+		rc.Text = markBrowserModeCommand(rc.Text, route.Mode)
 	}
 	return rc, nil
 }
@@ -139,10 +140,10 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 	return b.state.LastAgentBySender[key]
 }
 
-func (b *Bridge) rememberStickySMSAgent(sender, routeID string) error {
-	routeID = strings.ToUpper(strings.TrimSpace(routeID))
-	if _, ok := smsRouteByID(b.cfg, routeID); !ok {
-		return fmt.Errorf("unknown sticky SMS route %q", routeID)
+func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
+	agent = strings.ToUpper(strings.TrimSpace(agent))
+	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" && agent != "P" {
+		return fmt.Errorf("unknown sticky SMS agent %q", agent)
 	}
 	key := stickySMSKey(sender)
 	if key == "" {
@@ -152,7 +153,7 @@ func (b *Bridge) rememberStickySMSAgent(sender, routeID string) error {
 	if b.state.LastAgentBySender == nil {
 		b.state.LastAgentBySender = map[string]string{}
 	}
-	b.state.LastAgentBySender[key] = "route:" + routeID
+	b.state.LastAgentBySender[key] = agent
 	s := b.state
 	b.mu.Unlock()
 	return saveState(b.statePath, s)
@@ -197,16 +198,15 @@ func chatGPTBrowserSend(ctx context.Context, dataDir, prompt string) (string, er
 	return chatGPTBrowserSendMode(ctx, dataDir, prompt, browserModeChat)
 }
 
-func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string) error {
+func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"mode": mode})
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	b, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(string(payload)))
+	b, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{"mode":"chat"}`))
 	cancel()
 	if err != nil {
 		return err
@@ -222,10 +222,6 @@ func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string
 	return nil
 }
 
-func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
-	return chatGPTBrowserNewConversationMode(ctx, dataDir, browserModeChat)
-}
-
 func (b *Bridge) composeChatGPTSMSPrompt(command string) string {
 	command = strings.TrimSpace(command)
 	hint := strings.TrimSpace(b.cfg.replyStyleHintFor("G"))
@@ -238,25 +234,15 @@ func (b *Bridge) composeChatGPTSMSPrompt(command string) string {
 	return command + "\n\n" + hint
 }
 
-func (b *Bridge) runChatGPTSMSMode(ctx context.Context, command, mode string) (string, error) {
-	dataDir := filepath.Dir(b.statePath)
+func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, error) {
+	mode, command := extractBrowserModeCommand(command)
 	if mode == "" {
 		mode = browserModeChat
 	}
+	dataDir := filepath.Dir(b.statePath)
 	return chatGPTBrowserSendMode(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode)
 }
 
-func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, error) {
-	return b.runChatGPTSMSMode(ctx, command, browserModeChat)
-}
-
-func (b *Bridge) newChatGPTConversationMode(ctx context.Context, mode string) error {
-	if mode == "" {
-		mode = browserModeChat
-	}
-	return chatGPTBrowserNewConversationMode(ctx, filepath.Dir(b.statePath), mode)
-}
-
 func (b *Bridge) newChatGPTConversation(ctx context.Context) error {
-	return b.newChatGPTConversationMode(ctx, browserModeChat)
+	return chatGPTBrowserNewConversation(ctx, filepath.Dir(b.statePath))
 }
