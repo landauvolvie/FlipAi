@@ -33,6 +33,9 @@ func main() {
 	}
 	switch mode {
 	case "--host":
+		if maybeInstallStagedUpdateAtStartup(statePath) {
+			return
+		}
 		runHost(dataDir, cfgPath, statePath, tokenPath)
 	case "--watchdog":
 		runWatchdog(dataDir, cfgPath)
