@@ -11,6 +11,7 @@ func init() {
 		`    <select data-activity-range aria-label="Filter by time">`,
 		`    <select data-activity-stage aria-label="Filter by stage">
       <option value="">All stages</option>
+      <option value="google_voice">Google Voice</option>
       <option value="gmail">Gmail</option>
       <option value="routing">Routing</option>
       <option value="agent">Agent</option>
