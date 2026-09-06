@@ -41,6 +41,14 @@ func init() {
 		`if(e.stage==='gmail')return {name:'Received',tone:'info'};`,
 		`if(e.stage==='gmail'||e.stage==='google_voice')return {name:'Received',tone:'info'};`, 1)
 	body = strings.Replace(body,
+		`  function searchable(e){var m=meta(eventAgent(e)),d=direction(e),s=status(e);return [e.message,e.stage,e.level,e.sender,m.name,m.company,d.name,s.name,source(e)].join(' ').toLowerCase();}`,
+		`  function senderText(e){var raw=String(e.sender||'').trim(),d=raw.replace(/\D/g,'').replace(/^1(?=\d{10}$)/,'');if(d.length===10)return '+1 ('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6);return raw;}
+  function eventMessage(e){var msg=e.message||'—',sender=senderText(e);return sender?msg+' · '+sender:msg;}
+  function searchable(e){var m=meta(eventAgent(e)),d=direction(e),s=status(e);return [e.message,e.stage,e.level,e.sender,m.name,m.company,d.name,s.name,source(e)].join(' ').toLowerCase();}`, 1)
+	body = strings.Replace(body,
+		`'<td class="activity2-message" title="'+esc(e.message||'')+'">'+esc(e.message||'—')+'</td>'+`,
+		`'<td class="activity2-message" title="'+esc(eventMessage(e))+'">'+esc(eventMessage(e))+'</td>'+`, 1)
+	body = strings.Replace(body,
 		`      if(state.agent&&eventAgent(e)!==state.agent)return false;
       if(cutoff&&new Date(e.time).getTime()<cutoff)return false;`,
 		`      if(state.agent&&eventAgent(e)!==state.agent)return false;
