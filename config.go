@@ -49,6 +49,7 @@ type Config struct {
 	ClaudeChatPrefix   string `json:"claudeChatPrefix,omitempty"`
 	GeminiChatPrefix   string `json:"geminiChatPrefix,omitempty"`
 	GrokChatPrefix     string `json:"grokChatPrefix,omitempty"`
+	CopilotChatPrefix  string `json:"copilotChatPrefix,omitempty"`
 	NewSessionCommand  string `json:"newSessionCommand,omitempty"`
 
 	// Paused stops the bridge from picking up new texts without shutting the
@@ -66,6 +67,7 @@ type Config struct {
 	ClaudeChat  ClaudeChatConfig  `json:"claudeChat"`
 	GeminiChat  GeminiChatConfig  `json:"geminiChat"`
 	GrokChat    GrokChatConfig    `json:"grokChat"`
+	CopilotChat CopilotChatConfig `json:"copilotChat"`
 	Security    SecurityConfig    `json:"security"`
 	UI          UIConfig          `json:"ui"`
 }
@@ -147,6 +149,7 @@ type ClaudeChatConfig struct{ AgentSettings }
 type GeminiChatConfig struct{ AgentSettings }
 
 type GrokChatConfig struct{ AgentSettings }
+type CopilotChatConfig struct{ AgentSettings }
 
 type ClaudeConfig struct {
 	AgentSettings
@@ -227,6 +230,7 @@ type SecurityConfig struct {
 	ClaudeChatAgentMigrated bool `json:"claudeChatAgentMigrated,omitempty"`
 	GeminiChatAgentMigrated bool `json:"geminiChatAgentMigrated,omitempty"`
 	GrokChatAgentMigrated   bool `json:"grokChatAgentMigrated,omitempty"`
+	CopilotChatAgentMigrated bool `json:"copilotChatAgentMigrated,omitempty"`
 
 	// MachineScopeSecrets records that stored credentials are protected for
 	// this PC rather than for the signed-in account. Starting before sign-in
@@ -248,7 +252,7 @@ type State struct {
 	LastRunAt           time.Time `json:"lastRunAt,omitempty"`
 	LastAgent           string    `json:"lastAgent,omitempty"`
 	// LastAgentBySender remembers the most recently selected SMS destination
-	// for each allowed phone. Explicit C:, A:, G:, H:, M:, or X: changes it.
+	// for each allowed phone. Explicit C:, A:, G:, H:, M:, X:, or P: changes it.
 	LastAgentBySender map[string]string `json:"lastAgentBySender,omitempty"`
 
 	GmailCheck  Check `json:"gmailCheck,omitempty"`
@@ -334,7 +338,7 @@ func defaultConfig(dataDir string) Config {
 	return Config{
 		CodexPath: "codex", ClaudePath: "claude", Cwd: home,
 		Listen: "127.0.0.1:8765", LocalToken: tok, TurnTimeoutMinutes: 90,
-		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, ChatGPTPrefix: defaultChatGPTPrefix, ClaudeChatPrefix: defaultClaudeChatPrefix, GeminiChatPrefix: defaultGeminiChatPrefix, GrokChatPrefix: defaultGrokChatPrefix, NewSessionCommand: defaultNewSessionCommand,
+		DefaultAgent: "C", CodexPrefix: defaultCodexPrefix, ClaudePrefix: defaultClaudePrefix, ChatGPTPrefix: defaultChatGPTPrefix, ClaudeChatPrefix: defaultClaudeChatPrefix, GeminiChatPrefix: defaultGeminiChatPrefix, GrokChatPrefix: defaultGrokChatPrefix, CopilotChatPrefix: defaultCopilotChatPrefix, NewSessionCommand: defaultNewSessionCommand,
 		Gmail:       GmailConfig{CredentialsFile: filepath.Join(dataDir, "google-credentials.json"), PollSeconds: 1, SearchQuery: `subject:"new text message from" newer_than:2d`, SubjectPhrase: "new text message from"},
 		GoogleVoice: GoogleVoiceConfig{RequiredSubjectPhrase: "new text message from", ReplyMaxChars: 300, ReplyStyleHint: defaultReplyStyleHint, MaxReplyParts: 4, ReplyAck: true, ProgressUpdates: true, ProgressIntervalSeconds: 120},
 		Updates:     UpdateConfig{Automatic: false},
@@ -344,6 +348,7 @@ func defaultConfig(dataDir string) Config {
 		ClaudeChat:  ClaudeChatConfig{AgentSettings: browserDefaults},
 		GeminiChat:  GeminiChatConfig{AgentSettings: browserDefaults},
 		GrokChat:    GrokChatConfig{AgentSettings: browserDefaults},
+		CopilotChat: CopilotChatConfig{AgentSettings: browserDefaults},
 		Security:    SecurityConfig{RequireCode: false},
 		UI:          UIConfig{Theme: ThemeLight, Alerts: true, CloseToTray: true},
 	}
@@ -449,6 +454,7 @@ func loadConfig(path, dataDir string) (Config, error) {
 	cfg.ClaudeChat.Instruction = normalizeReplyStyleHint(cfg.ClaudeChat.Instruction)
 	cfg.GeminiChat.Instruction = normalizeReplyStyleHint(cfg.GeminiChat.Instruction)
 	cfg.GrokChat.Instruction = normalizeReplyStyleHint(cfg.GrokChat.Instruction)
+	cfg.CopilotChat.Instruction = normalizeReplyStyleHint(cfg.CopilotChat.Instruction)
 	if cfg.GoogleVoice.MaxReplyParts < 1 {
 		cfg.GoogleVoice.MaxReplyParts = 4
 	}
@@ -482,8 +488,9 @@ func loadConfig(path, dataDir string) (Config, error) {
 	cfg.ClaudeChatPrefix = normalizeCommandToken(cfg.ClaudeChatPrefix, defaultClaudeChatPrefix)
 	cfg.GeminiChatPrefix = normalizeCommandToken(cfg.GeminiChatPrefix, defaultGeminiChatPrefix)
 	cfg.GrokChatPrefix = normalizeCommandToken(cfg.GrokChatPrefix, defaultGrokChatPrefix)
+	cfg.CopilotChatPrefix = normalizeCommandToken(cfg.CopilotChatPrefix, defaultCopilotChatPrefix)
 	cfg.NewSessionCommand = normalizeCommandToken(cfg.NewSessionCommand, defaultNewSessionCommand)
-	prefixes := []string{cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix, cfg.GrokChatPrefix}
+	prefixes := []string{cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix, cfg.GrokChatPrefix, cfg.CopilotChatPrefix}
 	dup := false
 	for i := range prefixes {
 		for j := i + 1; j < len(prefixes); j++ {
@@ -493,7 +500,7 @@ func loadConfig(path, dataDir string) (Config, error) {
 		}
 	}
 	if dup {
-		cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix, cfg.GrokChatPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix, defaultClaudeChatPrefix, defaultGeminiChatPrefix, defaultGrokChatPrefix
+		cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix, cfg.GrokChatPrefix, cfg.CopilotChatPrefix = defaultCodexPrefix, defaultClaudePrefix, defaultChatGPTPrefix, defaultClaudeChatPrefix, defaultGeminiChatPrefix, defaultGrokChatPrefix, defaultCopilotChatPrefix
 	}
 	if cfg.LocalToken == "" {
 		cfg.LocalToken, err = secureRandomToken(24)
