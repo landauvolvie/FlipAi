@@ -70,6 +70,8 @@ type ReleaseInfo struct {
 	CheckedAt        time.Time `json:"checkedAt,omitempty"`
 	Error            string    `json:"error,omitempty"`
 	Downloading      bool      `json:"downloading,omitempty"`
+	DownloadBytes    int64     `json:"downloadBytes,omitempty"`
+	DownloadTotal    int64     `json:"downloadTotal,omitempty"`
 	DownloadedPath   string    `json:"downloadedPath,omitempty"`
 	DownloadedSHA256 string    `json:"downloadedSha256,omitempty"`
 	DownloadedAt     time.Time `json:"downloadedAt,omitempty"`
@@ -88,6 +90,26 @@ func (r ReleaseInfo) Ready() bool {
 	}
 	st, err := os.Stat(r.DownloadedPath)
 	return err == nil && !st.IsDir() && st.Size() > 0
+}
+
+// ProgressPercent is the compact sidebar percentage. A completed download may
+// spend a short moment at 100% while its published checksum is verified; only
+// Ready turns that 100% indicator into the Install update button.
+func (r ReleaseInfo) ProgressPercent() int {
+	if r.Ready() {
+		return 100
+	}
+	if r.DownloadTotal <= 0 || r.DownloadBytes <= 0 {
+		return 0
+	}
+	p := int((r.DownloadBytes * 100) / r.DownloadTotal)
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
 }
 
 // versionLess compares dotted versions numerically, so 0.10.0 is correctly
@@ -378,7 +400,21 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 
 	dlCtx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
-	path, err := downloadUpdate(dlCtx, current)
+	lastPercent := -1
+	progress := func(done, total int64) {
+		current.DownloadBytes = done
+		current.DownloadTotal = total
+		pct := current.ProgressPercent()
+		// At most one state-file write per displayed percentage. The in-memory
+		// snapshot changes at the same cadence, which is more than enough for
+		// the one-second local sidebar refresh and avoids disk churn.
+		if pct == lastPercent {
+			return
+		}
+		lastPercent = pct
+		saveUpdateState(a.statePath, current)
+	}
+	path, err := downloadUpdateWithProgress(dlCtx, current, progress)
 	latest := loadUpdateState(a.statePath)
 	if latest.Version != current.Version || latest.AssetURL != current.AssetURL {
 		return
@@ -405,7 +441,33 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 	latest.DownloadedPath = path
 	latest.DownloadedSHA256 = sum
 	latest.DownloadedAt = time.Now()
+	if st, statErr := os.Stat(path); statErr == nil {
+		latest.DownloadBytes = st.Size()
+		latest.DownloadTotal = st.Size()
+	}
 	saveUpdateState(a.statePath, latest)
+}
+
+// installStagedUpdateOnStartup is called only by the watchdog instance that
+// successfully owns the current Windows session. That distinction matters: a
+// second click on an already-running FlipAi must merely raise the app, while a
+// real app/PC restart should consume a verified staged update automatically.
+func installStagedUpdateOnStartup(statePath string) bool {
+	return installStagedUpdateOnStartupWith(statePath, runUpdateInstaller)
+}
+
+func installStagedUpdateOnStartupWith(statePath string, launch func(string, bool) error) bool {
+	info := loadUpdateState(statePath)
+	if !info.Ready() {
+		return false
+	}
+	if err := launch(info.DownloadedPath, true); err != nil {
+		info.Error = truncate("automatic restart install failed: "+err.Error(), 200)
+		saveUpdateState(statePath, info)
+		return false
+	}
+	activityLogForStatePath(statePath).Add("info", "host", "Installing staged FlipAi "+info.Version+" after restart", "", "", "")
+	return true
 }
 
 // bridgeBusy reports whether an agent turn is running right now.
@@ -439,6 +501,10 @@ func updateDownloadDir() (string, error) {
 // update directory and requires a matching SHA256SUMS.txt entry. Nothing from a
 // generic Downloads/TEMP location is accepted as the staged update.
 func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
+	return downloadUpdateWithProgress(ctx, info, nil)
+}
+
+func downloadUpdateWithProgress(ctx context.Context, info ReleaseInfo, progress func(done, total int64)) (string, error) {
 	updateDownloadMu.Lock()
 	defer updateDownloadMu.Unlock()
 	if info.Ready() && info.DownloadedSHA256 != "" {
@@ -487,7 +553,7 @@ func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
 		return dest, nil
 	}
 	_ = os.Remove(dest)
-	sum, err := download(ctx, info.AssetURL, dest)
+	sum, err := downloadWithProgress(ctx, info.AssetURL, dest, progress)
 	if err != nil {
 		return "", err
 	}
@@ -541,59 +607,151 @@ func downloadSmall(ctx context.Context, rawURL string, max int64) ([]byte, error
 	return b, nil
 }
 
-// download saves a trusted URL atomically and returns the file's SHA-256. A
-// partial network transfer is never left behind under an executable filename.
+// download saves a trusted URL atomically and returns the file's SHA-256.
+// Incomplete bytes stay under a non-executable .part name so a real app or PC
+// restart can continue the same download instead of throwing progress away.
 func download(ctx context.Context, rawURL, dest string) (string, error) {
+	return downloadWithProgress(ctx, rawURL, dest, nil)
+}
+
+type updateProgressWriter struct {
+	w        io.Writer
+	done     int64
+	total    int64
+	progress func(done, total int64)
+}
+
+func (w *updateProgressWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	w.done += int64(n)
+	if w.progress != nil {
+		w.progress(w.done, w.total)
+	}
+	return n, err
+}
+
+func contentRangeTotal(v string) int64 {
+	if i := strings.LastIndex(strings.TrimSpace(v), "/"); i >= 0 && i+1 < len(v) {
+		if n, err := strconv.ParseInt(strings.TrimSpace(v[i+1:]), 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func downloadWithProgress(ctx context.Context, rawURL, dest string, progress func(done, total int64)) (string, error) {
 	if !trustedUpdateURL(rawURL) {
 		return "", errors.New("download URL is not a trusted GitHub endpoint")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "FlipAi/"+version)
-	resp, err := updateHTTPClient(10 * time.Minute).Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned HTTP %d", resp.StatusCode)
-	}
-	if resp.ContentLength > maxUpdateBytes {
-		return "", errors.New("update installer is larger than the allowed size")
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp(filepath.Dir(dest), ".flipai-update-*.part")
+	part := dest + ".part"
+	offset := int64(0)
+	if st, err := os.Stat(part); err == nil && !st.IsDir() {
+		offset = st.Size()
+		if offset < 0 || offset > maxUpdateBytes {
+			_ = os.Remove(part)
+			offset = 0
+		}
+	}
+
+	request := func(start int64) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "FlipAi/"+version)
+		if start > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", start))
+		}
+		return updateHTTPClient(10 * time.Minute).Do(req)
+	}
+
+	resp, err := request(offset)
 	if err != nil {
 		return "", err
 	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
+	if offset > 0 && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		resp.Body.Close()
+		_ = os.Remove(part)
+		offset = 0
+		resp, err = request(0)
+		if err != nil {
+			return "", err
+		}
+	}
+	defer resp.Body.Close()
+
+	resume := offset > 0 && resp.StatusCode == http.StatusPartialContent
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return "", fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+	}
+	if !resume {
+		offset = 0
+	}
+
+	total := int64(0)
+	if resume {
+		total = contentRangeTotal(resp.Header.Get("Content-Range"))
+		if total == 0 && resp.ContentLength >= 0 {
+			total = offset + resp.ContentLength
+		}
+	} else if resp.ContentLength >= 0 {
+		total = resp.ContentLength
+	}
+	if total > maxUpdateBytes || (resp.ContentLength > 0 && offset+resp.ContentLength > maxUpdateBytes) {
+		return "", errors.New("update installer is larger than the allowed size")
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset == 0 {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(part, flags, 0o600)
+	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxUpdateBytes+1))
-	if copyErr == nil && n > maxUpdateBytes {
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			return "", err
+		}
+	}
+	if progress != nil {
+		progress(offset, total)
+	}
+	pw := &updateProgressWriter{w: f, done: offset, total: total, progress: progress}
+	limit := maxUpdateBytes - offset + 1
+	if limit < 1 {
+		limit = 1
+	}
+	n, copyErr := io.Copy(pw, io.LimitReader(resp.Body, limit))
+	written := offset + n
+	if copyErr == nil && written > maxUpdateBytes {
 		copyErr = errors.New("update installer is larger than the allowed size")
+	}
+	if copyErr == nil && total > 0 && written != total {
+		copyErr = fmt.Errorf("update download stopped at %d of %d bytes", written, total)
 	}
 	if copyErr == nil {
 		copyErr = f.Sync()
 	}
 	closeErr := f.Close()
 	if copyErr != nil {
+		// Keep the .part file. The next updater run resumes it with an HTTP Range
+		// request; the file can never be executed while it has this suffix.
 		return "", copyErr
 	}
 	if closeErr != nil {
 		return "", closeErr
 	}
 	_ = os.Remove(dest)
-	if err := os.Rename(tmp, dest); err != nil {
+	if err := os.Rename(part, dest); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	if progress != nil {
+		progress(written, written)
+	}
+	return sha256File(dest)
 }

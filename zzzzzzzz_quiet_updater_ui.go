@@ -21,6 +21,14 @@ func updaterUIState(releaseVersion string) string {
 	return "waiting"
 }
 
+func updaterUIProgress(releaseVersion string) int {
+	info := currentUpdateSnapshot()
+	if releaseVersion == "" || info.Version != releaseVersion || !info.Newer() {
+		return 0
+	}
+	return info.ProgressPercent()
+}
+
 func init() {
 	// Settings no longer owns updates. Keep only startup/calling controls and
 	// remove even the compatibility text that mentioned checking for updates.
@@ -45,10 +53,13 @@ func init() {
         <span class="side-version">v{{.Shell.Version}}</span>
         {{if .Shell.UpdateVersion}}
           {{$updateState := updaterState .Shell.UpdateVersion}}
+          {{$updateProgress := updaterProgress .Shell.UpdateVersion}}
           {{if eq $updateState "ready"}}
-            <button class="side-update side-update-ready" id="flipai-update-install" type="button" data-version="{{.Shell.UpdateVersion}}" title="Install FlipAi {{.Shell.UpdateVersion}} and restart">{{icon "download"}}</button>
+            <button class="side-update side-update-ready" id="flipai-update-install" type="button" data-version="{{.Shell.UpdateVersion}}" title="Install FlipAi {{.Shell.UpdateVersion}} and restart">{{icon "download"}}<span>Install update</span></button>
           {{else}}
-            <span class="side-update side-update-downloading" title="Downloading FlipAi {{.Shell.UpdateVersion}}">{{icon "download"}}</span>
+            <span class="side-update-progress" title="Downloading FlipAi {{.Shell.UpdateVersion}}">
+              <span class="side-update-ring" style="--flipai-update-progress:{{$updateProgress}}"></span><span class="side-update-percent">{{$updateProgress}}%</span>
+            </span>
           {{end}}
         {{end}}
       </div>`
@@ -65,12 +76,12 @@ func init() {
 	}
 
 	const updaterStyle = `<style>
-.side-version-row{display:flex;align-items:center;gap:7px;min-height:28px}.side-version{white-space:nowrap}.side-update{width:26px;height:26px;display:inline-grid;place-items:center;border:0;border-radius:8px;padding:0;color:var(--accent);background:transparent}.side-update svg{width:17px;height:17px}.side-update-ready{cursor:pointer}.side-update-ready:hover{background:var(--accent-soft)}.side-update-ready:disabled{cursor:default;opacity:.55}.side-update-downloading{opacity:.72;pointer-events:none}.side-update-downloading svg{animation:flipaiUpdatePulse 1.15s ease-in-out infinite}@keyframes flipaiUpdatePulse{0%,100%{transform:translateY(0);opacity:.55}50%{transform:translateY(2px);opacity:1}}
+.side-version-row{display:flex;align-items:center;gap:8px;min-height:30px;flex-wrap:wrap}.side-version{white-space:nowrap}.side-update-progress{display:inline-flex;align-items:center;gap:5px;color:var(--accent);font-size:12px;font-weight:650;white-space:nowrap}.side-update-ring{--flipai-update-progress:0;width:18px;height:18px;border-radius:50%;background:conic-gradient(var(--accent) calc(var(--flipai-update-progress)*1%),var(--line) 0);position:relative;display:inline-block}.side-update-ring:after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--surface)}.side-update-percent{min-width:29px}.side-update{border:0;border-radius:8px;color:var(--accent);background:transparent}.side-update-ready{min-height:29px;padding:4px 7px;display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap}.side-update-ready svg{width:14px;height:14px}.side-update-ready:hover{background:var(--accent-soft)}.side-update-ready:disabled{cursor:default;opacity:.6}
 </style>`
 	updatedShell = strings.Replace(updatedShell, `</head>`, updaterStyle+`</head>`, 1)
 
 	// Poll only FlipAi's local Home page. The real GitHub check stays on the
-	// five-minute host timer; this tiny local refresh merely changes the icon
+	// background host timer; this tiny local refresh merely changes the icon
 	// from downloading to install-ready without requiring page navigation.
 	const updaterScript = `<script>
 (() => {
@@ -81,10 +92,14 @@ func init() {
     button.addEventListener('click', async () => {
       if (button.disabled) return;
       button.disabled = true;
+      const oldHTML = button.innerHTML;
+      button.textContent = 'Installing…';
       try {
-        await fetch('/update/install', {method:'POST', credentials:'same-origin', cache:'no-store'});
+        const response = await fetch('/update/install', {method:'POST', credentials:'same-origin', cache:'no-store'});
+        if (!response.ok) throw new Error('install failed');
       } catch (_) {
         button.disabled = false;
+        button.innerHTML = oldHTML;
       }
     });
   };
@@ -103,13 +118,13 @@ func init() {
     } catch (_) {}
   };
   bindInstall();
-  window.setInterval(refreshUpdateControl, 5000);
+  window.setInterval(refreshUpdateControl, 1000);
 })();
 </script>`
 	updatedShell = strings.Replace(updatedShell, `</body>`, updaterScript+`</body>`, 1)
 
 	for _, page := range uiPages {
-		page.Funcs(template.FuncMap{"updaterState": updaterUIState})
+		page.Funcs(template.FuncMap{"updaterState": updaterUIState, "updaterProgress": updaterUIProgress})
 		if _, err := page.Parse(updatedShell); err != nil {
 			panic(err)
 		}

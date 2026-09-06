@@ -19,22 +19,24 @@ func TestAppUpdateCheckIsAlwaysThirtySeconds(t *testing.T) {
 		t.Fatalf("update interval = %v, want 30s", got)
 	}
 	if a.autoUpdateEnabled() {
-		t.Fatal("installation must never become automatic")
+		t.Fatal("installation must not happen unattended while the current app session remains open")
 	}
 }
 
 func TestSidebarDownloadsQuietlyThenOffersInstall(t *testing.T) {
 	a := newTestApp(t)
 	waiting := ReleaseInfo{
-		Version:     "99.0.0",
-		AssetURL:    "https://example.invalid/FlipAi-Setup-v99.0.0.exe",
-		CheckedAt:   time.Now(),
-		Downloading: true,
+		Version:       "99.0.0",
+		AssetURL:      "https://example.invalid/FlipAi-Setup-v99.0.0.exe",
+		CheckedAt:     time.Now(),
+		Downloading:   true,
+		DownloadBytes: 45,
+		DownloadTotal: 100,
 	}
 	saveUpdateState(a.statePath, waiting)
 	body := a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, `title="Downloading FlipAi 99.0.0"`) {
-		t.Fatal("available update should show the quiet download indicator")
+	if !strings.Contains(body, `Downloading FlipAi 99.0.0`) || !strings.Contains(body, `45%`) {
+		t.Fatal("available update should show the quiet real download percentage")
 	}
 	if strings.Contains(body, `id="flipai-update-install"`) {
 		t.Fatal("install button appeared before the installer was staged")
@@ -52,8 +54,8 @@ func TestSidebarDownloadsQuietlyThenOffersInstall(t *testing.T) {
 	waiting.DownloadedAt = time.Now()
 	saveUpdateState(a.statePath, waiting)
 	body = a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, `id="flipai-update-install"`) || !strings.Contains(body, "side-update-ready") {
-		t.Fatal("staged update should become the compact install button")
+	if !strings.Contains(body, `id="flipai-update-install"`) || !strings.Contains(body, "side-update-ready") || !strings.Contains(body, "Install update") {
+		t.Fatal("staged update should become the compact Install update button")
 	}
 	if strings.Contains(body, `action="/update/install"`) {
 		t.Fatal("install control should use the quiet fetch path instead of navigating to a result page")

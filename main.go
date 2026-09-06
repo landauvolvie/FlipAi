@@ -35,7 +35,7 @@ func main() {
 	case "--host":
 		runHost(dataDir, cfgPath, statePath, tokenPath)
 	case "--watchdog":
-		runWatchdog(dataDir, cfgPath)
+		runWatchdog(dataDir, cfgPath, statePath)
 	case "--tray":
 		runTrayProcess(dataDir, cfgPath)
 	case "--resume":
@@ -70,7 +70,7 @@ func main() {
 		_ = uninstallAutostart()
 		_ = os.WriteFile(filepath.Join(dataDir, "quit.flag"), []byte("uninstall"), 0600)
 	default:
-		runLauncher(dataDir, cfgPath)
+		runLauncher(dataDir, cfgPath, statePath)
 	}
 }
 
@@ -173,7 +173,7 @@ func showLauncherError(dataDir string, cfg Config, detail string) {
 	}
 }
 
-func runLauncher(dataDir, cfgPath string) {
+func runLauncher(dataDir, cfgPath, statePath string) {
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
 	_ = os.Remove(filepath.Join(dataDir, "quit.flag"))
 	exe, err := os.Executable()
@@ -189,7 +189,11 @@ func runLauncher(dataDir, cfgPath string) {
 		return
 	}
 	ready := false
+	waitForUpdateRestart := loadUpdateState(statePath).Ready()
 	deadline := time.Now().Add(10 * time.Second)
+	if waitForUpdateRestart {
+		deadline = time.Now().Add(45 * time.Second)
+	}
 	for time.Now().Before(deadline) {
 		if healthOK(cfg.Listen) {
 			ready = true
@@ -206,12 +210,20 @@ func runLauncher(dataDir, cfgPath string) {
 	}
 }
 
-func runWatchdog(dataDir, cfgPath string) {
+func runWatchdog(dataDir, cfgPath, statePath string) {
 	release, owner, err := acquireWatchdogInstance()
 	if err != nil || !owner {
 		return
 	}
 	defer release()
+
+	// A staged, checksum-verified update is deliberately installed only after
+	// this process proves it owns the watchdog. Merely opening an already-running
+	// FlipAi launches a duplicate watchdog that cannot own the mutex, so it does
+	// not steal the user's choice of when to install. A true app/PC restart does.
+	if installStagedUpdateOnStartup(statePath) {
+		return
+	}
 
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
 	// The quit flag is deliberately NOT cleared here. Clearing it made Quit
