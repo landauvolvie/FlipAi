@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.49"
+const version = "0.46.50"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
 // command. FlipAi delivers the reply itself, so the agent is never told how or
@@ -222,15 +222,15 @@ const retiredUpdateCheckHoursDefault = 6
 type SecurityConfig struct {
 	// Deprecated: a security code belongs to the agent that enforces it. These
 	// stay so an existing bridge.json still parses and can be migrated once.
-	RequireCode bool   `json:"requireCode"`
-	CodeSalt    string `json:"codeSalt,omitempty"`
-	CodeHash    string `json:"codeHash,omitempty"`
-	AgentsMigrated          bool `json:"agentsMigrated,omitempty"`
-	ChatGPTAgentMigrated    bool `json:"chatgptAgentMigrated,omitempty"`
-	ClaudeChatAgentMigrated bool `json:"claudeChatAgentMigrated,omitempty"`
-	GeminiChatAgentMigrated bool `json:"geminiChatAgentMigrated,omitempty"`
-	GrokChatAgentMigrated   bool `json:"grokChatAgentMigrated,omitempty"`
-	CopilotChatAgentMigrated bool `json:"copilotChatAgentMigrated,omitempty"`
+	RequireCode              bool   `json:"requireCode"`
+	CodeSalt                 string `json:"codeSalt,omitempty"`
+	CodeHash                 string `json:"codeHash,omitempty"`
+	AgentsMigrated           bool   `json:"agentsMigrated,omitempty"`
+	ChatGPTAgentMigrated     bool   `json:"chatgptAgentMigrated,omitempty"`
+	ClaudeChatAgentMigrated  bool   `json:"claudeChatAgentMigrated,omitempty"`
+	GeminiChatAgentMigrated  bool   `json:"geminiChatAgentMigrated,omitempty"`
+	GrokChatAgentMigrated    bool   `json:"grokChatAgentMigrated,omitempty"`
+	CopilotChatAgentMigrated bool   `json:"copilotChatAgentMigrated,omitempty"`
 
 	// MachineScopeSecrets records that stored credentials are protected for
 	// this PC rather than for the signed-in account. Starting before sign-in
