@@ -667,6 +667,44 @@ func (a *App) saveBootStartup(w http.ResponseWriter, r *http.Request) {
 // Updates
 // ---------------------------------------------------------------------------
 
+// updateStatusJSON returns only the small amount of state needed by the sidebar
+// control. Local file paths and checksum details never leave the host process.
+func (a *App) updateStatusJSON(w http.ResponseWriter, r *http.Request) {
+	info := loadUpdateState(a.statePath)
+	state := "idle"
+	percent := info.DownloadPercent
+	if info.Newer() {
+		switch {
+		case info.Ready():
+			state = "ready"
+			percent = 100
+		case info.Downloading:
+			state = "downloading"
+		case info.Error != "":
+			state = "error"
+		default:
+			state = "waiting"
+		}
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	writeJSON(w, map[string]any{
+		"currentVersion": version,
+		"updateVersion":  info.Version,
+		"newer":          info.Newer(),
+		"state":          state,
+		"downloading":    info.Downloading,
+		"ready":          info.Ready(),
+		"percent":        percent,
+		"bytes":          info.DownloadBytes,
+		"total":          info.DownloadTotal,
+	})
+}
+
 func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()

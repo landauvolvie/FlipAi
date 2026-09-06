@@ -31,6 +31,12 @@ func main() {
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
 	}
+	// A verified update waits quietly until the user chooses Install. If they
+	// restart FlipAi or Windows first, that restart is the choice point: launch
+	// the staged installer and let Setup reopen FlipAi on the new version.
+	if installStagedUpdateOnStartup(mode, statePath) {
+		return
+	}
 	switch mode {
 	case "--host":
 		runHost(dataDir, cfgPath, statePath, tokenPath)

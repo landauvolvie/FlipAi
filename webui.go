@@ -293,6 +293,7 @@ func (a *App) handler() http.Handler {
 
 	// Data.
 	m.HandleFunc("/status.json", a.requireAuth(a.statusJSON))
+	m.HandleFunc("/update/status.json", a.requireAuth(a.updateStatusJSON))
 	m.HandleFunc("/activity.json", a.requireAuth(a.activityJSON))
 	m.HandleFunc("/folders.json", a.requireAuth(a.foldersJSON))
 	m.HandleFunc("/chatgpt/status.json", a.requireAuth(a.chatGPTStatusJSON))

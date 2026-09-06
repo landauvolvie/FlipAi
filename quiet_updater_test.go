@@ -19,17 +19,20 @@ func TestAppUpdateCheckIsAlwaysThirtySeconds(t *testing.T) {
 		t.Fatalf("update interval = %v, want 30s", got)
 	}
 	if a.autoUpdateEnabled() {
-		t.Fatal("installation must never become automatic")
+		t.Fatal("retired saved automatic-install flag must stay disabled")
 	}
 }
 
 func TestSidebarDownloadsQuietlyThenOffersInstall(t *testing.T) {
 	a := newTestApp(t)
 	waiting := ReleaseInfo{
-		Version:     "99.0.0",
-		AssetURL:    "https://example.invalid/FlipAi-Setup-v99.0.0.exe",
-		CheckedAt:   time.Now(),
-		Downloading: true,
+		Version:         "99.0.0",
+		AssetURL:        "https://example.invalid/FlipAi-Setup-v99.0.0.exe",
+		CheckedAt:       time.Now(),
+		Downloading:     true,
+		DownloadBytes:   45,
+		DownloadTotal:   100,
+		DownloadPercent: 45,
 	}
 	saveUpdateState(a.statePath, waiting)
 	body := a.do(t, http.MethodGet, "/", nil).Body.String()
@@ -38,6 +41,9 @@ func TestSidebarDownloadsQuietlyThenOffersInstall(t *testing.T) {
 	}
 	if strings.Contains(body, `id="flipai-update-install"`) {
 		t.Fatal("install button appeared before the installer was staged")
+	}
+	if !strings.Contains(body, `side-update-ring`) || !strings.Contains(body, `45%`) {
+		t.Fatal("downloading update should show the compact progress ring and percentage")
 	}
 	if strings.Contains(body, `class="banner update"`) || strings.Contains(body, "Details</a>") {
 		t.Fatal("page-wide updater banner must be removed")
@@ -52,8 +58,8 @@ func TestSidebarDownloadsQuietlyThenOffersInstall(t *testing.T) {
 	waiting.DownloadedAt = time.Now()
 	saveUpdateState(a.statePath, waiting)
 	body = a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, `id="flipai-update-install"`) || !strings.Contains(body, "side-update-ready") {
-		t.Fatal("staged update should become the compact install button")
+	if !strings.Contains(body, `id="flipai-update-install"`) || !strings.Contains(body, "side-update-ready") || !strings.Contains(body, "Install update") {
+		t.Fatal("staged update should become the compact Install update button")
 	}
 	if strings.Contains(body, `action="/update/install"`) {
 		t.Fatal("install control should use the quiet fetch path instead of navigating to a result page")

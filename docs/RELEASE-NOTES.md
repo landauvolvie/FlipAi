@@ -1,15 +1,17 @@
-# FlipAi v0.46.52
+# FlipAi v0.46.53
 
-FlipAi now routes SMS shortcuts to the exact AI experience requested instead of treating every provider shortcut as a generic chat alias.
+FlipAi now has a compact, persistent update flow in the sidebar instead of a separate update screen or popup.
 
 ## What changed
 
-- Added provider-grouped SMS shortcuts: `O:` for ChatGPT Chat, `OW:` for ChatGPT Work, `OC:` for Codex, `A:` for Claude Chat, `AW:` for Claude Cowork, `AC:` for Claude Code Web, `AL:` for local Claude Code, `G:` for Gemini, `M:` for Microsoft Copilot, and `X:` for Grok.
-- ChatGPT Work and Claude Cowork are actively selected and verified in their signed-in browser sessions before FlipAi submits the task. If the requested mode cannot be verified, FlipAi fails safely instead of silently sending the task to regular chat.
-- Claude Code Web opens the dedicated Claude Code web workflow and requires a repository-ready state before starting the task; FlipAi does not guess a repository or fall back to Claude Chat.
-- Codex, Gemini, Microsoft Copilot, Grok, Claude Chat, and local Claude Code continue to use their existing dedicated execution paths under the new shortcut scheme.
-- Browser-mode selection is preserved for incoming messages that include attachments, preventing Work or Cowork requests with files from falling back to ordinary chat.
-- Existing installations retain permission-aware compatibility for older configured shortcuts while the new shortcut destination takes precedence when it is available.
+- A newly published update starts downloading automatically in the background as soon as FlipAi discovers it.
+- The version area shows a small circular download indicator with the live percentage while the installer is transferring.
+- 100% is shown only after the installer has finished downloading and passed its published SHA-256 verification; the progress control then becomes a compact **Install update** button.
+- The user can leave the verified update staged and choose when to press Install.
+- If FlipAi or Windows is restarted while a verified update is waiting, FlipAi installs that staged update automatically on restart and reopens the FlipAi application afterward.
+- Download state and percentage are persisted locally, failed downloads retry quietly, and incomplete `.part` files are never treated as installers.
+- The update section remains removed from Settings and there are no update popups or unrelated interface changes.
+- All Google Voice media, startup, Copilot, and exact AI-mode routing improvements from the previous releases remain included.
 
 ## Validation
 

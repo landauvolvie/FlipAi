@@ -46,8 +46,8 @@ func TestRetiredHoursSettingMigrates(t *testing.T) {
 	}
 }
 
-// Update checks are automatic app behavior now; installation is never enabled
-// unattended by a saved legacy flag.
+// Update checks are automatic app behavior now. The retired saved flag never
+// enables timer-based installation; the separate staged-update restart path is deterministic.
 func TestOlderConfigGetsSimplifiedUpdateDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bridge.json")
@@ -133,7 +133,7 @@ func TestSidebarShowsAnAvailableUpdateNextToTheVersion(t *testing.T) {
 	}
 }
 
-// Keep the busy-state protection even though unattended installation is off;
+// Keep the busy-state protection for maintenance paths;
 // the same helper protects any future maintenance path from restarting during a
 // live agent turn.
 func TestAutomaticUpdateWaitsForAnAgentTurn(t *testing.T) {

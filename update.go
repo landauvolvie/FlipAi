@@ -40,6 +40,7 @@ var (
 
 var (
 	updateDownloadMu sync.Mutex
+	updateStateMu    sync.Mutex
 	updateSnapshotMu sync.RWMutex
 	updateSnapshot   ReleaseInfo
 )
@@ -70,6 +71,9 @@ type ReleaseInfo struct {
 	CheckedAt        time.Time `json:"checkedAt,omitempty"`
 	Error            string    `json:"error,omitempty"`
 	Downloading      bool      `json:"downloading,omitempty"`
+	DownloadBytes    int64     `json:"downloadBytes,omitempty"`
+	DownloadTotal    int64     `json:"downloadTotal,omitempty"`
+	DownloadPercent  int       `json:"downloadPercent,omitempty"`
 	DownloadedPath   string    `json:"downloadedPath,omitempty"`
 	DownloadedSHA256 string    `json:"downloadedSha256,omitempty"`
 	DownloadedAt     time.Time `json:"downloadedAt,omitempty"`
@@ -262,6 +266,8 @@ func updateStatePath(statePath string) string {
 }
 
 func loadUpdateState(statePath string) ReleaseInfo {
+	updateStateMu.Lock()
+	defer updateStateMu.Unlock()
 	var info ReleaseInfo
 	if raw, err := os.ReadFile(updateStatePath(statePath)); err == nil {
 		_ = json.Unmarshal(raw, &info)
@@ -270,16 +276,44 @@ func loadUpdateState(statePath string) ReleaseInfo {
 		info.DownloadedPath = ""
 		info.DownloadedSHA256 = ""
 		info.DownloadedAt = time.Time{}
+		info.DownloadBytes = 0
+		info.DownloadTotal = 0
+		info.DownloadPercent = 0
 	}
 	rememberUpdateSnapshot(info)
 	return info
 }
 
 func saveUpdateState(statePath string, info ReleaseInfo) {
+	if info.DownloadPercent < 0 {
+		info.DownloadPercent = 0
+	}
+	if info.DownloadPercent > 100 {
+		info.DownloadPercent = 100
+	}
 	rememberUpdateSnapshot(info)
+	updateStateMu.Lock()
+	defer updateStateMu.Unlock()
 	if raw, err := json.MarshalIndent(info, "", "  "); err == nil {
 		_ = os.WriteFile(updateStatePath(statePath), raw, 0o600)
 	}
+}
+
+// updateDownloadProgress converts byte progress into the percentage shown in
+// the sidebar. 100% is reserved for a checksum-verified installer, so a file
+// that has finished transferring but is still being verified stays at 99%.
+func updateDownloadProgress(done, total int64) int {
+	if done <= 0 || total <= 0 {
+		return 0
+	}
+	p := int(done * 100 / total)
+	if p < 1 {
+		p = 1
+	}
+	if p > 99 {
+		p = 99
+	}
+	return p
 }
 
 // updateInterval is deliberately not configurable. Updates are lightweight and
@@ -327,10 +361,20 @@ func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
 		saveUpdateState(a.statePath, current)
 		return current
 	}
-	if info.Version == current.Version && info.AssetURL == current.AssetURL && current.Ready() {
-		info.DownloadedPath = current.DownloadedPath
-		info.DownloadedSHA256 = current.DownloadedSHA256
-		info.DownloadedAt = current.DownloadedAt
+	if info.Version == current.Version && info.AssetURL == current.AssetURL {
+		if current.Ready() {
+			info.DownloadedPath = current.DownloadedPath
+			info.DownloadedSHA256 = current.DownloadedSHA256
+			info.DownloadedAt = current.DownloadedAt
+			info.DownloadBytes = current.DownloadBytes
+			info.DownloadTotal = current.DownloadTotal
+			info.DownloadPercent = 100
+		} else if current.Downloading {
+			info.Downloading = true
+			info.DownloadBytes = current.DownloadBytes
+			info.DownloadTotal = current.DownloadTotal
+			info.DownloadPercent = current.DownloadPercent
+		}
 	}
 	info.Error = ""
 	saveUpdateState(a.statePath, info)
@@ -371,6 +415,9 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 	}
 	current.Downloading = true
 	current.Error = ""
+	current.DownloadBytes = 0
+	current.DownloadTotal = 0
+	current.DownloadPercent = 0
 	current.DownloadedPath = ""
 	current.DownloadedSHA256 = ""
 	current.DownloadedAt = time.Time{}
@@ -378,7 +425,28 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 
 	dlCtx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
-	path, err := downloadUpdate(dlCtx, current)
+	lastPercent := -1
+	lastSaved := time.Time{}
+	path, err := downloadUpdateWithProgress(dlCtx, current, func(done, total int64) {
+		percent := updateDownloadProgress(done, total)
+		// Avoid rewriting update.json for every network buffer. Percentage
+		// changes are written immediately; unknown-size transfers update twice a
+		// second so the byte counters still prove the download is moving.
+		if percent == lastPercent && time.Since(lastSaved) < 500*time.Millisecond {
+			return
+		}
+		latest := currentUpdateSnapshot()
+		if latest.Version != current.Version || latest.AssetURL != current.AssetURL {
+			return
+		}
+		latest.Downloading = true
+		latest.DownloadBytes = done
+		latest.DownloadTotal = total
+		latest.DownloadPercent = percent
+		saveUpdateState(a.statePath, latest)
+		lastPercent = percent
+		lastSaved = time.Now()
+	})
 	latest := loadUpdateState(a.statePath)
 	if latest.Version != current.Version || latest.AssetURL != current.AssetURL {
 		return
@@ -386,6 +454,9 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 	latest.Downloading = false
 	if err != nil {
 		latest.Error = truncate(err.Error(), 200)
+		latest.DownloadBytes = 0
+		latest.DownloadTotal = 0
+		latest.DownloadPercent = 0
 		latest.DownloadedPath = ""
 		latest.DownloadedSHA256 = ""
 		latest.DownloadedAt = time.Time{}
@@ -395,6 +466,9 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 	sum, hashErr := sha256File(path)
 	if hashErr != nil {
 		latest.Error = truncate(hashErr.Error(), 200)
+		latest.DownloadBytes = 0
+		latest.DownloadTotal = 0
+		latest.DownloadPercent = 0
 		latest.DownloadedPath = ""
 		latest.DownloadedSHA256 = ""
 		latest.DownloadedAt = time.Time{}
@@ -405,6 +479,13 @@ func (a *App) stageUpdate(ctx context.Context, info ReleaseInfo) {
 	latest.DownloadedPath = path
 	latest.DownloadedSHA256 = sum
 	latest.DownloadedAt = time.Now()
+	if st, statErr := os.Stat(path); statErr == nil {
+		latest.DownloadBytes = st.Size()
+		if latest.DownloadTotal <= 0 {
+			latest.DownloadTotal = st.Size()
+		}
+	}
+	latest.DownloadPercent = 100
 	saveUpdateState(a.statePath, latest)
 }
 
@@ -439,6 +520,10 @@ func updateDownloadDir() (string, error) {
 // update directory and requires a matching SHA256SUMS.txt entry. Nothing from a
 // generic Downloads/TEMP location is accepted as the staged update.
 func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
+	return downloadUpdateWithProgress(ctx, info, nil)
+}
+
+func downloadUpdateWithProgress(ctx context.Context, info ReleaseInfo, progress func(done, total int64)) (string, error) {
 	updateDownloadMu.Lock()
 	defer updateDownloadMu.Unlock()
 	if info.Ready() && info.DownloadedSHA256 != "" {
@@ -484,10 +569,22 @@ func downloadUpdate(ctx context.Context, info ReleaseInfo) (string, error) {
 	}
 	dest := filepath.Join(dir, name)
 	if sum, err := sha256File(dest); err == nil && strings.EqualFold(sum, want) {
+		if st, statErr := os.Stat(dest); statErr == nil && progress != nil {
+			progress(st.Size(), st.Size())
+		}
 		return dest, nil
 	}
 	_ = os.Remove(dest)
-	sum, err := download(ctx, info.AssetURL, dest)
+	// A killed process can leave only a .part file. It is never executable and
+	// never trusted as a completed update; clear stale parts before retrying.
+	if entries, readErr := os.ReadDir(dir); readErr == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), ".flipai-update-") && strings.HasSuffix(entry.Name(), ".part") {
+				_ = os.Remove(filepath.Join(dir, entry.Name()))
+			}
+		}
+	}
+	sum, err := downloadWithProgress(ctx, info.AssetURL, dest, progress)
 	if err != nil {
 		return "", err
 	}
@@ -544,6 +641,28 @@ func downloadSmall(ctx context.Context, rawURL string, max int64) ([]byte, error
 // download saves a trusted URL atomically and returns the file's SHA-256. A
 // partial network transfer is never left behind under an executable filename.
 func download(ctx context.Context, rawURL, dest string) (string, error) {
+	return downloadWithProgress(ctx, rawURL, dest, nil)
+}
+
+type updateProgressReader struct {
+	r      io.Reader
+	done   int64
+	total  int64
+	report func(done, total int64)
+}
+
+func (p *updateProgressReader) Read(buf []byte) (int, error) {
+	n, err := p.r.Read(buf)
+	if n > 0 {
+		p.done += int64(n)
+		if p.report != nil {
+			p.report(p.done, p.total)
+		}
+	}
+	return n, err
+}
+
+func downloadWithProgress(ctx context.Context, rawURL, dest string, progress func(done, total int64)) (string, error) {
 	if !trustedUpdateURL(rawURL) {
 		return "", errors.New("download URL is not a trusted GitHub endpoint")
 	}
@@ -576,8 +695,16 @@ func download(ctx context.Context, rawURL, dest string) (string, error) {
 		_ = f.Close()
 		return "", err
 	}
+	if progress != nil {
+		progress(0, resp.ContentLength)
+	}
 	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxUpdateBytes+1))
+	reader := &updateProgressReader{
+		r:      io.LimitReader(resp.Body, maxUpdateBytes+1),
+		total:  resp.ContentLength,
+		report: progress,
+	}
+	n, copyErr := io.Copy(io.MultiWriter(f, h), reader)
 	if copyErr == nil && n > maxUpdateBytes {
 		copyErr = errors.New("update installer is larger than the allowed size")
 	}
