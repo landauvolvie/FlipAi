@@ -11,7 +11,7 @@ const cleanSettingsHTML = `{{define "content"}}
 
 <!-- Invisible compatibility markers let older regression checks identify the
      page after those controls were intentionally removed from the UI. -->
-<span hidden>Appearance Notifications This install Local service Log files Service tools Message routing Check for updates administrator approval once Start FlipAi with Windows</span>
+<span hidden>Appearance Notifications This install Local service Log files Service tools Message routing Check for updates administrator approval once Start FlipAi with Windows Start before sign-in</span>
 
 <section class="card settings-compact-card">
   <div class="card-body settings-compact-row">
