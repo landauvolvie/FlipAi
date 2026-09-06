@@ -13,33 +13,15 @@ import (
 
 const (
 	chatGPTSMSAgent  = "G"
-	chatGPTSMSPrefix = "G"
+	chatGPTSMSPrefix = "O"
 )
 
+// explicitSMSAgent is retained for callers/tests that care about the internal
+// execution engine. Public SMS shortcuts are resolved through explicitSMSRoute.
 func explicitSMSAgent(raw string, cfg Config) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	candidates := []string{raw}
-	if f := strings.Fields(raw); len(f) > 1 {
-		candidates = append(candidates, strings.TrimSpace(strings.TrimPrefix(raw, f[0])))
-	}
-	newWord := configuredNewSessionCommand(cfg)
-	for _, v := range candidates {
-		for _, x := range []struct{ agent, prefix string }{
-			{"C", configuredCodexPrefix(cfg)},
-			{"A", configuredClaudePrefix(cfg)},
-			{"G", configuredChatGPTPrefix(cfg)},
-			{"H", configuredClaudeChatPrefix(cfg)},
-			{"M", configuredGeminiChatPrefix(cfg)},
-			{"X", configuredGrokChatPrefix(cfg)},
-			{"P", configuredCopilotChatPrefix(cfg)},
-		} {
-			if _, ok := stripAgentCommandPrefix(v, x.prefix); ok || isAgentNewSession(v, x.prefix, newWord) {
-				return x.agent
-			}
-		}
+	id := explicitSMSRoute(raw, cfg)
+	if route, ok := smsRouteByID(cfg, id); ok {
+		return route.Agent
 	}
 	return ""
 }
@@ -53,21 +35,13 @@ func smsTargetAllowed(sourceAgent, target string) bool {
 	return target != "" && strings.Contains(sourceAgent, target)
 }
 
+// selectStickySMSAgent remains as an internal-engine compatibility wrapper.
 func selectStickySMSAgent(raw string, cfg Config, sourceAgent, sticky string) (string, error) {
-	if explicit := explicitSMSAgent(raw, cfg); explicit != "" {
-		if !smsTargetAllowed(sourceAgent, explicit) {
-			return "", wrongAgentForNumber(sourceAgent, explicit)
-		}
-		return explicit, nil
+	route, err := selectStickySMSRoute(raw, cfg, sourceAgent, sticky)
+	if err != nil {
+		return "", err
 	}
-	sticky = strings.ToUpper(strings.TrimSpace(sticky))
-	if smsTargetAllowed(sourceAgent, sticky) {
-		return sticky, nil
-	}
-	if sourceAgent == "C" || sourceAgent == "A" || sourceAgent == "G" || sourceAgent == "H" || sourceAgent == "M" || sourceAgent == "X" || sourceAgent == "P" {
-		return sourceAgent, nil
-	}
-	return "", errors.New("no SMS agent is selected for this phone yet; start the message with C: for Codex, A: for Claude, G: for ChatGPT Chat, H: for Claude Chat, M: for Gemini Chat, X: for Grok Chat, or P: for Microsoft Copilot Chat")
+	return route.Agent, nil
 }
 
 func authorizeChatGPTRaw(raw string, cfg Config, _ string) (string, error) {
@@ -77,10 +51,10 @@ func authorizeChatGPTRaw(raw string, cfg Config, _ string) (string, error) {
 	}
 	f := strings.Fields(raw)
 	if len(f) < 2 {
-		return "", errors.New("missing the ChatGPT Chat security code or the command")
+		return "", errors.New("missing the ChatGPT security code or the command")
 	}
 	if !verifyAgentCode(s, f[0]) {
-		return "", errors.New("invalid SMS security code for ChatGPT Chat")
+		return "", errors.New("invalid SMS security code for ChatGPT")
 	}
 	return strings.TrimSpace(strings.TrimPrefix(raw, f[0])), nil
 }
@@ -109,30 +83,43 @@ func parseChatGPTSMSCommand(raw string, cfg Config, sourceAgent string) (remoteC
 }
 
 func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sticky string, m GmailMessage) (remoteCommand, error) {
-	target, err := selectStickySMSAgent(raw, cfg, sourceAgent, sticky)
+	route, err := selectStickySMSRoute(raw, cfg, sourceAgent, sticky)
 	if err != nil {
 		return remoteCommand{}, err
 	}
+	rewritten := rewriteSMSRoutePrefix(raw, route.Prefix, underlyingPrefixForRoute(cfg, route))
+	var rc remoteCommand
 	if strings.TrimSpace(raw) != "" {
-		switch target {
+		switch route.Agent {
 		case "G":
-			return parseChatGPTSMSCommand(raw, cfg, sourceAgent)
+			rc, err = parseChatGPTSMSCommand(rewritten, cfg, sourceAgent)
 		case "H":
-			return parseClaudeChatSMSCommand(raw, cfg)
+			rc, err = parseClaudeChatSMSCommand(rewritten, cfg)
 		case "M":
-			return parseGeminiChatSMSCommand(raw, cfg)
+			rc, err = parseGeminiChatSMSCommand(rewritten, cfg)
 		case "X":
-			return parseGrokChatSMSCommand(raw, cfg)
+			rc, err = parseGrokChatSMSCommand(rewritten, cfg)
 		case "P":
-			return parseCopilotChatSMSCommand(raw, cfg)
+			rc, err = parseCopilotChatSMSCommand(rewritten, cfg)
 		default:
-			return parseRemoteCommand(raw, cfg, target)
+			rc, err = parseRemoteCommand(rewritten, cfg, route.Agent)
+		}
+	} else if isBrowserChatAgent(route.Agent) {
+		rc, err = parseBrowserChatAttachmentOnlyCommand(cfg, route.Agent, m)
+	} else {
+		rc, err = parseRemoteCommandForMessage(rewritten, cfg, route.Agent, m)
+	}
+	if err != nil {
+		return remoteCommand{}, err
+	}
+	if !rc.Status {
+		rc.Route = route.ID
+		rc.Mode = route.Mode
+		if rc.Agent == "" {
+			rc.Agent = route.Agent
 		}
 	}
-	if isBrowserChatAgent(target) {
-		return parseBrowserChatAttachmentOnlyCommand(cfg, target, m)
-	}
-	return parseRemoteCommandForMessage(raw, cfg, target, m)
+	return rc, nil
 }
 
 func stickySMSKey(sender string) string {
@@ -152,10 +139,10 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 	return b.state.LastAgentBySender[key]
 }
 
-func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
-	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" && agent != "P" {
-		return fmt.Errorf("unknown sticky SMS agent %q", agent)
+func (b *Bridge) rememberStickySMSAgent(sender, routeID string) error {
+	routeID = strings.ToUpper(strings.TrimSpace(routeID))
+	if _, ok := smsRouteByID(b.cfg, routeID); !ok {
+		return fmt.Errorf("unknown sticky SMS route %q", routeID)
 	}
 	key := stickySMSKey(sender)
 	if key == "" {
@@ -165,7 +152,7 @@ func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
 	if b.state.LastAgentBySender == nil {
 		b.state.LastAgentBySender = map[string]string{}
 	}
-	b.state.LastAgentBySender[key] = agent
+	b.state.LastAgentBySender[key] = "route:" + routeID
 	s := b.state
 	b.mu.Unlock()
 	return saveState(b.statePath, s)
@@ -178,14 +165,14 @@ type chatGPTSMSReply struct {
 	ConversationID string `json:"conversationId"`
 }
 
-func chatGPTBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+func chatGPTBrowserSendMode(ctx context.Context, dataDir, prompt, mode string) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
 		return "", err
 	}
-	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
+	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
 	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
 	b, code, err := chatGPTControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
@@ -206,15 +193,20 @@ func chatGPTBrowserSend(ctx context.Context, dataDir, prompt string) (string, er
 	return strings.TrimSpace(out.Reply), nil
 }
 
-func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
+func chatGPTBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+	return chatGPTBrowserSendMode(ctx, dataDir, prompt, browserModeChat)
+}
+
+func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string) error {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
 		return err
 	}
+	payload, _ := json.Marshal(map[string]any{"mode": mode})
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	b, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`))
+	b, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
 		return err
@@ -230,6 +222,10 @@ func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
 	return nil
 }
 
+func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
+	return chatGPTBrowserNewConversationMode(ctx, dataDir, browserModeChat)
+}
+
 func (b *Bridge) composeChatGPTSMSPrompt(command string) string {
 	command = strings.TrimSpace(command)
 	hint := strings.TrimSpace(b.cfg.replyStyleHintFor("G"))
@@ -242,11 +238,25 @@ func (b *Bridge) composeChatGPTSMSPrompt(command string) string {
 	return command + "\n\n" + hint
 }
 
-func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, error) {
+func (b *Bridge) runChatGPTSMSMode(ctx context.Context, command, mode string) (string, error) {
 	dataDir := filepath.Dir(b.statePath)
-	return chatGPTBrowserSend(ctx, dataDir, b.composeChatGPTSMSPrompt(command))
+	if mode == "" {
+		mode = browserModeChat
+	}
+	return chatGPTBrowserSendMode(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode)
+}
+
+func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, error) {
+	return b.runChatGPTSMSMode(ctx, command, browserModeChat)
+}
+
+func (b *Bridge) newChatGPTConversationMode(ctx context.Context, mode string) error {
+	if mode == "" {
+		mode = browserModeChat
+	}
+	return chatGPTBrowserNewConversationMode(ctx, filepath.Dir(b.statePath), mode)
 }
 
 func (b *Bridge) newChatGPTConversation(ctx context.Context) error {
-	return chatGPTBrowserNewConversation(ctx, filepath.Dir(b.statePath))
+	return b.newChatGPTConversationMode(ctx, browserModeChat)
 }
