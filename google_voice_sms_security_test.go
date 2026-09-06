@@ -121,17 +121,64 @@ func TestDirectGoogleVoiceSMSCanRecoverSenderOnlyFromTrustedItemID(t *testing.T)
 	}
 }
 
-func TestDirectGoogleVoiceSMSBlocksSenderThreadMismatch(t *testing.T) {
+// The conversation decides, so accompanying sender metadata cannot be used to
+// borrow an allowed number and get an unrelated conversation answered. The
+// reply would go to the conversation, so the conversation is what is authorized.
+func TestDirectGoogleVoiceSMSIgnoresAClaimedSenderAndAuthorizesTheConversation(t *testing.T) {
 	dir := t.TempDir()
 	writeDirectSMSTestConfig(t, dir, []AgentPhone{{Number: "8455550142", Access: AccessSMS}})
 	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/0/messages?itemId=t.%2B18455550199", "X: hi")); err != nil {
 		t.Fatal(err)
 	}
 	if msgs, err := NewGoogleVoiceSMSClient(dir).readAll(); err != nil || len(msgs) != 0 {
-		t.Fatalf("sender/thread mismatch reached spool: msgs=%+v err=%v", msgs, err)
+		t.Fatalf("an allowed number claimed alongside an unallowed conversation reached the spool: msgs=%+v err=%v", msgs, err)
 	}
-	if !activityHas(directGoogleVoiceActivity(dir).Recent(20), "8455550142", "conversation phone does not match sender; no reply sent") {
-		t.Fatal("sender/thread mismatch was not explicitly blocked")
+	if !activityHas(directGoogleVoiceActivity(dir).Recent(20), "8455550199", "phone number is not allowed; no reply sent") {
+		t.Fatal("the unallowed conversation was not blocked on its own number")
+	}
+}
+
+// A conversation with no phone-number identity of its own -- a group thread, or
+// an older locator -- can neither be attributed nor replied to.
+func TestDirectGoogleVoiceSMSBlocksAConversationWithNoPhoneIdentity(t *testing.T) {
+	dir := t.TempDir()
+	writeDirectSMSTestConfig(t, dir, []AgentPhone{{Number: "8455550142", Access: AccessSMS}})
+	if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "8455550142", "/u/0/messages/legacy-thread", "X: hi")); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, err := NewGoogleVoiceSMSClient(dir).readAll(); err != nil || len(msgs) != 0 {
+		t.Fatalf("a conversation without an exact phone identity reached the spool: msgs=%+v err=%v", msgs, err)
+	}
+	if !activityHas(directGoogleVoiceActivity(dir).Recent(20), "8455550142", "no exact phone-number identity; no reply sent") {
+		t.Fatal("a conversation without a phone identity was not explicitly blocked")
+	}
+}
+
+// The number the user typed and the number Google reports arrive in different
+// shapes. Every shape of the same number has to be the same number.
+func TestDirectGoogleVoiceSMSAcceptsEveryShapeOfTheSameNumber(t *testing.T) {
+	for _, typed := range []string{"+18453241813", "8453241813", "845-324-1813", "(845) 324-1813", "845 324 1813", "1-845-324-1813", "+1 (845) 324-1813"} {
+		t.Run(typed, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := defaultConfig(dir)
+			cfg.Gmail.Method = GmailMethodGoogleVoice
+			cfg.Security.AgentsMigrated = true
+			cfg.GeminiChat.AgentSettings.Phones = []AgentPhone{{Number: normalizeUSPhone(typed), Access: AccessSMS}}
+			cfg.GoogleVoice.AllowedFrom = typed
+			if err := saveConfig(filepath.Join(dir, "bridge.json"), cfg); err != nil {
+				t.Fatal(err)
+			}
+			if err := appendDirectGoogleVoiceSMS(dir, directSMSPayload(t, "", "/u/0/messages?itemId=t.%2B18453241813", "G: hi")); err != nil {
+				t.Fatal(err)
+			}
+			msgs, err := NewGoogleVoiceSMSClient(dir).readAll()
+			if err != nil || len(msgs) != 1 {
+				t.Fatalf("%q did not authorize its own number: msgs=%+v err=%v events=%+v", typed, msgs, err, directGoogleVoiceActivity(dir).Recent(20))
+			}
+			if msgs[0].Sender != "8453241813" {
+				t.Fatalf("%q resolved to the wrong sender: %+v", typed, msgs[0])
+			}
+		})
 	}
 }
 

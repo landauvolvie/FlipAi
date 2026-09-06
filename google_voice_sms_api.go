@@ -28,6 +28,12 @@ type googleVoiceSMSAPIMessage struct {
 	Body     string
 	At       time.Time
 	Outgoing bool
+
+	// AccountNumber is the item's "did": the Google Voice number on this
+	// account's own side of the conversation. It is kept for diagnostics and is
+	// never the person texting -- see the parser for why that distinction cost
+	// a release.
+	AccountNumber string
 }
 
 type googleVoiceSMSAPISeenState struct {
@@ -252,15 +258,25 @@ func parseGoogleVoiceSMSAPIListResponseDetailed(raw []byte, accountSlot string) 
 				}
 				continue
 			}
-			sender := normalizeUSPhone(item.DID)
+			// The conversation itself says who the other party is. A 1:1 SMS
+			// thread is identified as t.+1XXXXXXXXXX, and that number is both
+			// the person texting and the exact address a reply is delivered to
+			// -- so authorizing it and answering it are the same decision, and
+			// a forged number cannot get an unauthorized conversation answered.
+			//
+			// The item's "did" is NOT the sender: it is the Google Voice number
+			// on this account's own side. Reading it as the sender made every
+			// inbound text disagree with its own conversation, and the identity
+			// cross-check then blocked every one of them as a mismatch.
 			at := parseGoogleVoiceSMSAPIStartTime(item.StartTime)
 			out = append(out, googleVoiceSMSAPIMessage{
-				CursorID: googleVoiceSMSAPICursorID(threadID, item.ID, item.MessageID, kind, body, at),
-				Sender:   sender,
-				Thread:   threadLocator,
-				Body:     body,
-				At:       at,
-				Outgoing: outgoing,
+				CursorID:      googleVoiceSMSAPICursorID(threadID, item.ID, item.MessageID, kind, body, at),
+				Sender:        threadPhone,
+				Thread:        threadLocator,
+				Body:          body,
+				At:            at,
+				Outgoing:      outgoing,
+				AccountNumber: normalizeUSPhone(item.DID),
 			})
 		}
 	}

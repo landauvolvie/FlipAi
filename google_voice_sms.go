@@ -312,10 +312,22 @@ func directGoogleVoiceActivity(dataDir string) *ActivityLog {
 	return activityLogForStatePath(filepath.Join(dataDir, "state.json"))
 }
 
-// appendDirectGoogleVoiceSMS is the first security gate. Every inbound DOM
-// event is logged, then authorization is decided exclusively from the normalized
-// phone number. For current Google Voice itemId threads, that thread phone is an
-// independent identity source and must agree with any DOM sender metadata.
+// appendDirectGoogleVoiceSMS is the first security gate. Every inbound event is
+// logged, then authorization is decided exclusively from the normalized phone
+// number -- never from a contact name, and never from a number written inside
+// the message text.
+//
+// The conversation's own t.+1XXXXXXXXXX identity is the sender. That number is
+// also the exact address the reply is delivered to, so the number FlipAi
+// authorizes and the number FlipAi answers are the same value by construction:
+// forging the accompanying metadata cannot get an unauthorized conversation
+// answered, because the reply would still go to the conversation.
+//
+// Sender metadata that travels alongside the conversation is deliberately not
+// consulted. The Voice web service reports a "did" on each item, which is the
+// Google Voice number on this account's own side rather than the person
+// texting; treating it as the sender made every real text disagree with its own
+// conversation and blocked all of them.
 func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 	if len(os.Args) > 1 && strings.EqualFold(os.Args[1], "--google-voice") {
 		return nil
@@ -324,19 +336,23 @@ func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 	if err := json.Unmarshal([]byte(payload), &m); err != nil {
 		return err
 	}
-	m.Sender = normalizeUSPhone(m.Sender)
 	m.Thread = normalizeGoogleVoiceSMSThread(m.Thread)
 	threadPhone := googleVoiceSMSThreadPhone(m.Thread)
-	if m.Sender == "" && threadPhone != "" {
+	if threadPhone != "" {
 		m.Sender = threadPhone
+	} else {
+		m.Sender = normalizeUSPhone(m.Sender)
 	}
 	m.Body = strings.TrimSpace(m.Body)
 	if m.Body == "" {
 		return nil
 	}
-	if strings.HasPrefix(strings.ToLower(m.Body), "you:") {
-		return nil
-	}
+	// A "You:" prefix used to mean the conversation list was showing FlipAi's own
+	// last message. Nothing reads the conversation list any more -- direction
+	// comes from the item itself, and the ledger below catches anything
+	// mislabelled -- so that heuristic now only swallows a real text that
+	// happens to begin with the word, silently and with nothing logged.
+	//
 	// Second, independent loop guard. Even if a conversation item were ever
 	// mislabelled as inbound, FlipAi will not answer text it just sent.
 	if googleVoiceSMSWasSentRecently(dataDir, m.Sender, m.Body) {
@@ -369,8 +385,11 @@ func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 		activity.Add("warn", "security", "Blocked Google Voice SMS: exact conversation thread could not be verified; no reply sent", m.Sender, "", m.ID)
 		return nil
 	}
-	if threadPhone != "" && threadPhone != m.Sender {
-		activity.Add("warn", "security", "Blocked Google Voice SMS: conversation phone does not match sender; no reply sent", m.Sender, "", m.ID)
+	// A conversation FlipAi cannot address by phone number -- a group thread, or
+	// an older locator without one -- can neither be attributed to a sender nor
+	// replied to, so it fails closed here rather than later.
+	if threadPhone == "" {
+		activity.Add("warn", "security", "Blocked Google Voice SMS: this conversation has no exact phone-number identity; no reply sent", m.Sender, "", m.ID)
 		return nil
 	}
 
