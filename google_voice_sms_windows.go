@@ -37,8 +37,8 @@ func requestGoogleVoiceText(ctx context.Context, dataDir, phone, body string) er
 
 // requestGoogleVoiceTextThread is used only for replies to a captured inbound
 // message. The exact thread is mandatory: if it cannot be normalized to a
-// same-site Google Voice Messages path, fail closed rather than degrading to a
-// new-message/contact lookup.
+// same-site Google Voice Messages locator, fail closed rather than degrading to
+// a new-message/contact lookup.
 func requestGoogleVoiceTextThread(ctx context.Context, dataDir, phone, thread, body string) error {
 	thread = normalizeGoogleVoiceSMSThread(thread)
 	if thread == "" {
@@ -56,9 +56,6 @@ func requestGoogleVoiceTextTarget(ctx context.Context, dataDir, phone, thread, b
 			return errors.New("Google Voice reply blocked: exact conversation thread is required")
 		}
 	} else {
-		// One-off SendText deliberately has no conversation identity. It must use
-		// the exact-phone recipient picker in the page and may not smuggle in an
-		// unverified thread from an outbox file.
 		thread = ""
 	}
 	if phone == "" || body == "" {
@@ -219,11 +216,11 @@ func sendGoogleVoiceTextInPage(d voiceDevTools, phone, thread, body string, exac
 	return nil
 }
 
-// Replies never search by contact name. When Thread is present, FlipAi locates
-// that exact href, verifies the same row carries the expected phone number in
-// trusted identity metadata, and only then clicks it. One-off sends require an
-// exact phone-number suggestion; the old "there is only one choice" fallback is
-// intentionally gone because a single wrong contact is still the wrong chat.
+// Replies never search by contact name. For replies, FlipAi matches the exact
+// Google Voice conversation locator captured on inbound and verifies that its
+// itemId/identity metadata carries the same phone number. This supports both
+// current /messages?itemId=t.%2B1XXXXXXXXXX rows and legacy /messages/<id>
+// links. One-off sends still require an exact phone-number recipient choice.
 const voiceSendTextJS = `(async () => {
   const phone=__PHONE__, thread=__THREAD__, body=__BODY__;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -235,38 +232,34 @@ const voiceSendTextJS = `(async () => {
   const clickNamed=re=>{const b=buttons().find(x=>visible(x)&&!x.disabled&&re.test(label(x)));if(!b)return false;b.click();return true};
   const setValue=(el,value)=>{try{const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(el,value)}catch(_){el.value=value}el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))};
   const digits=v=>String(v||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,'');
-  const identityPhone=el=>{
-    if(!el)return '';
-    const values=[];
-    const attrs=['title','aria-label','href','data-phone','data-number','data-e164','value'];
-    const rowAttrs=['title','data-phone','data-number','data-e164'];
-    const add=(x,list)=>{for(const a of list){try{const v=x.getAttribute?.(a);if(v)values.push(v)}catch(_){}}};
-    const isChoice=!!el.matches?.('[role="option"],[role="menuitem"],mat-option,gv-contact-list-item');
-    if(isChoice){
-      add(el,attrs);values.push(label(el));
-    }else{
-      if(el.matches?.('a[href*="/messages/"]'))add(el,attrs);else add(el,rowAttrs);
-      let conversation=null;try{conversation=el.matches?.('a[href*="/messages/"]')?el:el.querySelector?.('a[href*="/messages/"]')}catch(_){}
-      if(conversation)add(conversation,attrs);
-      let ids=[];try{ids=el.querySelectorAll?.('[class*="contact" i],[class*="sender" i],[class*="recipient" i],[data-contact],[data-recipient],[data-phone],[data-number],[data-e164]')||[]}catch(_){}
-      for(const x of ids){add(x,attrs);values.push(label(x));if(values.length>220)break;}
-    }
-    for(const v of values){const d=digits(v);if(d.length===10)return d;}
-    return '';
-  };
-  const pathOf=el=>{try{const raw=String(el.getAttribute?.('href')||'').trim();if(!raw)return '';if(raw.startsWith('/'))return raw.split(/[?#]/,1)[0];const u=new URL(raw,location.href);return u.hostname.toLowerCase()==='voice.google.com'?u.pathname:''}catch(_){return ''}};
+  const accountSlot=()=>((String(location.pathname||'').match(/^\/u\/(\d+)/i)||[])[1]||'0');
+  const itemInfo=raw=>{let v=String(raw||'').trim();try{v=decodeURIComponent(v)}catch(_){}const m=v.match(/(?:^|[^A-Za-z0-9])t\.\+1(\d{10})(?:$|[^0-9])/);if(!m)return {thread:'',phone:''};const item='t.+1'+m[1];return {thread:'/u/'+accountSlot()+'/messages?itemId='+encodeURIComponent(item),phone:m[1]}};
+  const threadInfo=raw=>{raw=String(raw||'').trim();if(!raw)return {thread:'',phone:''};try{const u=new URL(raw,location.href);if(u.protocol!=='https:'||u.hostname.toLowerCase()!=='voice.google.com'||u.hash)return {thread:'',phone:''};const path=String(u.pathname||''),base=path.match(/^\/u\/(\d+)\/messages\/?$/i);if(base){const keys=[...u.searchParams.keys()],vals=u.searchParams.getAll('itemId');if(keys.length!==1||keys[0]!=='itemId'||vals.length!==1)return {thread:'',phone:''};const item=vals[0],m=item.match(/^t\.\+1(\d{10})$/);if(!m)return {thread:'',phone:''};return {thread:'/u/'+base[1]+'/messages?itemId='+encodeURIComponent(item),phone:m[1]}}if(/^\/u\/\d+\/messages\/[^/?#]+$/i.test(path)&&!u.search&&!path.includes('..'))return {thread:path,phone:''}}catch(_){}return {thread:'',phone:''}};
+  const rowAttrs=['href','data-item-id','data-thread-id','data-conversation-id','data-phone','data-phone-number','data-number','data-e164'];
+  const identityAttrs=[...rowAttrs,'title','aria-label','value'];
+  const add=(el,vals,attrs)=>{for(const a of attrs){try{const v=el?.getAttribute?.(a);if(v)vals.push(v)}catch(_){}}};
+  const identity=el=>{if(!el)return {thread:'',phone:''};const vals=[];add(el,vals,rowAttrs);let links=[];try{links=el.matches?.('a[href*="/messages"]')?[el]:[...(el.querySelectorAll?.('a[href*="/messages"]')||[])]}catch(_){}for(const a of links){const info=threadInfo(a.getAttribute?.('href')||'');if(info.thread)return info;add(a,vals,identityAttrs)}let ids=[];try{ids=[...(el.querySelectorAll?.('[data-item-id],[data-thread-id],[data-conversation-id],[data-phone],[data-phone-number],[data-number],[data-e164],[class*="contact" i],[class*="sender" i],[class*="recipient" i],[data-contact],[data-recipient]')||[])]}catch(_){}for(const x of ids){add(x,vals,identityAttrs);if(vals.length>260)break}let p='';for(const v of vals){const u=threadInfo(v);if(u.thread)return u;const it=itemInfo(v);if(it.thread)return it;if(!p){const d=digits(v);if(d.length===10)p=d}}return {thread:'',phone:p}};
   if(location.hostname.toLowerCase()!=='voice.google.com')return 'not-on-google-voice';
   if(/^\s*sign\s+in\s*$/im.test(String(document.body?.innerText||'').slice(0,1600)))return 'not-signed-in';
-  clickNamed(/^(messages|text messages)$/i); await sleep(300);
+  clickNamed(/^(messages|text messages)$/i);await sleep(300);
 
   if(thread){
-    const links=all('a[href*="/messages/"]').filter(visible);
-    const exactLink=links.find(x=>pathOf(x)===thread);
-    if(!exactLink)return 'exact-thread-not-found';
-    const row=exactLink.closest?.('gv-conversation-list-item,gv-message-list-item,[role="listitem"]')||exactLink;
-    if(identityPhone(row)!==phone)return 'thread-phone-mismatch';
-    exactLink.click();
-    await sleep(500);
+    const wanted=threadInfo('https://voice.google.com'+thread);
+    if(!wanted.thread||wanted.thread!==thread)return 'invalid-exact-thread';
+    if(wanted.phone&&wanted.phone!==phone)return 'thread-phone-mismatch';
+    const current=threadInfo(location.href);
+    if(current.thread===thread){if(current.phone&&current.phone!==phone)return 'thread-phone-mismatch'}else{
+      const candidates=[];
+      for(const a of all('a[href*="/messages"]')){const info=threadInfo(a.getAttribute?.('href')||'');if(info.thread===thread)candidates.push({target:a,row:a.closest?.('gv-conversation-list-item,gv-message-list-item,gv-thread-list-item,[role="listitem"],[data-conversation-id],[data-thread-id],[data-item-id]')||a,info})}
+      const semantic=all('gv-conversation-list-item,gv-message-list-item,gv-thread-list-item,[data-conversation-id],[data-thread-id],[data-item-id],[class*="conversation-row" i],[class*="thread-row" i]');
+      for(const row of semantic){const info=identity(row);if(info.thread===thread)candidates.push({target:row,row,info})}
+      const exact=candidates.find(x=>{const info=identity(x.row);const p=info.phone||x.info.phone||wanted.phone;return p===phone});
+      if(!exact)return 'exact-thread-not-found';
+      exact.target.click();await sleep(650);
+      const after=threadInfo(location.href);
+      if(after.thread&&after.thread!==thread)return 'exact-thread-navigation-mismatch';
+      if(after.phone&&after.phone!==phone)return 'thread-phone-mismatch';
+    }
   }else{
     if(!clickNamed(/^(send a message|send new message|new message|compose|start a message)$/i))clickNamed(/(send new message|new message|compose|start message)/i);
     await sleep(400);
@@ -274,10 +267,9 @@ const voiceSendTextJS = `(async () => {
     if(!recipient)return 'recipient-input-missing';
     recipient.focus();setValue(recipient,phone);await sleep(650);
     const choices=all('[role="option"],[role="menuitem"],mat-option,gv-contact-list-item').filter(visible);
-    const exact=choices.find(x=>identityPhone(x)===phone);
+    const exact=choices.find(x=>identity(x).phone===phone||digits(label(x))===phone);
     if(!exact)return 'exact-recipient-not-found';
-    exact.click();
-    await sleep(450);
+    exact.click();await sleep(450);
   }
 
   const composer=all('textarea,input,[contenteditable="true"]').find(el=>visible(el)&&/(message|text|sms|type)/i.test(label(el)));
