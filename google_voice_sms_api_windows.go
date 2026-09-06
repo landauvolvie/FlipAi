@@ -252,8 +252,8 @@ func googleVoiceSMSAPIRequestOnce(session googleVoiceSMSAPISession, method strin
 	req.Header.Set("Authorization", authorization)
 	req.Header.Set("Cookie", session.CookieHeader)
 	req.Header.Set("X-Goog-AuthUser", session.AuthUser)
-	req.Header.Set("Origin", "https://clients6.google.com")
-	req.Header.Set("Referer", "https://clients6.google.com/static/proxy.html?usegapi=1")
+	req.Header.Set("Origin", googleVoiceSMSAPIOrigin)
+	req.Header.Set("Referer", googleVoiceSMSAPIOrigin+"/static/proxy.html?usegapi=1")
 	if session.UserAgent != "" {
 		req.Header.Set("User-Agent", session.UserAgent)
 	}
@@ -284,11 +284,84 @@ func googleVoiceSMSAPIRequestOnce(session googleVoiceSMSAPISession, method strin
 	return raw, nil
 }
 
-// googleVoiceSMSAPIRequestViaPage makes the request from inside the signed-in
-// Google Voice page, which is the caller Google recognizes. See
-// google_voice_sms_netcapture.go for why that distinction matters.
+// googleVoiceSMSAPIFrameContext finds a frame already loaded from the web
+// service's own origin and opens an isolated world in it.
+//
+// This is the correction to an assumption that cost a release. The capture
+// script sees the page's calls to clients6.google.com, and that looked like
+// proof they were ordinary cross-origin requests from voice.google.com. They
+// are not: an init script is installed in every frame, so what it saw were the
+// gapi proxy frame's own same-origin calls. A request issued from the main
+// frame instead carries Origin: https://voice.google.com against a
+// clients6.google.com host, and Google answers "Origin doesn't match Host".
+//
+// Running in the proxy frame puts the origin and the host back in agreement.
+// When no such frame is loaded there is nothing to run in, and the caller uses
+// the direct client, which sets the matching origin itself.
+func googleVoiceSMSAPIFrameContext(d voiceDevTools) (int, bool) {
+	if d == nil {
+		return 0, false
+	}
+	_ = d.Call("Page.enable", map[string]any{}, nil)
+
+	type frameNode struct {
+		Frame struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"frame"`
+		ChildFrames []json.RawMessage `json:"childFrames,omitempty"`
+	}
+	var tree struct {
+		FrameTree json.RawMessage `json:"frameTree"`
+	}
+	if err := d.Call("Page.getFrameTree", map[string]any{}, &tree); err != nil {
+		return 0, false
+	}
+
+	// The proxy frame is a child of the main frame, so the search is breadth
+	// first over whatever depth the page happens to use.
+	pending := []json.RawMessage{tree.FrameTree}
+	for len(pending) > 0 && len(pending) < 256 {
+		raw := pending[0]
+		pending = pending[1:]
+		var node frameNode
+		if json.Unmarshal(raw, &node) != nil {
+			continue
+		}
+		pending = append(pending, node.ChildFrames...)
+		if !strings.HasPrefix(strings.ToLower(node.Frame.URL), googleVoiceSMSAPIOrigin+"/") {
+			continue
+		}
+		var world struct {
+			ExecutionContextID int `json:"executionContextId"`
+		}
+		if err := d.Call("Page.createIsolatedWorld", map[string]any{
+			"frameId":             node.Frame.ID,
+			"worldName":           "flipai-google-voice",
+			"grantUniveralAccess": false,
+		}, &world); err != nil || world.ExecutionContextID == 0 {
+			continue
+		}
+		return world.ExecutionContextID, true
+	}
+	return 0, false
+}
+
+// googleVoiceSMSAPIOrigin is both the host FlipAi calls and the origin a
+// request to it has to carry.
+const googleVoiceSMSAPIOrigin = "https://clients6.google.com"
+
+// googleVoiceSMSAPIRequestViaPage makes the request from inside a frame already
+// loaded from the web service's own origin, which is the caller Google accepts.
 func googleVoiceSMSAPIRequestViaPage(d voiceDevTools, session googleVoiceSMSAPISession, method string, body []byte, origin string) ([]byte, error) {
 	if d == nil {
+		return nil, errNoVoiceControlChannel
+	}
+	contextID, ok := googleVoiceSMSAPIFrameContext(d)
+	if !ok {
+		// Nothing to run in. The direct client sets the matching origin itself,
+		// so the caller falls back to it rather than issuing a request from the
+		// wrong frame and having Google refuse it.
 		return nil, errNoVoiceControlChannel
 	}
 	authorization := googleVoiceSMSAuthorization(session.Cookies, origin, time.Now())
@@ -313,7 +386,7 @@ func googleVoiceSMSAPIRequestViaPage(d voiceDevTools, session googleVoiceSMSAPIS
 		return nil, err
 	}
 	var raw string
-	if err := voiceEval(d, expression, true, &raw); err != nil {
+	if err := voiceEvalInContext(d, expression, true, contextID, &raw); err != nil {
 		return nil, err
 	}
 	result, err := parseGoogleVoiceSMSPageResponse(raw)

@@ -73,6 +73,39 @@ func voiceEval(d voiceDevTools, expression string, awaitPromise bool, out any) e
 	return json.Unmarshal(got.Result.Value, out)
 }
 
+// voiceEvalInContext runs an expression inside one specific execution context
+// rather than the page's main frame.
+//
+// Which frame code runs in decides the origin its network requests carry, and
+// some services answer only their own origin. Runtime.evaluate without a
+// context always lands in the main frame, so a request that has to come from a
+// subframe needs this.
+func voiceEvalInContext(d voiceDevTools, expression string, awaitPromise bool, contextID int, out any) error {
+	if d == nil {
+		return errNoVoiceControlChannel
+	}
+	var got voiceDevToolsEval
+	params := map[string]any{
+		"expression":    expression,
+		"returnByValue": true,
+		"awaitPromise":  awaitPromise,
+		"contextId":     contextID,
+	}
+	if err := d.Call("Runtime.evaluate", params, &got); err != nil {
+		return err
+	}
+	if len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
+		return errors.New("the Google Voice page script failed")
+	}
+	if out == nil {
+		return nil
+	}
+	if len(got.Result.Value) == 0 {
+		return errors.New("the Google Voice page returned no value")
+	}
+	return json.Unmarshal(got.Result.Value, out)
+}
+
 // voiceEvalObject runs an expression and returns a handle to the object it
 // produced, for the DevTools methods that take one.
 func voiceEvalObject(d voiceDevTools, expression string) (string, error) {
