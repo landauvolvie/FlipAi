@@ -1,37 +1,36 @@
-# FlipAi v0.46.45
+# FlipAi v0.46.46
 
-Restores the SMS listener, and sends from a frame whose origin Google accepts.
+FlipAi learns how to send a text by watching Google Voice send one.
 
-## What v0.46.44 broke, and why
+## What the error finally said
 
-v0.46.44 moved every Google Voice web-service request into the signed-in page. It was based on a wrong reading of the evidence: FlipAi's capture script sees the page's own calls to the service, and that looked like proof those calls come from the Voice page itself.
+With the response body no longer discarded, Google Voice named its own refusal:
 
-They do not. A script installed at page start runs in **every frame**, so what the capture saw were the calls of a small helper frame Google loads from the web service's own address. A request issued from the main Voice page instead carries one address while talking to another, and Google refuses it:
+> RESOURCE_EXHAUSTED — `{"error_code":"RESOURCE_EXHAUSTED","base64_format":"CAI=","protojson_fava_format":"[2]"}`
 
-> Bad request: Origin doesn't match Host for XD3.
-
-Because that path was used for reading as well as sending, the SMS listener stopped starting at all. Inbound text detection stopped with it. That regression is the first thing this release fixes.
+That is a Google Voice error, not a generic quota message: `CAI=` decodes to two bytes meaning field 1 = 2, and `[2]` says the same thing. The service is rejecting the request itself, which is why waiting and retrying never helped and why not one reply has ever gone out.
 
 ## The fix
 
-FlipAi now looks for a frame already loaded from the web service's own address and runs the request there, where the two agree. When no such frame is present there is nothing to run in, so the request goes back to the direct client, which sets the matching address itself — the path that read the inbox successfully in every release before v0.46.44.
+The body FlipAi sends was written from a guess at the shape this endpoint wants, and a guess is what the service keeps refusing.
 
-The result is that reading works again immediately, and sending gets a genuinely different attempt rather than the one Google was refusing.
+Google Voice builds a correct one every time you send a text yourself from the window FlipAi already runs. FlipAi now records that request and reuses its exact structure, changing only what has to change: the conversation, the message, and the tracking id. The slots are found by what they contain rather than by position, so a reordering on Google's side cannot put the message where the conversation belongs — and anything whose slots cannot be identified is refused outright rather than half-rewritten.
 
-## Diagnostics kept
+## What this asks of you, once
 
-The error above is visible only because v0.46.44 started reading Google's own words out of a failed response instead of discarding them. That stays, and it is what made this a single-look diagnosis instead of another guess.
+**Send one text yourself from the Google Voice window FlipAi opens.** Any text, to anyone. That is what teaches FlipAi the format.
 
-## Regression coverage
+The Connections card now says which state it is in:
 
-- The page request runs in a frame on the service's own address, never in the main page.
-- With no such frame, the request reports the one error the caller falls back on, so reading the inbox keeps working.
-- The frame search and the isolated context it opens are both pinned.
+- *reply format learned from Google Voice* — nothing more to do.
+- *reply format not yet learned; send one text yourself from the Google Voice window to teach it* — send that one text.
+
+Until a real send has been observed, FlipAi falls back to the built-in shape, which is the one being refused.
 
 ## Unchanged
 
 - Sender authorization: the conversation's own phone number, never a contact name.
 - A reply whose outcome is unknown is still never sent twice.
-- Google Voice calling behavior, profile, settings, and call state machine.
+- Reading the inbox, and Google Voice calling.
 
 No Authenticode/code-signing certificate is included in this release.

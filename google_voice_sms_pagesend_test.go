@@ -263,3 +263,72 @@ func TestGoogleVoiceSMSFallsBackWhenNoMatchingFrameExists(t *testing.T) {
 		t.Fatal("a missing frame does not report the one error the caller falls back on")
 	}
 }
+
+// The payload for sending was written from a guess at its shape, and the
+// service kept refusing it. Google Voice builds a correct one every time the
+// user sends a text from the same window, so FlipAi reuses that structure and
+// changes only the conversation, the message and the tracking id.
+func TestGoogleVoiceSMSSendBodyIsLearnedFromARealSend(t *testing.T) {
+	real := `[null,null,null,null,"an earlier message","t.+18455550142",[],null,[123456789]]`
+	got, ok := googleVoiceSMSSendBodyFromCapture(real, "t.+18453241813", "the answer", 987654321)
+	if !ok {
+		t.Fatal("a real send was not usable as a template")
+	}
+	var fields []any
+	if err := json.Unmarshal(got, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 9 {
+		t.Fatalf("the real shape was not preserved: %s", got)
+	}
+	if fields[4] != "the answer" {
+		t.Fatalf("the message did not land in the message slot: %s", got)
+	}
+	if fields[5] != "t.+18453241813" {
+		t.Fatalf("the conversation did not land in the conversation slot: %s", got)
+	}
+	nonce, isArray := fields[8].([]any)
+	if !isArray || len(nonce) != 1 || nonce[0].(float64) != 987654321 {
+		t.Fatalf("the tracking id was not replaced: %s", got)
+	}
+}
+
+// A half-rewritten payload is worse than the built-in one, so anything the
+// slots cannot be identified in is refused outright.
+func TestGoogleVoiceSMSSendTemplateRefusesWhatItCannotPlace(t *testing.T) {
+	for _, unusable := range []string{
+		``,
+		`not json`,
+		`[]`,
+		`[null,null,"only text here"]`,
+		`[null,"t.+18455550142"]`,
+	} {
+		if _, ok := googleVoiceSMSSendBodyFromCapture(unusable, "t.+18453241813", "hi", 1); ok {
+			t.Fatalf("an unusable capture was accepted as a template: %q", unusable)
+		}
+	}
+	real := `[null,null,null,null,"x","t.+18455550142",[],null,[1]]`
+	if _, ok := googleVoiceSMSSendBodyFromCapture(real, "not-a-thread", "hi", 1); ok {
+		t.Fatal("a bad conversation was accepted")
+	}
+	if _, ok := googleVoiceSMSSendBodyFromCapture(real, "t.+18453241813", "   ", 1); ok {
+		t.Fatal("an empty message was accepted")
+	}
+}
+
+// The capture has to record the request body, not just its headers, or there
+// is nothing to learn the shape from.
+func TestGoogleVoiceSMSCaptureRecordsRealSendBodies(t *testing.T) {
+	for _, want := range []string{"api2thread/sendsms", "store.send", "noteRequest(target, headers, sent)"} {
+		if !strings.Contains(googleVoiceSMSNetworkCaptureJS, want) {
+			t.Fatalf("the capture script no longer records a real send: missing %q", want)
+		}
+	}
+	got := parseGoogleVoiceSMSCapturedSend(`{"at":1,"url":"https://clients6.google.com/x","body":"[1,2]"}`)
+	if got.Body != "[1,2]" {
+		t.Fatalf("a captured send was not read back: %+v", got)
+	}
+	if parseGoogleVoiceSMSCapturedSend("nonsense").Body != "" {
+		t.Fatal("junk was accepted as a captured send")
+	}
+}
