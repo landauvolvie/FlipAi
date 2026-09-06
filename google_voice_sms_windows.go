@@ -237,12 +237,20 @@ const voiceSendTextJS = `(async () => {
   const digits=v=>String(v||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,'');
   const identityPhone=el=>{
     if(!el)return '';
-    const attrs=['title','href','data-phone','data-number','data-e164','value'];
     const values=[];
-    const add=x=>{for(const a of attrs){try{const v=x.getAttribute?.(a);if(v)values.push(v)}catch(_){}}};
-    add(el);
-    let desc=[];try{desc=el.querySelectorAll?.('[title],[href],[data-phone],[data-number],[data-e164],[value]')||[]}catch(_){}
-    for(const x of desc){add(x);if(values.length>180)break;}
+    const attrs=['title','aria-label','href','data-phone','data-number','data-e164','value'];
+    const rowAttrs=['title','data-phone','data-number','data-e164'];
+    const add=(x,list)=>{for(const a of list){try{const v=x.getAttribute?.(a);if(v)values.push(v)}catch(_){}}};
+    const isChoice=!!el.matches?.('[role="option"],[role="menuitem"],mat-option,gv-contact-list-item');
+    if(isChoice){
+      add(el,attrs);values.push(label(el));
+    }else{
+      if(el.matches?.('a[href*="/messages/"]'))add(el,attrs);else add(el,rowAttrs);
+      let conversation=null;try{conversation=el.matches?.('a[href*="/messages/"]')?el:el.querySelector?.('a[href*="/messages/"]')}catch(_){}
+      if(conversation)add(conversation,attrs);
+      let ids=[];try{ids=el.querySelectorAll?.('[class*="contact" i],[class*="sender" i],[class*="recipient" i],[data-contact],[data-recipient],[data-phone],[data-number],[data-e164]')||[]}catch(_){}
+      for(const x of ids){add(x,attrs);values.push(label(x));if(values.length>220)break;}
+    }
     for(const v of values){const d=digits(v);if(d.length===10)return d;}
     return '';
   };
