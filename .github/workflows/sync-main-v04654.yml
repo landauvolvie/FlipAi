@@ -1,0 +1,34 @@
+name: Sync latest main for v0.46.54
+
+on:
+  push:
+    branches:
+      - feature/sms-new-modifier-ui-v04653
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/sms-new-modifier-ui-v04653
+          fetch-depth: 0
+      - name: Merge latest main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-edit origin/main
+      - name: Verify merged tree
+        run: |
+          gofmt -w bridge.go sms_fresh_turn.go sms_routes.go sms_sticky_chatgpt.go sms_claude_chat.go zzzzzzzzzzzzzz_sms_route_ui.go sms_fresh_turn_test.go sms_route_ui_test.go
+          go test ./...
+      - name: Remove helper workflow and push
+        run: |
+          rm .github/workflows/sync-main-v04654.yml
+          git add -A
+          if ! git diff --cached --quiet; then git commit -m "Remove temporary main sync workflow"; fi
+          git push origin HEAD:feature/sms-new-modifier-ui-v04653
