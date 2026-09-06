@@ -23,8 +23,8 @@ func TestSharedNumberUsesShortcutThenStickyRoutingWithNoSMSDefault(t *testing.T)
 	}
 
 	for raw, want := range map[string]string{
-		"C: codex task":  "C",
-		"A: claude task": "A",
+		"OC: codex task":  "C",
+		"AL: claude task": "A",
 	} {
 		rc, err := parseRemoteCommandForMessageSticky(raw, cfg, owner, "", GmailMessage{})
 		if err != nil || rc.Agent != want {
@@ -49,7 +49,7 @@ func TestSharedNumberDoesNotWidenPerAgentSMSAccess(t *testing.T) {
 	if !ok || owner != "C" || !phone.AllowsSMS() {
 		t.Fatalf("SMS permission should remain Codex-only: owner=%q phone=%+v ok=%v", owner, phone, ok)
 	}
-	if _, err := parseRemoteCommandForMessageSticky("A: should fail", cfg, owner, "", GmailMessage{}); err == nil || !strings.Contains(err.Error(), "cannot address") {
+	if _, err := parseRemoteCommandForMessageSticky("AL: should fail", cfg, owner, "", GmailMessage{}); err == nil || !strings.Contains(err.Error(), "cannot address") {
 		t.Fatalf("Claude voice-only copy unexpectedly gained SMS permission: %v", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestSharedNumberSecurityCodeCanPrecedeShortcut(t *testing.T) {
 	if !ok || owner != "CA" {
 		t.Fatalf("expected shared marker, got %q (ok=%v)", owner, ok)
 	}
-	rc, err := parseRemoteCommandForMessageSticky("claude1 A: protected task", cfg, owner, "", GmailMessage{})
+	rc, err := parseRemoteCommandForMessageSticky("claude1 AL: protected task", cfg, owner, "", GmailMessage{})
 	if err != nil || rc.Agent != "A" || rc.Text != "protected task" {
 		t.Fatalf("security-code + shortcut routing failed: %+v %v", rc, err)
 	}
