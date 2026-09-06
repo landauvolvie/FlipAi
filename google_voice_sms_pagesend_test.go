@@ -452,3 +452,50 @@ func TestGoogleVoiceSMSForgetsTheCaptureOnceLearned(t *testing.T) {
 		t.Fatal("the capture is not cleared after the shape is stored")
 	}
 }
+
+// The API key, the headers and the authorization that reveals the signing
+// origin are only visible from the frame that called the service. Read from the
+// main page they are always empty, and FlipAi then signs every request with the
+// built-in key -- which the service answers RESOURCE_EXHAUSTED. That is one
+// mistake made in three places; none of them may quietly return.
+func TestGoogleVoiceSMSSessionFactsComeFromTheCallingFrame(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fn := range []string{"func googleVoiceSMSCaptureTemplate(", "func googleVoiceSMSAPIKeyFromPage("} {
+		start := strings.Index(raw, fn)
+		if start < 0 {
+			t.Fatalf("%s is gone", fn)
+		}
+		body := raw[start:]
+		if end := strings.Index(body, "\nfunc "); end > 0 {
+			body = body[:end]
+		}
+		if !strings.Contains(body, "googleVoiceSMSAPIFrameContext(") && !strings.Contains(body, "googleVoiceSMSEvalInAPIFrame(") {
+			t.Fatalf("%s reads the main page again, where the service is never called", fn)
+		}
+	}
+}
+
+// An isolated world shares its frame's storage and resource timeline but not
+// its globals, so the key has to be reachable through both of those.
+func TestGoogleVoiceSMSKeyIsReachableFromAnIsolatedWorld(t *testing.T) {
+	if !strings.Contains(googleVoiceSMSNetworkCaptureJS, "setItem('__flipAiGVKey'") {
+		t.Fatal("the live Google key is not left anywhere an isolated world can reach it")
+	}
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSAPIKeyFromPage(")
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	for _, want := range []string{"getItem('__flipAiGVKey')", "getEntriesByType('resource')"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the key lookup lost a source an isolated world can use: %q", want)
+		}
+	}
+}

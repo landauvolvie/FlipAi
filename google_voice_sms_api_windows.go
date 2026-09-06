@@ -89,12 +89,36 @@ func googleVoiceSMSAPIAccountSlot(d voiceDevTools) string {
 	return "0"
 }
 
-// googleVoiceSMSCaptureTemplate asks the page for the last request it made to
-// the Voice web service. This is the authoritative source for the API key, the
-// client version, and -- through its authorization value -- the origin Google
-// signs with.
+// googleVoiceSMSEvalInAPIFrame runs an expression where the web-service calls
+// actually happen.
+//
+// Everything FlipAi learns about those calls -- the API key they carry, the
+// headers, the authorization that reveals the signing origin -- is only visible
+// from the frame that made them. Asking the main page finds none of it and
+// quietly returns nothing, which is indistinguishable from a page that has not
+// called the service yet.
+func googleVoiceSMSEvalInAPIFrame(d voiceDevTools, expression string, out any) error {
+	if contextID, ok := googleVoiceSMSAPIFrameContext(d); ok {
+		if err := voiceEvalInContext(d, expression, false, contextID, out); err == nil {
+			return nil
+		}
+	}
+	return voiceEval(d, expression, false, out)
+}
+
+// googleVoiceSMSCaptureTemplate asks for the last request made to the Voice web
+// service. This is the authoritative source for the API key, the client
+// version, and -- through its authorization value -- the origin Google signs
+// with.
 func googleVoiceSMSCaptureTemplate(d voiceDevTools) googleVoiceSMSAuthTemplate {
 	var raw string
+	if contextID, ok := googleVoiceSMSAPIFrameContext(d); ok {
+		if err := voiceEvalInContext(d, googleVoiceSMSCaptureTemplateJS, false, contextID, &raw); err == nil {
+			if got := parseGoogleVoiceSMSAuthTemplate(raw); got.Key != "" || len(got.Headers) > 0 {
+				return got
+			}
+		}
+	}
 	if err := voiceEval(d, googleVoiceSMSCaptureTemplateJS, false, &raw); err != nil {
 		return googleVoiceSMSAuthTemplate{}
 	}
@@ -112,10 +136,26 @@ func googleVoiceSMSCaptureDrain(d voiceDevTools) []string {
 	return parseGoogleVoiceSMSCaptureDrain(raw)
 }
 
+// googleVoiceSMSAPIKeyFromPage finds the API key Google served this session.
+//
+// It reads the frame's own resource timeline, which an isolated world shares,
+// and the copy the capture script leaves in storage. Both only exist in the
+// frame that called the service: read from the main page they are always empty,
+// and FlipAi then signs every request with a built-in key instead of the live
+// one -- which the service answers RESOURCE_EXHAUSTED.
 func googleVoiceSMSAPIKeyFromPage(d voiceDevTools) string {
-	const expression = `(()=>{try{for(const e of performance.getEntriesByType('resource')){const u=new URL(String(e.name||''));if(u.hostname==='clients6.google.com'&&u.pathname.includes('/voice/v1/voiceclient/')){const k=u.searchParams.get('key');if(k&&/^AIza[0-9A-Za-z_-]{20,}$/.test(k))return k}}}catch(_){}return ''})()`
+	const expression = `(()=>{try{
+  for(const s of [globalThis.localStorage,globalThis.sessionStorage]){
+    try{const v=s&&s.getItem('__flipAiGVKey');if(v&&/^AIza[0-9A-Za-z_-]{20,}$/.test(v))return v}catch(_){}
+  }
+  for(const e of performance.getEntriesByType('resource')){
+    try{const u=new URL(String(e.name||''));
+    if(u.hostname==='clients6.google.com'&&u.pathname.includes('/voice/v1/voiceclient/')){
+      const k=u.searchParams.get('key');if(k&&/^AIza[0-9A-Za-z_-]{20,}$/.test(k))return k}}catch(_){}
+  }
+}catch(_){}return ''})()`
 	var key string
-	if err := voiceEval(d, expression, false, &key); err == nil && strings.HasPrefix(key, "AIza") {
+	if err := googleVoiceSMSEvalInAPIFrame(d, expression, &key); err == nil && strings.HasPrefix(key, "AIza") {
 		return key
 	}
 	return ""
@@ -721,10 +761,16 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 	// change, so the card says which it is.
 	sendShape := func() string {
 		googleVoiceSMSLearnSendTemplate(dataDir, d)
+		note := "reply format not yet learned; send one text yourself from the Google Voice window to teach it"
 		if _, ok := loadGoogleVoiceSMSSendTemplate(dataDir); ok {
-			return "reply format learned from Google Voice"
+			note = "reply format learned from Google Voice"
 		}
-		return "reply format not yet learned; send one text yourself from the Google Voice window to teach it"
+		// Which key is in use decides whether the service will answer at all,
+		// and falling back to the built-in one is invisible without saying so.
+		if key := googleVoiceSMSAPIKeyFromPage(d); key != "" {
+			return note + "; using this session's own Google key"
+		}
+		return note + "; WARNING: this session's Google key was not found, so requests use a built-in one the service refuses"
 	}
 
 	drain := func() (int, googleVoiceSMSAPIStats) {

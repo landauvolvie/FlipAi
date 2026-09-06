@@ -1,38 +1,36 @@
-# FlipAi v0.46.47
+# FlipAi v0.46.48
 
-Two fixes to the learned reply format shipped in v0.46.46, without which it could never have worked.
+FlipAi was signing every request with a built-in Google key instead of your own.
 
-## The format was being read from the wrong place, twice over
+## What RESOURCE_EXHAUSTED was actually saying
 
-v0.46.46 records the request Google Voice makes when you send a text, so FlipAi can reuse its shape. It recorded it correctly and then looked for it somewhere it could never be.
+Google Voice kept refusing replies with `RESOURCE_EXHAUSTED`. That is the answer a Google API gives when the **key** a request is signed with is out of quota — not when the message is wrong, and not when the account is busy. Waiting, retrying and slowing down could never have helped.
 
-First, it asked the main page. The recording lives with whichever part of the page made the request, and the send is made by the small helper frame — the same separation that made v0.46.44's request get refused.
+FlipAi reads the key Google serves this session out of the page. It read it from the main page — but the calls to the web service are made by a small helper frame, and the key is only visible there. The lookup therefore always came back empty, and FlipAi fell back to a key built into the app: a public one, long since published and long since out of quota.
 
-Second, and less obvious: the only way FlipAi can run code in that helper frame gives it a separate set of variables from the frame's own. It shares the frame's storage, but not what the recording script had put in memory. Asking the right frame the wrong way would still have found nothing.
+The same mistake hid in three places at once: the key, the request headers, and the value that reveals how Google signs. All three were read from a page that never makes the call.
 
-The recording is now handed over through the frame's storage, which both sides can reach, and cleared once the shape is safely saved so the message it came from does not linger there. Either way the format would have read as never learned no matter how many texts you sent.
+## Why nothing else revealed it
 
-## The format is now remembered
+Reading your texts kept working, so the connection looked healthy. It works because FlipAi reads the conversation updates the page receives on its own — it does not need to ask the service anything. Sending has no such path, so sending was the only thing that ever showed the failure.
 
-The page keeps what it recorded only until it reloads, so an app restart or a page navigation threw it away and replies fell back to the shape the service refuses. The advertised one-time step would have been a step before every reply.
+## The fix
 
-The learned shape is now saved and restored across restarts. **Only the shape is kept**: the conversation and the message text are replaced with placeholders before anything is written, so what persists is the structure Google Voice uses and never what anyone said.
+All three are now read from the frame that actually calls the service, through the two things that frame shares: its storage and its own record of the requests it made.
 
-FlipAi also learns the shape during its ordinary inbox checks, not only when a reply is attempted, so a text you send is picked up within seconds.
+The Connections card now says which key is in use, so this cannot hide again:
 
-## What this asks of you, once
-
-**Send one text yourself from the Google Voice window FlipAi opens.** Any text, to anyone.
-
-The Connections card says which state it is in:
-
-- *reply format learned from Google Voice* — nothing more to do, now or after any restart.
-- *reply format not yet learned; send one text yourself from the Google Voice window to teach it*
+- *using this session's own Google key* — correct.
+- *WARNING: this session's Google key was not found, so requests use a built-in one the service refuses* — the state every release until now was silently in.
 
 ## Regression coverage
 
-- The captured send is read from the frame that made it, not the main page.
-- A learned shape survives a restart, still fills in correctly afterwards, and carries neither the conversation nor the message it was learned from.
-- An unusable capture is never stored.
+- The key, the headers and the signing origin are all read from the calling frame; none may go back to the main page.
+- The key stays reachable from an isolated world through both storage and the frame's own request record.
+
+## Unchanged
+
+- Sender authorization: the conversation's own phone number, never a contact name.
+- A reply whose outcome is unknown is still never sent twice.
 
 No Authenticode/code-signing certificate is included in this release.

@@ -78,6 +78,16 @@ const googleVoiceSMSNetworkCaptureJS = `
           if (store2) store2.setItem('__flipAiGVSend', body);
         } catch (_) {}
       }
+      // The key this session was served, left where another world in this
+      // frame can read it. Without it FlipAi signs requests with a built-in
+      // key that the service answers RESOURCE_EXHAUSTED.
+      try {
+        const key = keyOf(raw);
+        if (key) {
+          const store3 = globalThis.localStorage || globalThis.sessionStorage;
+          if (store3) store3.setItem('__flipAiGVKey', key);
+        }
+      } catch (_) {}
       if (!headers || !headers['authorization']) return;
       store.template = { at: Date.now(), url: String(raw), key: keyOf(raw), origin: String(location.origin || ''), headers: headers };
     } catch (_) {}
