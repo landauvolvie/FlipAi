@@ -38,6 +38,10 @@ func init() {
 		`function source(e){if(e.stage==='reply'||e.stage==='gmail'||e.stage==='security'||e.stage==='routing')return 'Google Voice';if(e.stage==='agent')return 'Agent';return 'FlipAi';}`,
 		`function source(e){if(e.stage==='reply'||e.stage==='gmail'||e.stage==='google_voice'||e.stage==='security'||e.stage==='routing')return 'Google Voice';if(e.stage==='agent')return 'Agent';return 'FlipAi';}`, 1)
 	body = strings.Replace(body,
+		`if(e.level==='warn')return {name:'Attention',tone:'warn'};`,
+		`if(e.stage==='security'&&/^Blocked Google Voice SMS/i.test(e.message||''))return {name:'Blocked',tone:'warn'};
+    if(e.level==='warn')return {name:'Attention',tone:'warn'};`, 1)
+	body = strings.Replace(body,
 		`if(e.stage==='gmail')return {name:'Received',tone:'info'};`,
 		`if(e.stage==='gmail'||e.stage==='google_voice')return {name:'Received',tone:'info'};`, 1)
 	body = strings.Replace(body,
