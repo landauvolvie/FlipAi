@@ -119,14 +119,38 @@ func smsCommandCandidates(raw string) []string {
 	return candidates
 }
 
+// stripSMSRouteCommand recognizes both the normal public form (OW: task) and
+// the fresh-session form (OW NEW: task or OW NEW). The word is configurable
+// and comparisons are case-insensitive, so "OW new:" works with the default.
+func stripSMSRouteCommand(candidate, prefix, newWord string) (tail string, fresh bool, ok bool) {
+	candidate = strings.TrimSpace(candidate)
+	prefix = strings.TrimSpace(prefix)
+	newWord = strings.TrimSpace(newWord)
+	if candidate == "" || prefix == "" {
+		return "", false, false
+	}
+	if i := strings.Index(candidate, ":"); i > 0 {
+		head := strings.Fields(strings.TrimSpace(candidate[:i]))
+		switch {
+		case len(head) == 1 && strings.EqualFold(head[0], prefix):
+			return strings.TrimSpace(candidate[i+1:]), false, true
+		case len(head) == 2 && newWord != "" && strings.EqualFold(head[0], prefix) && strings.EqualFold(head[1], newWord):
+			return strings.TrimSpace(candidate[i+1:]), true, true
+		}
+	}
+	fields := strings.Fields(candidate)
+	if len(fields) == 2 && newWord != "" && strings.EqualFold(fields[0], prefix) && strings.EqualFold(fields[1], newWord) {
+		return "", true, true
+	}
+	return "", false, false
+}
+
 func routeMatchesCommand(candidate string, route smsRouteSpec, newWord string) bool {
 	if route.Prefix == "" {
 		return false
 	}
-	if _, ok := stripAgentCommandPrefix(candidate, route.Prefix); ok {
-		return true
-	}
-	return isAgentNewSession(candidate, route.Prefix, newWord)
+	_, _, ok := stripSMSRouteCommand(candidate, route.Prefix, newWord)
+	return ok
 }
 
 func explicitSMSRoute(raw string, cfg Config) string {
@@ -254,33 +278,58 @@ func underlyingPrefixForRoute(cfg Config, route smsRouteSpec) string {
 	}
 }
 
-func rewriteSMSRoutePrefix(raw, from, to string) string {
-	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
-	if from == "" || to == "" || strings.EqualFold(from, to) {
-		return raw
+// rewriteSMSRouteCommand converts the selected public/legacy route into the
+// existing internal parser prefix and reports whether NEW was requested. It
+// deliberately strips the inline NEW modifier from a task-bearing command; the
+// fresh flag travels separately on remoteCommand.New, so downstream parsers see
+// the same prompt they have always handled.
+func rewriteSMSRouteCommand(raw string, fromPrefixes []string, to, newWord string) (string, bool) {
+	to = strings.TrimSpace(to)
+	if to == "" {
+		return raw, false
 	}
-	rewrite := func(value string) (string, bool) {
-		if tail, ok := stripAgentCommandPrefix(value, from); ok {
-			return to + ": " + tail, true
+	rewrite := func(value string) (string, bool, bool) {
+		for _, from := range fromPrefixes {
+			from = strings.TrimSpace(from)
+			if from == "" {
+				continue
+			}
+			tail, fresh, ok := stripSMSRouteCommand(value, from, newWord)
+			if !ok {
+				continue
+			}
+			if fresh {
+				if tail == "" {
+					return to + " " + newWord, true, true
+				}
+				return to + ": " + tail, true, true
+			}
+			if strings.EqualFold(from, to) {
+				return value, false, true
+			}
+			return to + ": " + tail, false, true
 		}
-		fields := strings.Fields(strings.TrimSpace(value))
-		if len(fields) == 2 && strings.EqualFold(fields[0], from) {
-			return to + " " + fields[1], true
-		}
-		return value, false
+		return value, false, false
 	}
-	if out, ok := rewrite(raw); ok {
-		return out
+	if out, fresh, ok := rewrite(raw); ok {
+		return out, fresh
 	}
 	fields := strings.Fields(strings.TrimSpace(raw))
 	if len(fields) > 1 {
 		security := fields[0]
 		rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), security))
-		if out, ok := rewrite(rest); ok {
-			return security + " " + out
+		if out, fresh, ok := rewrite(rest); ok {
+			return security + " " + out, fresh
 		}
 	}
-	return raw
+	return raw, false
+}
+
+// rewriteSMSRoutePrefix keeps the old helper available to tests/callers that
+// only need prefix translation. Fresh-session parsing uses rewriteSMSRouteCommand.
+func rewriteSMSRoutePrefix(raw, from, to string) string {
+	out, _ := rewriteSMSRouteCommand(raw, []string{from}, to, defaultNewSessionCommand)
+	return out
 }
 
 func markBrowserModeCommand(command, mode string) string {
