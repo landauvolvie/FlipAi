@@ -472,7 +472,7 @@ func TestGoogleVoiceSMSSessionFactsComeFromTheCallingFrame(t *testing.T) {
 		if end := strings.Index(body, "\nfunc "); end > 0 {
 			body = body[:end]
 		}
-		if !strings.Contains(body, "googleVoiceSMSAPIFrameContext(") && !strings.Contains(body, "googleVoiceSMSEvalInAPIFrame(") {
+		if !strings.Contains(body, "googleVoiceSMSAPIFrameContext(") && !strings.Contains(body, "googleVoiceSMSReadFromAPIFrame(") {
 			t.Fatalf("%s reads the main page again, where the service is never called", fn)
 		}
 	}
@@ -497,5 +497,52 @@ func TestGoogleVoiceSMSKeyIsReachableFromAnIsolatedWorld(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the key lookup lost a source an isolated world can use: %q", want)
 		}
+	}
+}
+
+// An evaluation that succeeds and returns nothing is not an answer. Stopping on
+// a bare nil error would skip the main frame whenever the proxy frame exists but
+// the call was made elsewhere -- and Google has moved that before.
+func TestGoogleVoiceSMSFrameLookupFallsBackOnAnEmptyAnswer(t *testing.T) {
+	raw, err := readGoogleVoiceSMSSource(t, "google_voice_sms_api_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(raw, "func googleVoiceSMSReadFromAPIFrame(")
+	if start < 0 {
+		t.Fatal("the frame-aware lookup is gone")
+	}
+	body := raw[start:]
+	if end := strings.Index(body, "\nfunc "); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "usable(got)") {
+		t.Fatal("the lookup accepts an empty answer from the frame and never tries the main page")
+	}
+	if strings.Count(body, "usable(got)") < 2 {
+		t.Fatal("only one of the two lookups checks whether the answer is usable")
+	}
+	if !strings.Contains(body, "voiceEvalInContext(") || !strings.Contains(body, "voiceEval(d,") {
+		t.Fatal("the lookup no longer tries both the calling frame and the main page")
+	}
+}
+
+// The client version and the authorization the signing origin is recovered from
+// are only useful if the isolated world can read them, so they cross the same
+// way the key and the send body do.
+func TestGoogleVoiceSMSTemplateCrossesWorldsThroughStorage(t *testing.T) {
+	if !strings.Contains(googleVoiceSMSNetworkCaptureJS, "setItem('__flipAiGVTemplate'") {
+		t.Fatal("the request template is not left anywhere an isolated world can reach it")
+	}
+	if !strings.Contains(googleVoiceSMSCaptureTemplateJS, "getItem('__flipAiGVTemplate')") {
+		t.Fatal("the template reader looks only at globals, which an isolated world cannot see")
+	}
+	if !strings.Contains(googleVoiceSMSCaptureTemplateJS, "__flipAiGVNet") {
+		t.Fatal("the template reader no longer checks the same-world globals first")
+	}
+	// It still has to parse back into something usable.
+	got := parseGoogleVoiceSMSAuthTemplate(`{"at":1,"key":"AIzaLIVEKEYLIVEKEYLIVEKEY0","headers":{"x-client-version":"7"}}`)
+	if got.Key == "" || got.header("x-client-version") != "7" {
+		t.Fatalf("a stored template did not read back: %+v", got)
 	}
 }

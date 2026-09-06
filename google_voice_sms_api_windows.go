@@ -97,13 +97,22 @@ func googleVoiceSMSAPIAccountSlot(d voiceDevTools) string {
 // from the frame that made them. Asking the main page finds none of it and
 // quietly returns nothing, which is indistinguishable from a page that has not
 // called the service yet.
-func googleVoiceSMSEvalInAPIFrame(d voiceDevTools, expression string, out any) error {
+// The caller says what a usable answer looks like, because an evaluation that
+// succeeds and returns nothing is not an answer. Stopping on a bare nil error
+// would skip the main frame entirely whenever the proxy frame exists but the
+// call was made elsewhere -- and Google has moved that before.
+func googleVoiceSMSReadFromAPIFrame(d voiceDevTools, expression string, usable func(string) bool) string {
 	if contextID, ok := googleVoiceSMSAPIFrameContext(d); ok {
-		if err := voiceEvalInContext(d, expression, false, contextID, out); err == nil {
-			return nil
+		var got string
+		if err := voiceEvalInContext(d, expression, false, contextID, &got); err == nil && usable(got) {
+			return got
 		}
 	}
-	return voiceEval(d, expression, false, out)
+	var got string
+	if err := voiceEval(d, expression, false, &got); err == nil && usable(got) {
+		return got
+	}
+	return ""
 }
 
 // googleVoiceSMSCaptureTemplate asks for the last request made to the Voice web
@@ -111,17 +120,10 @@ func googleVoiceSMSEvalInAPIFrame(d voiceDevTools, expression string, out any) e
 // version, and -- through its authorization value -- the origin Google signs
 // with.
 func googleVoiceSMSCaptureTemplate(d voiceDevTools) googleVoiceSMSAuthTemplate {
-	var raw string
-	if contextID, ok := googleVoiceSMSAPIFrameContext(d); ok {
-		if err := voiceEvalInContext(d, googleVoiceSMSCaptureTemplateJS, false, contextID, &raw); err == nil {
-			if got := parseGoogleVoiceSMSAuthTemplate(raw); got.Key != "" || len(got.Headers) > 0 {
-				return got
-			}
-		}
-	}
-	if err := voiceEval(d, googleVoiceSMSCaptureTemplateJS, false, &raw); err != nil {
-		return googleVoiceSMSAuthTemplate{}
-	}
+	raw := googleVoiceSMSReadFromAPIFrame(d, googleVoiceSMSCaptureTemplateJS, func(v string) bool {
+		got := parseGoogleVoiceSMSAuthTemplate(v)
+		return got.Key != "" || len(got.Headers) > 0
+	})
 	return parseGoogleVoiceSMSAuthTemplate(raw)
 }
 
@@ -154,11 +156,9 @@ func googleVoiceSMSAPIKeyFromPage(d voiceDevTools) string {
       const k=u.searchParams.get('key');if(k&&/^AIza[0-9A-Za-z_-]{20,}$/.test(k))return k}}catch(_){}
   }
 }catch(_){}return ''})()`
-	var key string
-	if err := googleVoiceSMSEvalInAPIFrame(d, expression, &key); err == nil && strings.HasPrefix(key, "AIza") {
-		return key
-	}
-	return ""
+	return googleVoiceSMSReadFromAPIFrame(d, expression, func(v string) bool {
+		return strings.HasPrefix(v, "AIza")
+	})
 }
 
 func googleVoiceSMSAPIUserAgent(d voiceDevTools) string {

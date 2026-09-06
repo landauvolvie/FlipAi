@@ -90,6 +90,13 @@ const googleVoiceSMSNetworkCaptureJS = `
       } catch (_) {}
       if (!headers || !headers['authorization']) return;
       store.template = { at: Date.now(), url: String(raw), key: keyOf(raw), origin: String(location.origin || ''), headers: headers };
+      // The client version and the authorization the signing origin is
+      // recovered from live here. Like the key, they are only useful if a
+      // different world in this frame can read them back.
+      try {
+        const store4 = globalThis.localStorage || globalThis.sessionStorage;
+        if (store4) store4.setItem('__flipAiGVTemplate', JSON.stringify(store.template));
+      } catch (_) {}
     } catch (_) {}
   };
   const noteResponse = (raw, text) => {
@@ -178,7 +185,13 @@ const googleVoiceSMSNetworkCaptureJS = `
 // googleVoiceSMSCaptureTemplateJS returns the most recent request template the
 // page produced, or an empty object when the page has not called the service
 // yet.
-const googleVoiceSMSCaptureTemplateJS = `(()=>{try{return JSON.stringify(globalThis.__flipAiGVNet&&globalThis.__flipAiGVNet.template||{})}catch(_){return '{}'}})()`
+const googleVoiceSMSCaptureTemplateJS = `(()=>{try{
+  const live=globalThis.__flipAiGVNet&&globalThis.__flipAiGVNet.template;
+  if(live)return JSON.stringify(live);
+  for(const s of [globalThis.localStorage,globalThis.sessionStorage]){
+    try{const v=s&&s.getItem('__flipAiGVTemplate');if(v)return v}catch(_){}
+  }
+}catch(_){}return '{}'})()`
 
 // googleVoiceSMSCaptureDrainJS hands over the inbox responses the page received
 // since the last drain and clears them, staying inside a byte budget so one
