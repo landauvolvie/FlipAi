@@ -71,16 +71,26 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 	}
 	var payload struct {
 		Sender string `json:"sender"`
+		Thread string `json:"thread"`
 		Body   string `json:"body"`
 	}
 	if err := json.Unmarshal([]byte(report.Captured[0]), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Sender != "8455550142" || payload.Body != "X: hi" {
-		t.Fatalf("wrong SMS payload: %+v", payload)
+	if payload.Sender != "8455550142" {
+		t.Fatalf("sender was not taken from trusted contact metadata; got %+v", payload)
+	}
+	if payload.Sender == "2125550199" {
+		t.Fatal("SMS body phone number was incorrectly used as sender")
+	}
+	if payload.Thread != "/u/2/messages/contact" {
+		t.Fatalf("wrong Google Voice thread: %+v", payload)
+	}
+	if payload.Body != "X: call 212-555-0199" {
+		t.Fatalf("wrong SMS body: %+v", payload)
 	}
 	if len(report.AfterOutgoing) != len(report.Captured) {
 		t.Fatalf("outgoing Voice row was mistaken for inbound SMS: before=%v after=%v", report.Captured, report.AfterOutgoing)
 	}
-	fmt.Fprint(os.Stdout, "direct Google Voice SMS browser detection passed\n")
+	fmt.Fprint(os.Stdout, "direct Google Voice SMS browser identity detection passed\n")
 }
