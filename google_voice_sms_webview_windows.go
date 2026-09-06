@@ -236,6 +236,7 @@ func runGoogleVoiceSMSWebView(dataDir string, visible bool) error {
 	defer close(stop)
 	go runGoogleVoiceSMSAPIInboxLoop(dataDir, dev, stop)
 	go runGoogleVoiceSMSOutboundLoop(dataDir, dev, stop)
+	go runGoogleVoiceSMSMediaCaptureLoop(dataDir, dev, stop)
 	quitStop := watchQuitAndClose(uintptr(w.Window()))
 	defer close(quitStop)
 
