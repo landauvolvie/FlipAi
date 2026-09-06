@@ -36,7 +36,13 @@ type GoogleVoiceSMSRuntimeState struct {
 // proving that the background connection is alive. Every readiness decision --
 // the Connections card, Test, and the outbound send gate -- uses this single
 // window so they can never disagree about what "connected" means.
-const googleVoiceSMSFreshWindow = 10 * time.Second
+//
+// It must comfortably outlast googleVoiceSMSPollInterval, because that poll is
+// what stamps the probe. A window shorter than the gap between polls would
+// declare a perfectly healthy listener dead between two of its own heartbeats,
+// flickering the Connections card and blocking replies for the gap.
+// TestGoogleVoiceSMSReadinessOutlastsThePollThatFeedsIt holds the two together.
+const googleVoiceSMSFreshWindow = 60 * time.Second
 
 // googleVoiceSMSProbeFresh is the one definition of a live listener: the
 // background browser recorded a successful Google Voice poll moments ago.
