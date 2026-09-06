@@ -238,18 +238,21 @@ func markBrowserModeCommand(command, mode string) string {
 
 func extractBrowserModeCommand(command string) (string, string) {
 	command = strings.TrimSpace(command)
-	if !strings.HasPrefix(command, browserModeMarkerStart) {
+	start := strings.Index(command, browserModeMarkerStart)
+	if start < 0 {
 		return "", command
 	}
-	end := strings.Index(command, browserModeMarkerEnd)
-	if end < len(browserModeMarkerStart) {
+	payloadStart := start + len(browserModeMarkerStart)
+	relEnd := strings.Index(command[payloadStart:], browserModeMarkerEnd)
+	if relEnd < 0 {
 		return "", command
 	}
-	mode := strings.ToLower(strings.TrimSpace(command[len(browserModeMarkerStart):end]))
-	rest := strings.TrimSpace(command[end+len(browserModeMarkerEnd):])
+	end := payloadStart + relEnd
+	mode := strings.ToLower(strings.TrimSpace(command[payloadStart:end]))
+	clean := strings.TrimSpace(command[:start] + command[end+len(browserModeMarkerEnd):])
 	switch mode {
 	case browserModeChat, browserModeWork, browserModeCode, browserModeCowork:
-		return mode, rest
+		return mode, clean
 	default:
 		return "", command
 	}
