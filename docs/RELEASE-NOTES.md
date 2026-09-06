@@ -1,26 +1,25 @@
-# FlipAi v0.46.35
+# FlipAi v0.46.36
 
-Google Voice SMS sign-in and browser-isolation fix.
+Google Voice SMS phone-authorization and exact-thread reply hardening.
 
-## Google Voice SMS
+## Google Voice SMS security
 
-- Replaced the v0.46.34 shared-profile hidden listener that could remain stuck on **Starting** with `Runtime.evaluate` failures.
-- Direct Google Voice SMS now has its **own private WebView2 profile and process**, completely separate from the Google Voice calling browser/profile.
-- Pressing **Connect** opens a visible Google Voice SMS sign-in window, like the browser-chat connections. FlipAi does not show Connected until that SMS browser is signed in and the Messages page is verified ready.
-- If Direct Google Voice is selected but not actually connected, Connections now shows **Retry sign-in** instead of the misleading Disconnect state.
-- While sign-in is open, the card clearly shows **Sign in** / **Opening…** rather than Needs attention.
-- Disconnect stops the SMS worker and removes only the private SMS browser profile. Google Voice calling remains signed in and untouched.
-- The SMS listener restores in its own hidden background browser after restart once the dedicated SMS profile has been connected.
-- The SMS page reports health directly back to FlipAi instead of using `Runtime.evaluate` as the liveness test.
-- If FlipAi's background host is running in Windows Session 0, the Connect request is handed to the signed-in tray process so the Google Voice SMS sign-in window opens on the user's visible desktop instead of an invisible session.
-- Incoming texts and outgoing replies are handled only by the dedicated SMS browser, preventing the calling browser from becoming a second reader or sender.
+- Direct Google Voice SMS authorization is now based only on the sender's normalized phone number. A saved Google Voice contact name is never treated as permission.
+- When Google Voice displays a contact name instead of the number, FlipAi resolves the phone number from Google Voice identity metadata before authorization.
+- Phone numbers written inside the SMS body cannot be mistaken for the sender. The real-browser regression test includes a different valid-looking phone number inside the message text.
+- Every inbound Google Voice text is logged before authorization. Unauthorized, unresolved, calls-only, or unverifiable conversations are blocked before they can reach the queue or any AI agent, and no reply is sent.
+- Activity shows blocked Google Voice SMS events with **Blocked** status, the reason, and the normalized sender phone number.
+- SMS permission continues to respect each agent's existing phone permissions; a calls-only number cannot gain SMS access through the direct Google Voice transport.
 
-## Routing
+## Exact reply targeting
 
-All existing SMS routing remains unchanged: Codex, Claude Code, ChatGPT Chat, Claude Chat, Gemini Chat, and Grok Chat continue through the existing allowlist, security-code, sticky-agent, queue, STATUS, NEW, acknowledgement, progress, and reply paths.
+- Replies are bound to both the exact inbound Google Voice Messages thread and the same normalized sender phone number.
+- Before sending, FlipAi verifies that the exact conversation row still resolves to the expected phone number. A missing or mismatched thread fails closed instead of sending elsewhere.
+- Contact-name searching and the old ambiguous "single suggestion" fallback are not used for replies.
 
-## Calling isolation
+## Routing and calling
 
-- Existing Google Voice calling settings, call state machine, answering logic, browser profile, and audio routing are unchanged.
+- Existing routing codes, security codes, sticky-agent behavior, STATUS, NEW, acknowledgements, progress updates, and all supported agents remain unchanged.
+- Google Voice calling remains separate and untouched.
 
 No Authenticode/code-signing certificate is included in this release.
