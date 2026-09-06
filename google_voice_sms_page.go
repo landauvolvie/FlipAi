@@ -13,11 +13,13 @@ const googleVoiceSMSInitScript = `
   globalThis.__flipAiDirectSMSInstalled = true;
   const state = {armed:false, rows:new Map(), recent:new Map(), pending:new Set(), chain:Promise.resolve()};
   const norm = v => String(v||'').replace(/\s+/g,' ').trim();
-  const digits = v => {
+  const phones = v => {
+    const out=new Set();
     const m=String(v||'').match(/(?:\+?1[\s().-]*)?(?:\d[\s().-]*){10}/g)||[];
-    for(const x of m){ const d=x.replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); if(d.length===10)return d; }
-    return '';
+    for(const x of m){ const d=x.replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); if(d.length===10)out.add(d); }
+    return [...out];
   };
+  const digits = v => phones(v)[0]||'';
   const accountSlot = () => (String(location.pathname||'').match(/^\/u\/(\d+)/i)||[])[1]||'0';
   const threadForPhone = phone => phone ? '/u/'+accountSlot()+'/messages?itemId='+encodeURIComponent('t.+1'+phone) : '';
   const itemInfo = raw => {
@@ -69,6 +71,15 @@ const googleVoiceSMSInitScript = `
       const item=itemInfo(v);if(item.thread)return item;
       if(!phone){const p=digits(v);if(p)phone=p;}
     }
+    return {thread:threadForPhone(phone),phone};
+  };
+  const openedHeaderInfo = el => {
+    const trusted=trustedInfo(el);
+    let visible=[];try{visible=phones(norm(el?.innerText||el?.textContent||''))}catch(_){}
+    if(visible.length!==1)return trusted.thread&&trusted.phone?trusted:{thread:'',phone:''};
+    const phone=visible[0];
+    if(trusted.phone&&trusted.phone!==phone)return {thread:'',phone:''};
+    if(trusted.thread&&trusted.phone)return trusted;
     return {thread:threadForPhone(phone),phone};
   };
   const infoKey = info => info&&info.thread&&info.phone ? info.thread+'\u0000'+info.phone : '';
@@ -126,14 +137,20 @@ const googleVoiceSMSInitScript = `
   };
   const selectedConversationInfo = () => {
     const candidates=[];
-    const selectors=[
-      '[aria-selected="true"]','[aria-current="true"]','[data-selected="true"]',
-      'gv-conversation-header','gv-thread-header','[class*="conversation-header" i]',
-      '[class*="thread-header" i]','[class*="contact-header" i]'
-    ];
-    for(const sel of selectors){
+    const selectedSelectors=['[aria-selected="true"]','[aria-current="true"]','[data-selected="true"]'];
+    for(const sel of selectedSelectors){
       let list=[];try{list=document.querySelectorAll(sel)}catch(_){}
       for(const el of list){const info=trustedInfo(el);if(info.thread&&info.phone)candidates.push(info);if(candidates.length>80)break}
+      if(candidates.length>80)break;
+    }
+    const headerSelectors=[
+      'gv-message-list-header','gv-thread-details gv-message-list-header',
+      'gv-conversation-header','gv-thread-header','gv-thread-details header',
+      '[class*="conversation-header" i]','[class*="thread-header" i]','[class*="contact-header" i]'
+    ];
+    for(const sel of headerSelectors){
+      let list=[];try{list=document.querySelectorAll(sel)}catch(_){}
+      for(const el of list){const info=openedHeaderInfo(el);if(info.thread&&info.phone)candidates.push(info);if(candidates.length>80)break}
       if(candidates.length>80)break;
     }
     const unique=uniqueInfos(candidates);
