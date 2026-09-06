@@ -329,7 +329,9 @@ func googleVoiceSMSAPIRequestViaPage(d voiceDevTools, session googleVoiceSMSAPIS
 		}
 		return nil, googleVoiceSMSUnknownOutcome(errors.New(detail), 0)
 	}
-	if err := googleVoiceSMSAPIStatusError(result.Status, 0, result.Text); err != nil {
+	// Google's own requested wait, when the response allows FlipAi to read it.
+	retryAfter := parseGoogleVoiceSMSRetryAfter(result.RetryAfter, time.Now())
+	if err := googleVoiceSMSAPIStatusError(result.Status, retryAfter, result.Text); err != nil {
 		return nil, err
 	}
 	return []byte(result.Text), nil

@@ -67,6 +67,13 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 			strings.Contains(expression, "grokResponse")) {
 		return chatGPTTurnDevToolsTimeout
 	}
+	// A Google Voice web-service request runs in the page and can take as long
+	// as any network call. The generic probe deadline is far shorter, and a
+	// fetch the host stops waiting for is not cancelled -- it can still deliver
+	// the text while FlipAi reports the reply as failed.
+	if await && strings.Contains(expression, googleVoiceSMSPageRequestMarker) {
+		return googleVoiceSMSPageRequestDeadline
+	}
 	return voiceDevToolsTimeout
 }
 

@@ -185,11 +185,26 @@ type googleVoiceSMSPageResponse struct {
 	Status int    `json:"status"`
 	Text   string `json:"text"`
 	Error  string `json:"error,omitempty"`
+
+	// RetryAfter is Google's own requested wait. A cross-origin response only
+	// exposes a header when the server says it may be read, so this can be
+	// empty even when Google sent one; the backoff schedule covers that.
+	RetryAfter string `json:"retryAfter,omitempty"`
 }
+
+// googleVoiceSMSPageRequestMarker lets the DevTools channel recognize this
+// expression and give it a network-sized deadline instead of the short one a
+// page probe gets. See webViewDevToolsCallTimeout.
+const googleVoiceSMSPageRequestMarker = "__flipAiGVRequest"
 
 // googleVoiceSMSPageRequestJS builds the expression that performs one request in
 // the page. Every value is JSON-encoded into the source, so nothing in a URL,
 // header or message body can end the expression and become code.
+//
+// The fetch carries its own deadline, comfortably inside the one the host
+// waits. A fetch the host stopped waiting for keeps running in the page and can
+// still deliver the text, so it is the page that gives up first: that way the
+// outcome is reported rather than guessed at.
 func googleVoiceSMSPageRequestJS(url string, headers map[string]string, body string) (string, error) {
 	encodedURL, err := json.Marshal(url)
 	if err != nil {
@@ -203,14 +218,27 @@ func googleVoiceSMSPageRequestJS(url string, headers map[string]string, body str
 	if err != nil {
 		return "", err
 	}
-	return `(async()=>{try{` +
-		`const r=await fetch(` + string(encodedURL) + `,{method:'POST',credentials:'include',headers:` + string(encodedHeaders) + `,body:` + string(encodedBody) + `});` +
+	limit := strconv.Itoa(googleVoiceSMSPageResponseLimit)
+	return `(async()=>{const ` + googleVoiceSMSPageRequestMarker + `=1;` +
+		`const c=new AbortController();const k=setTimeout(()=>c.abort(),` + strconv.FormatInt(googleVoiceSMSPageRequestTimeout.Milliseconds(), 10) + `);try{` +
+		`const r=await fetch(` + string(encodedURL) + `,{method:'POST',credentials:'include',signal:c.signal,headers:` + string(encodedHeaders) + `,body:` + string(encodedBody) + `});` +
 		`let t='';try{t=await r.text()}catch(_){}` +
-		`return JSON.stringify({status:r.status,text:t.length>` + strconv.Itoa(googleVoiceSMSPageResponseLimit) + `?t.slice(0,` + strconv.Itoa(googleVoiceSMSPageResponseLimit) + `):t})` +
-		`}catch(e){return JSON.stringify({status:0,error:String((e&&e.message)||e)})}})()`, nil
+		`let ra='';try{ra=r.headers.get('Retry-After')||''}catch(_){}` +
+		`return JSON.stringify({status:r.status,retryAfter:ra,text:t.length>` + limit + `?t.slice(0,` + limit + `):t})` +
+		`}catch(e){return JSON.stringify({status:0,error:String((e&&e.message)||e)})}finally{clearTimeout(k)}})()`, nil
 }
 
 const googleVoiceSMSPageResponseLimit = 1 << 20
+
+// googleVoiceSMSPageRequestTimeout is how long the page waits for Google. It
+// matches the timeout the direct HTTP client used, so moving the request into
+// the page did not quietly make slow connections fail.
+const googleVoiceSMSPageRequestTimeout = 20 * time.Second
+
+// googleVoiceSMSPageRequestDeadline is how long the host waits for the page. It
+// must outlast the fetch's own deadline, so the page always gets to report the
+// outcome instead of the host timing out on a request that is still running.
+const googleVoiceSMSPageRequestDeadline = googleVoiceSMSPageRequestTimeout + 10*time.Second
 
 func parseGoogleVoiceSMSPageResponse(raw string) (googleVoiceSMSPageResponse, error) {
 	var out googleVoiceSMSPageResponse

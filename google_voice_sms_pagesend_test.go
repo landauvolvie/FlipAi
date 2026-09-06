@@ -146,3 +146,56 @@ func readGoogleVoiceSMSSource(t *testing.T, name string) (string, error) {
 	raw, err := os.ReadFile(name)
 	return string(raw), err
 }
+
+// Google's own requested wait must survive the page path. Retrying a rate
+// limit sooner than Google asked extends it, which is the failure the
+// Retry-After handling exists to prevent.
+func TestGoogleVoiceSMSPageResponseCarriesRetryAfter(t *testing.T) {
+	raw, err := json.Marshal(googleVoiceSMSPageResponse{Status: 429, RetryAfter: "45", Text: `{"error":{"message":"slow down"}}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseGoogleVoiceSMSPageResponse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := parseGoogleVoiceSMSRetryAfter(got.RetryAfter, time.Now())
+	if wait != 45*time.Second {
+		t.Fatalf("Google's requested wait was lost on the page path: %v", wait)
+	}
+	if backoff := googleVoiceSMSSendBackoff(0, wait); backoff != googleVoiceSMSSendMaxBackoff {
+		t.Fatalf("the requested wait did not reach the backoff: %v", backoff)
+	}
+	// A response that does not expose the header still works, on the schedule.
+	if wait := parseGoogleVoiceSMSRetryAfter("", time.Now()); wait != 0 {
+		t.Fatalf("an unexposed header produced a wait: %v", wait)
+	}
+
+	expression, err := googleVoiceSMSPageRequestJS("https://example.invalid", nil, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(expression, "Retry-After") {
+		t.Fatal("the page request does not read Retry-After back")
+	}
+}
+
+// The page request is a network call, so the host must wait longer than the
+// page does. A fetch the host abandons is not cancelled and can still deliver
+// the text while FlipAi reports the reply as failed.
+func TestGoogleVoiceSMSPageRequestOutlivesTheProbeDeadline(t *testing.T) {
+	if googleVoiceSMSPageRequestDeadline <= googleVoiceSMSPageRequestTimeout {
+		t.Fatalf("the host (%v) does not outlast the page's own deadline (%v)",
+			googleVoiceSMSPageRequestDeadline, googleVoiceSMSPageRequestTimeout)
+	}
+	expression, err := googleVoiceSMSPageRequestJS("https://example.invalid", nil, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(expression, googleVoiceSMSPageRequestMarker) {
+		t.Fatal("the page request is not marked, so the channel gives it the short probe deadline")
+	}
+	if !strings.Contains(expression, "AbortController") {
+		t.Fatal("the page request has no deadline of its own")
+	}
+}
