@@ -21,10 +21,13 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 	pw := playwrightModule(t)
 	dir := t.TempDir()
 	fixture := filepath.Join(dir, "voice-sms.html")
+	// Put a clickable, titled decoy phone number inside the message body before
+	// the real contact identity in DOM order. A broad descendant scan would pick
+	// 212-555-0199; the detector must authenticate only the contact metadata.
 	html := `<!doctype html><html><head><meta charset="utf-8"><title>Voice messages</title></head><body>
 <gv-conversation-list-item role="listitem" aria-label="US Mobile">
-  <a href="/u/2/messages/contact" title="+1 (845) 555-0142"><span class="contact">US Mobile</span></a>
-  <span id="snippet" class="snippet">old message</span>
+  <span id="snippet" class="snippet"><span id="messageText">old message</span> <a class="body-link" href="tel:+12125550199" title="212-555-0199">212-555-0199</a></span>
+  <a href="/u/2/messages/contact"><span class="contact" data-phone="+1 (845) 555-0142">US Mobile</span></a>
 </gv-conversation-list-item>
 <script>globalThis.__captured=[];globalThis.flipVoiceSMS=(payload)=>globalThis.__captured.push(payload);</script>
 <script>` + googleVoiceSMSInitScript + `</script></body></html>`
@@ -81,7 +84,7 @@ func TestGoogleVoiceSMSDetectionInRealBrowser(t *testing.T) {
 		t.Fatalf("sender was not taken from trusted contact metadata; got %+v", payload)
 	}
 	if payload.Sender == "2125550199" {
-		t.Fatal("SMS body phone number was incorrectly used as sender")
+		t.Fatal("clickable SMS-body phone number was incorrectly used as sender")
 	}
 	if payload.Thread != "/u/2/messages/contact" {
 		t.Fatalf("wrong Google Voice thread: %+v", payload)
