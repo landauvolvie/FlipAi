@@ -2,24 +2,43 @@ package main
 
 import "strings"
 
-// Add direct Google Voice SMS as a second connection choice without moving or
-// changing the existing Google Voice calling controls injected on this page.
+// removeTemplateSectionContaining removes one top-level <section> from a page
+// template without deleting the implementation behind it. It is intentionally
+// small and deterministic: this is used only for the historical Gmail card,
+// whose source stays in Git (and on archive/gmail-voice-bridge-v0.46.50) so it
+// can be restored later without rebuilding the backend.
+func removeTemplateSectionContaining(body, needle string) string {
+	at := strings.Index(body, needle)
+	if at < 0 {
+		return body
+	}
+	start := strings.LastIndex(body[:at], "<section")
+	if start < 0 {
+		return body
+	}
+	relEnd := strings.Index(body[at:], "</section>")
+	if relEnd < 0 {
+		return body
+	}
+	end := at + relEnd + len("</section>")
+	return body[:start] + body[end:]
+}
+
+// Direct Google Voice is the only SMS connection shown in the current app.
+// The Gmail/IMAP/OAuth transport code is deliberately retained in the repo for
+// rollback, but there is no Gmail connect/manage surface in the product UI.
 func init() {
 	body := connectionsHTML
-	// When Direct Google Voice is selected, the bridge's generic mail transport
-	// is healthy by design, but that does not mean Gmail itself is connected.
+	body = removeTemplateSectionContaining(body, "Gmail / Google Voice")
 	body = strings.Replace(body,
 		`<p>Configure how FlipAi reads Google Voice texts from Gmail and sends replies back.</p>`,
-		`<p>Choose how FlipAi receives Google Voice texts and sends replies back.</p>`, 1)
+		`<p>Connect the Google Voice account FlipAi uses to receive and send texts.</p>`, 1)
 	body = strings.Replace(body,
-		`<h2>Gmail / Google Voice <span class="pill {{if .S.GmailReady}}ok{{else}}warn{{end}}">{{if .S.GmailReady}}Connected{{else}}Not connected{{end}}</span></h2>`,
-		`<h2>Gmail / Google Voice <span class="pill {{if and .S.GmailReady (ne .S.GmailMethod "google_voice")}}ok{{else}}warn{{end}}">{{if and .S.GmailReady (ne .S.GmailMethod "google_voice")}}Connected{{else}}Not connected{{end}}</span></h2>`, 1)
-	body = strings.Replace(body,
-		`<div class="row"><div class="label">Authentication method</div><div class="value"><b>{{.S.GmailMethodLabel}}</b>{{if .S.GmailReady}}<span class="pill ok">Valid</span>{{else if .S.GmailMethod}}<span class="pill warn">Incomplete</span>{{end}}</div></div>`,
-		`<div class="row"><div class="label">Authentication method</div><div class="value"><b>{{.S.GmailMethodLabel}}</b>{{if eq .S.GmailMethod "google_voice"}}<span class="pill">Not selected</span>{{else if .S.GmailReady}}<span class="pill ok">Valid</span>{{else if .S.GmailMethod}}<span class="pill warn">Incomplete</span>{{end}}</div></div>`, 1)
-	body = strings.Replace(body,
-		`<div class="row"><div class="label">Reply address<span>FlipAi always answers the authenticated Google Voice thread the text arrived on.</span></div><div class="value"><b>Authenticated Voice thread</b>{{if .ReplyReady}}<span class="pill ok">Ready</span>{{else}}<span class="pill warn">Waiting</span>{{end}}</div></div>`,
-		`<div class="row"><div class="label">Reply address<span>FlipAi always answers the authenticated Google Voice thread the text arrived on.</span></div><div class="value"><b>Authenticated Voice thread</b>{{if eq .S.GmailMethod "google_voice"}}<span class="pill">Not using Gmail</span>{{else if .ReplyReady}}<span class="pill ok">Ready</span>{{else}}<span class="pill warn">Waiting</span>{{end}}</div></div>`, 1)
+		`<div class="page-actions">
+    <a class="btn" href="/connections">{{icon "refresh"}}Refresh</a>
+    <button class="btn accent" type="button" data-test="/gmail/test" data-test-busy="Checking Gmail">{{icon "send"}}Test Gmail</button>
+  </div>`,
+		`<div class="page-actions"><a class="btn" href="/connections">{{icon "refresh"}}Refresh</a></div>`, 1)
 
 	card := `
 <section class="card" id="gv-sms-connection">
@@ -28,7 +47,7 @@ func init() {
       <span class="bmark lg google">{{brand "google"}}</span>
       <div>
         <h2>Google Voice SMS <span id="gv-sms-pill" class="pill warn">Not connected</span></h2>
-        <p>Send and receive texts directly through a private Google Voice SMS browser. Gmail forwarding is not required.</p>
+        <p>Send and receive texts and media through FlipAi's private Google Voice browser. Email forwarding is not required.</p>
       </div>
     </div>
     <div class="head-actions">
@@ -39,9 +58,10 @@ func init() {
     <div class="rows">
       <div class="row"><div class="label">Google Voice SMS account<span>This has its own private browser profile. It is separate from Google Voice calling.</span></div><div class="value"><b id="gv-sms-signin">Checking…</b></div></div>
       <div class="row"><div class="label">SMS listener<span>After sign-in, the Messages page stays active in its own background browser.</span></div><div class="value"><b id="gv-sms-listener">Checking…</b></div></div>
-      <div class="row"><div class="label">SMS transport<span>Only one reader is active, so Gmail and direct Voice cannot answer the same text twice.</span></div><div class="value"><b id="gv-sms-mode">{{if eq .S.GmailMethod "google_voice"}}Direct Google Voice{{else}}Gmail / not selected{{end}}</b></div></div>
+      <div class="row"><div class="label">SMS transport<span>Google Voice is FlipAi's only active SMS reader.</span></div><div class="value"><b id="gv-sms-mode">{{if eq .S.GmailMethod "google_voice"}}Direct Google Voice{{else}}Not selected{{end}}</b></div></div>
+      <div class="row"><div class="label">MMS / attachments<span>Incoming photos, audio and supported video are passed to the selected agent as the actual file.</span></div><div class="value"><b>Direct file delivery</b></div></div>
     </div>
-    <p class="hint" id="gv-sms-note">Press Connect. FlipAi will open a Google Voice window for this SMS connection. Sign in there once; calling uses a different profile and is not changed.</p>
+    <p class="hint" id="gv-sms-note">Press Connect. FlipAi will open a Google Voice window for this SMS connection. Sign in there once; normal operation stays in the background.</p>
   </div>
 </section>
 <script>
@@ -63,7 +83,7 @@ func init() {
       signin.textContent=connected||s.signedIn?'Signed in':(loginActive?'Sign-in window open':(s.starting?'Opening sign-in…':'Not signed in'));
     }
     if(listener)listener.textContent=!selected?'Off':(connected?'Ready':(s.listenerRunning?'Starting…':'Not running'));
-    if(mode)mode.textContent=selected?'Direct Google Voice':'Gmail / not selected';
+    if(mode)mode.textContent=selected?'Direct Google Voice':'Not selected';
     if(connected) pill.textContent='Connected';
     else if(loginActive) pill.textContent='Sign in';
     else if(s.starting) pill.textContent='Opening…';
@@ -74,8 +94,8 @@ func init() {
     else if(loginActive){button.textContent='Cancel';button.className='btn';}
     else if(selected){button.textContent='Retry sign-in';button.className='btn accent';}
     else{button.textContent='Connect';button.className='btn accent';}
-    if(note&&connected)note.textContent='Direct Google Voice SMS is signed in and the Messages listener is verified ready.'+(s.listenerNote?' Last check: '+s.listenerNote+'.':'');
-    else if(note&&loginActive)note.textContent='Sign in to Google Voice in the separate window FlipAi opened. This SMS login is intentionally separate from calling.';
+    if(note&&connected)note.textContent='Google Voice SMS is signed in and its background Messages listener is verified ready.'+(s.listenerNote?' Last check: '+s.listenerNote+'.':'');
+    else if(note&&loginActive)note.textContent='Sign in to Google Voice in the separate window FlipAi opened. After setup, SMS runs hidden in the background.';
     else if(note&&s.starting)note.textContent='FlipAi is opening the separate Google Voice SMS sign-in window.';
     else if(note&&selected&&s.listenerError)note.textContent=s.listenerError;
     else if(note&&!selected)note.textContent='Press Connect. FlipAi will open a separate Google Voice SMS sign-in window.';
