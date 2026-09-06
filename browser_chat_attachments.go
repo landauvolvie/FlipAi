@@ -14,6 +14,9 @@ import (
 )
 
 const (
+	// Keep the historical marker spelling so every already-tested provider
+	// worker continues to recognize it. The payload is no longer image-only:
+	// it can carry any inbound media type FlipAi intentionally supports.
 	browserChatAttachmentMarkerStart = "[[FLIPAI_IMAGE_ATTACHMENTS:"
 	browserChatAttachmentMarkerEnd   = "]]"
 )
@@ -40,15 +43,15 @@ func parseBrowserChatAttachmentOnlyCommand(cfg Config, agent string, m GmailMess
 	if !isBrowserChatAgent(agent) {
 		return remoteCommand{}, errors.New("not a browser chat agent")
 	}
-	foundImage := false
+	found := false
 	for _, a := range m.Attachments {
-		if len(a.Data) > 0 && strings.HasPrefix(normalizeInboundMediaType(a.MediaType), "image/") {
-			foundImage = true
+		if len(a.Data) > 0 && supportedInboundMediaType(a.MediaType) {
+			found = true
 			break
 		}
 	}
-	if !foundImage {
-		return remoteCommand{}, fmt.Errorf("%s supports image attachments from Google Voice; no usable image was found", agentDisplayName(agent))
+	if !found {
+		return remoteCommand{}, fmt.Errorf("%s received no usable Google Voice media attachment", agentDisplayName(agent))
 	}
 	if agentSettings(cfg, agent).RequireCode {
 		return remoteCommand{}, fmt.Errorf("attachment-only commands cannot supply the %s text security code; include a caption beginning with the code", agentDisplayName(agent))
@@ -60,8 +63,8 @@ func preparedBrowserChatImages(in []InboundAttachment) ([]browserChatAttachment,
 	out := make([]browserChatAttachment, 0, len(in))
 	for _, a := range in {
 		mediaType := normalizeInboundMediaType(a.MediaType)
-		if !strings.HasPrefix(mediaType, "image/") {
-			return nil, fmt.Errorf("browser chat currently accepts image attachments from Google Voice; %s is %s", a.Filename, mediaType)
+		if !supportedInboundMediaType(mediaType) {
+			return nil, fmt.Errorf("browser chat does not relay attachment type %s (%s)", mediaType, a.Filename)
 		}
 		item := browserChatAttachment{Path: a.Path, Filename: a.Filename, MediaType: mediaType}
 		if err := validatePreparedBrowserChatImage(item); err != nil {
@@ -70,21 +73,24 @@ func preparedBrowserChatImages(in []InboundAttachment) ([]browserChatAttachment,
 		out = append(out, item)
 	}
 	if len(out) == 0 {
-		return nil, errors.New("no usable image attachment was found")
+		return nil, errors.New("no usable media attachment was found")
 	}
 	if len(out) > maxInboundAttachmentCount {
-		return nil, fmt.Errorf("too many image attachments: %d", len(out))
+		return nil, fmt.Errorf("too many media attachments: %d", len(out))
 	}
 	return out, nil
 }
 
+// The function name is retained because all browser provider workers already
+// call it. Validation now covers the full image/audio/video set that the inbound
+// transport accepts, not images only.
 func validatePreparedBrowserChatImage(a browserChatAttachment) error {
-	if !strings.HasPrefix(normalizeInboundMediaType(a.MediaType), "image/") {
-		return fmt.Errorf("attachment %q is not an image", a.Filename)
+	if !supportedInboundMediaType(a.MediaType) {
+		return fmt.Errorf("attachment %q has unsupported media type %q", a.Filename, a.MediaType)
 	}
 	abs, err := filepath.Abs(strings.TrimSpace(a.Path))
 	if err != nil || abs == "" {
-		return errors.New("invalid prepared image path")
+		return errors.New("invalid prepared attachment path")
 	}
 	temp, err := filepath.Abs(os.TempDir())
 	if err != nil {
@@ -92,31 +98,31 @@ func validatePreparedBrowserChatImage(a browserChatAttachment) error {
 	}
 	rel, err := filepath.Rel(temp, abs)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return errors.New("browser chat refused an image outside FlipAi's temporary attachment folder")
+		return errors.New("browser chat refused a file outside FlipAi's temporary attachment folder")
 	}
 	first := rel
 	if i := strings.IndexRune(first, os.PathSeparator); i >= 0 {
 		first = first[:i]
 	}
 	if !strings.HasPrefix(strings.ToLower(first), "flipai-inbound-") {
-		return errors.New("browser chat refused an image that was not prepared by FlipAi")
+		return errors.New("browser chat refused a file that was not prepared by FlipAi")
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return fmt.Errorf("read prepared image: %w", err)
+		return fmt.Errorf("read prepared attachment: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return errors.New("prepared image is not a regular file")
+		return errors.New("prepared attachment is not a regular file")
 	}
 	if info.Size() <= 0 || info.Size() > maxInboundAttachmentBytes {
-		return fmt.Errorf("image must be between 1 byte and %d MB", maxInboundAttachmentBytes>>20)
+		return fmt.Errorf("attachment must be between 1 byte and %d MB", maxInboundAttachmentBytes>>20)
 	}
 	return nil
 }
 
 func browserChatAttachmentMarker(in []browserChatAttachment) (string, error) {
 	if len(in) == 0 {
-		return "", errors.New("no image attachment was supplied")
+		return "", errors.New("no media attachment was supplied")
 	}
 	for _, a := range in {
 		if err := validatePreparedBrowserChatImage(a); err != nil {
@@ -132,7 +138,7 @@ func browserChatAttachmentMarker(in []browserChatAttachment) (string, error) {
 
 // extractBrowserChatAttachmentMarker runs inside the provider WebView worker.
 // It removes FlipAi's private attachment metadata before the page sees the
-// prompt and returns the validated local image files for the shared CDP upload.
+// prompt and returns validated local files for the shared CDP upload.
 func extractBrowserChatAttachmentMarker(expression string) (string, []browserChatAttachment, bool, error) {
 	start := strings.Index(expression, browserChatAttachmentMarkerStart)
 	if start < 0 {
@@ -141,16 +147,16 @@ func extractBrowserChatAttachmentMarker(expression string) (string, []browserCha
 	payloadStart := start + len(browserChatAttachmentMarkerStart)
 	relEnd := strings.Index(expression[payloadStart:], browserChatAttachmentMarkerEnd)
 	if relEnd < 0 {
-		return expression, nil, true, errors.New("invalid FlipAi image attachment marker")
+		return expression, nil, true, errors.New("invalid FlipAi attachment marker")
 	}
 	end := payloadStart + relEnd
 	raw, err := base64.RawURLEncoding.DecodeString(expression[payloadStart:end])
 	if err != nil {
-		return expression, nil, true, errors.New("invalid FlipAi image attachment metadata")
+		return expression, nil, true, errors.New("invalid FlipAi attachment metadata")
 	}
 	var attachments []browserChatAttachment
 	if err := json.Unmarshal(raw, &attachments); err != nil || len(attachments) == 0 || len(attachments) > maxInboundAttachmentCount {
-		return expression, nil, true, errors.New("invalid FlipAi image attachment list")
+		return expression, nil, true, errors.New("invalid FlipAi attachment list")
 	}
 	for _, a := range attachments {
 		if err := validatePreparedBrowserChatImage(a); err != nil {
@@ -161,14 +167,30 @@ func extractBrowserChatAttachmentMarker(expression string) (string, []browserCha
 	return clean, attachments, true, nil
 }
 
-const browserChatFindFileInputJS = `(()=>{
+func browserChatFindFileInputJS(attachments []browserChatAttachment) string {
+	kind := "image"
+	for _, a := range attachments {
+		media := normalizeInboundMediaType(a.MediaType)
+		if strings.HasPrefix(media, "audio/") {
+			kind = "audio"
+			break
+		}
+		if strings.HasPrefix(media, "video/") {
+			kind = "video"
+			break
+		}
+	}
+	kindJSON, _ := json.Marshal(kind)
+	return `(()=>{
+  const desired=` + string(kindJSON) + `;
   const pick=()=>{
     const inputs=Array.from(document.querySelectorAll('input[type="file"]')).filter(n=>!n.disabled);
-    return inputs.find(n=>String(n.accept||'').toLowerCase().includes('image'))||inputs[0]||null;
+    const accepts=(n)=>String(n.accept||'').toLowerCase();
+    return inputs.find(n=>!accepts(n)||accepts(n).includes(desired)||accepts(n).includes('*/*'))||inputs[0]||null;
   };
   let input=pick();
   if(input)return input;
-  const words=['attach','attachment','upload','add file','add files','add photo','add image','photo','image'];
+  const words=['attach','attachment','upload','add file','add files','add photo','add image','photo','image','audio','video'];
   const controls=Array.from(document.querySelectorAll('button,[role="button"],label'));
   const button=controls.find(n=>{
     const s=((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+(n.innerText||n.textContent||'')).toLowerCase();
@@ -177,6 +199,7 @@ const browserChatFindFileInputJS = `(()=>{
   if(button)button.click();
   return pick();
 })()`
+}
 
 func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachment) error {
 	if d == nil {
@@ -191,13 +214,14 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 		paths = append(paths, abs)
 	}
 	if len(paths) == 0 {
-		return errors.New("no image attachment was supplied")
+		return errors.New("no media attachment was supplied")
 	}
 
 	var objectID string
 	var lastErr error
+	findJS := browserChatFindFileInputJS(attachments)
 	for i := 0; i < 24; i++ {
-		objectID, lastErr = voiceEvalObject(d, browserChatFindFileInputJS)
+		objectID, lastErr = voiceEvalObject(d, findJS)
 		if lastErr == nil && objectID != "" {
 			break
 		}
@@ -205,32 +229,32 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 	}
 	if objectID == "" {
 		if lastErr != nil {
-			return fmt.Errorf("could not open the chat image picker: %w", lastErr)
+			return fmt.Errorf("could not open the chat file picker: %w", lastErr)
 		}
-		return errors.New("could not find the chat image picker")
+		return errors.New("could not find the chat file picker")
 	}
 	if err := d.Call("DOM.setFileInputFiles", map[string]any{"files": paths, "objectId": objectID}, nil); err != nil {
-		return fmt.Errorf("could not attach the image to the chat: %w", err)
+		return fmt.Errorf("could not attach the file to the chat: %w", err)
 	}
 	// The provider's existing turn driver waits for its Send button to become
 	// ready, so only a short handoff delay is needed here.
-	time.Sleep(350 * time.Millisecond)
+	time.Sleep(450 * time.Millisecond)
 	return nil
 }
 
 func browserChatImageOnlyPrompt(count int) string {
 	if count == 1 {
-		return "Please respond to the attached image."
+		return "Please respond to the attached file."
 	}
-	return "Please respond to the attached images."
+	return "Please respond to the attached files."
 }
 
 func (b *Bridge) runBrowserChatSMSWithAttachments(ctx context.Context, agent, command string, in []InboundAttachment) (string, error) {
-	images, err := preparedBrowserChatImages(in)
+	attachments, err := preparedBrowserChatImages(in)
 	if err != nil {
 		return "", err
 	}
-	marker, err := browserChatAttachmentMarker(images)
+	marker, err := browserChatAttachmentMarker(attachments)
 	if err != nil {
 		return "", err
 	}
@@ -239,7 +263,7 @@ func (b *Bridge) runBrowserChatSMSWithAttachments(ctx context.Context, agent, co
 
 	command = strings.TrimSpace(command)
 	if command == "" {
-		command = browserChatImageOnlyPrompt(len(images))
+		command = browserChatImageOnlyPrompt(len(attachments))
 	}
 	command = marker + "\n" + command
 	switch strings.ToUpper(strings.TrimSpace(agent)) {
