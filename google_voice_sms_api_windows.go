@@ -521,10 +521,26 @@ func googleVoiceSMSResendAfterOf(err error) time.Duration {
 	return wait
 }
 
+// googleVoiceSMSCapturedSendRequest asks the page for the last send Google
+// Voice made itself.
+func googleVoiceSMSCapturedSendRequest(d voiceDevTools) googleVoiceSMSCapturedSend {
+	var raw string
+	if err := voiceEval(d, googleVoiceSMSCapturedSendJS, false, &raw); err != nil {
+		return googleVoiceSMSCapturedSend{}
+	}
+	return parseGoogleVoiceSMSCapturedSend(raw)
+}
+
 func googleVoiceSMSAPISendOnce(d voiceDevTools, threadID, body string, nonce int64) error {
-	payload, err := googleVoiceSMSAPISendBody(threadID, body, nonce)
-	if err != nil {
-		return err
+	// Prefer the shape Google Voice itself uses. The built-in one was written
+	// from a guess, and a guess is what the service keeps refusing.
+	payload, ok := googleVoiceSMSSendBodyFromCapture(googleVoiceSMSCapturedSendRequest(d).Body, threadID, body, nonce)
+	if !ok {
+		var err error
+		payload, err = googleVoiceSMSAPISendBody(threadID, body, nonce)
+		if err != nil {
+			return err
+		}
 	}
 	raw, err := googleVoiceSMSAPIRequest(d, "api2thread/sendsms", payload)
 	if err != nil {
@@ -651,6 +667,17 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 	// nothing, so it keeps running even while a reply holds the quota -- an
 	// inbound text that arrives during a retry sequence is still delivered
 	// immediately. An update it processed also proves the listener is alive.
+	// Whether Google Voice has sent a text from this window yet decides which
+	// payload shape FlipAi can use, and that is the one thing a person can
+	// change, so the card says which it is.
+	sendShape := func() string {
+		if _, ok := googleVoiceSMSSendBodyFromCapture(
+			googleVoiceSMSCapturedSendRequest(d).Body, "t.+15550000000", "probe", 1); ok {
+			return "reply format learned from Google Voice"
+		}
+		return "reply format not yet learned; send one text yourself from the Google Voice window to teach it"
+	}
+
 	drain := func() (int, googleVoiceSMSAPIStats) {
 		captured, stats := googleVoiceSMSDrainCaptured(dataDir, d)
 		if captured > 0 {
@@ -718,7 +745,7 @@ func runGoogleVoiceSMSAPIInboxLoop(dataDir string, d voiceDevTools, stop <-chan 
 			return
 		}
 		interval = googleVoiceSMSPollInterval
-		note := googleVoiceSMSListenerNote(stats, captured)
+		note := googleVoiceSMSListenerNote(stats, captured) + "; " + sendShape()
 		mutateGoogleVoiceSMSRuntime(dataDir, func(s *GoogleVoiceSMSRuntimeState) {
 			s.Running = true
 			s.Starting = false

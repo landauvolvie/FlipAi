@@ -59,9 +59,15 @@ const googleVoiceSMSNetworkCaptureJS = `
   const keyOf = (raw) => { const u = parse(raw); return u ? (u.searchParams.get('key') || '') : ''; };
   const isList = (raw) => methodOf(raw).indexOf('api2thread/list') === 0;
 
-  const noteRequest = (raw, headers) => {
+  const isSend = (raw) => methodOf(raw).indexOf('api2thread/sendsms') === 0;
+  const noteRequest = (raw, headers, body) => {
     try {
       store.seenRequests++;
+      // A real send is the one request FlipAi cannot derive from first
+      // principles, so its exact body is kept when Google Voice makes one.
+      if (isSend(raw) && typeof body === 'string' && body.length > 0 && body.length < 200000) {
+        store.send = { at: Date.now(), url: String(raw), key: keyOf(raw), body: body, headers: headers || {} };
+      }
       if (!headers || !headers['authorization']) return;
       store.template = { at: Date.now(), url: String(raw), key: keyOf(raw), origin: String(location.origin || ''), headers: headers };
     } catch (_) {}
@@ -104,7 +110,12 @@ const googleVoiceSMSNetworkCaptureJS = `
             if (init && init.headers) headers = collect(init.headers.forEach ? init.headers : new Headers(init.headers));
             else if (input && typeof input === 'object' && input.headers) headers = collect(input.headers);
           } catch (_) {}
-          noteRequest(target, headers);
+          let sent = '';
+          try {
+            const raw = (init && init.body !== undefined) ? init.body : ((input && typeof input === 'object') ? input.body : undefined);
+            if (typeof raw === 'string') sent = raw;
+          } catch (_) {}
+          noteRequest(target, headers, sent);
         }
         const promise = originalFetch.apply(this, arguments);
         if (!watched) return promise;
@@ -128,11 +139,11 @@ const googleVoiceSMSNetworkCaptureJS = `
         } catch (_) {}
         return setHeader.apply(this, arguments);
       };
-      proto.send = function () {
+      proto.send = function (payload) {
         try {
           const target = this.__flipAiGVUrl || '';
           if (isAPI(target)) {
-            noteRequest(target, this.__flipAiGVHeaders || {});
+            noteRequest(target, this.__flipAiGVHeaders || {}, typeof payload === 'string' ? payload : '');
             this.addEventListener('loadend', () => {
               try { if (this.readyState === 4 && this.status >= 200 && this.status < 300) noteResponse(target, String(this.responseText || '')); } catch (_) {}
             });
@@ -309,6 +320,89 @@ func googleVoiceSMSAPIStatusError(status int, retryAfter time.Duration, bodyText
 		return withDetail(fmt.Sprintf("Google Voice web service returned HTTP %d", status))
 	}
 	return nil
+}
+
+// googleVoiceSMSCapturedSendJS hands over the last real send Google Voice made,
+// if it has made one since the browser started.
+const googleVoiceSMSCapturedSendJS = `(()=>{try{return JSON.stringify(globalThis.__flipAiGVNet&&globalThis.__flipAiGVNet.send||{})}catch(_){return '{}'}})()`
+
+// googleVoiceSMSCapturedSend is one real send request, as Google Voice built it.
+type googleVoiceSMSCapturedSend struct {
+	AtMs int64  `json:"at"`
+	URL  string `json:"url"`
+	Key  string `json:"key"`
+	Body string `json:"body"`
+}
+
+func parseGoogleVoiceSMSCapturedSend(raw string) googleVoiceSMSCapturedSend {
+	var out googleVoiceSMSCapturedSend
+	if raw = strings.TrimSpace(raw); raw == "" {
+		return out
+	}
+	if json.Unmarshal([]byte(raw), &out) != nil {
+		return googleVoiceSMSCapturedSend{}
+	}
+	return out
+}
+
+// googleVoiceSMSSendBodyFromCapture rebuilds a real send with FlipAi's own
+// recipient and text.
+//
+// The payload for this endpoint was written from a guess at its shape, and a
+// guess is what the service keeps refusing. Google Voice itself builds a
+// correct one every time the user sends a text from the window FlipAi already
+// runs, so when one has been observed FlipAi reuses that exact structure and
+// changes only what has to change: the conversation, the message, and the
+// tracking id.
+//
+// The slots are found by what they contain rather than by position, so a
+// reordering on Google's side does not silently put the message where the
+// conversation belongs. If any of them cannot be identified the caller keeps
+// the built-in shape rather than sending something half-rewritten.
+func googleVoiceSMSSendBodyFromCapture(captured, threadID, text string, nonce int64) ([]byte, bool) {
+	threadID = strings.TrimSpace(threadID)
+	text = strings.TrimSpace(text)
+	if googleVoiceSMSItemPhone(threadID) == "" || text == "" {
+		return nil, false
+	}
+	var fields []any
+	if json.Unmarshal([]byte(strings.TrimSpace(captured)), &fields) != nil || len(fields) == 0 {
+		return nil, false
+	}
+	threadAt, textAt, nonceAt := -1, -1, -1
+	for i, field := range fields {
+		switch value := field.(type) {
+		case string:
+			if googleVoiceSMSItemPhone(value) != "" {
+				if threadAt < 0 {
+					threadAt = i
+				}
+				continue
+			}
+			if value != "" && textAt < 0 {
+				textAt = i
+			}
+		case []any:
+			if len(value) == 1 && nonceAt < 0 {
+				if _, ok := value[0].(float64); ok {
+					nonceAt = i
+				}
+			}
+		}
+	}
+	if threadAt < 0 || textAt < 0 {
+		return nil, false
+	}
+	fields[threadAt] = threadID
+	fields[textAt] = text
+	if nonceAt >= 0 {
+		fields[nonceAt] = []any{nonce}
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // googleVoiceSMSAuthTemplate is what the page observed about its own request.
