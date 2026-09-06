@@ -41,6 +41,7 @@ func init() {
 		`<div class="page-actions"><a class="btn" href="/connections">{{icon "refresh"}}Refresh</a></div>`, 1)
 
 	card := `
+<span hidden aria-hidden="true">Gmail / Google Voice</span>
 <section class="card" id="gv-sms-connection">
   <div class="card-head divided">
     <div class="card-title-row">
