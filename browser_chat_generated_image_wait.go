@@ -17,11 +17,10 @@ func finishBrowserGeneratedImageTurn(ctx context.Context, command, reply string,
 	}
 
 	// Most images are already present by the time the text turn returns. Give
-	// that normal case a short grace period before deciding whether a longer
-	// generation wait is needed. A provider can also reveal image intent only
-	// through its temporary reply (for example a contextual "make it better"
-	// follow-up), so pending-image text is enough to enter this path even when
-	// the current prompt is not an explicit "generate an image" sentence.
+	// that normal case a short grace period. A provider can also reveal image
+	// intent only through its temporary reply (for example a contextual "make it
+	// better" follow-up), so pending-image text is enough to enter this path even
+	// when the current prompt is not an explicit "generate an image" sentence.
 	if waitForCapturedBrowserChatReturnedMedia(ctx, browserChatInitialMediaWait) {
 		return completedBrowserGeneratedImageReply(reply), nil
 	}
@@ -34,7 +33,10 @@ func finishBrowserGeneratedImageTurn(ctx context.Context, command, reply string,
 		return reply, turnErr
 	}
 
-	if waitForCapturedBrowserChatReturnedMedia(ctx, browserChatGeneratedImageWait-browserChatInitialMediaWait) {
+	// There is deliberately no elapsed-time cap here. Image tools can stay
+	// active for many minutes; the wait ends only when the actual media arrives
+	// or the parent turn is cancelled because the provider/app truly stopped.
+	if waitForCapturedBrowserChatReturnedMedia(ctx, 0) {
 		return completedBrowserGeneratedImageReply(reply), nil
 	}
 	return reply, turnErr
