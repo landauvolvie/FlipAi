@@ -251,7 +251,8 @@ func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, err
 		mode = browserModeChat
 	}
 	dataDir := filepath.Dir(b.statePath)
-	return chatGPTBrowserSendMode(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode)
+	reply, err := chatGPTBrowserSendMode(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode)
+	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
 func (b *Bridge) newChatGPTConversation(ctx context.Context) error {
