@@ -212,14 +212,28 @@ func runGoogleVoiceSMSWebView(dataDir string, visible bool) error {
 			s.SignedIn = signedIn
 			s.Page = href
 			if !signedIn {
-				s.Connected = false
+				// Connected is the persisted user intent: it means this private
+				// browser profile completed sign-in before. A renderer can report
+				// signed-out briefly while WebView2 restores that profile after a
+				// reboot. Clearing Connected here turns that transient page state
+				// into a permanent disconnect and prevents the supervisor from
+				// restoring the hidden worker. Only explicit Disconnect may clear
+				// the saved connection/profile.
 				s.ListenerRunning = false
 				s.Ready = false
-				s.LastEvent = "waiting-for-sign-in"
-				s.LastError = "Sign in to Google Voice in the window FlipAi opened"
-			} else if !s.Ready && s.LastEvent != "background-api-error" {
-				s.LastEvent = "waiting-for-background-api"
-				s.LastError = "Waiting for Google Voice background connection"
+				if s.Connected && !visible {
+					s.LastEvent = "session-restoring"
+					s.LastError = "Waiting for the saved Google Voice session to restore"
+				} else {
+					s.LastEvent = "waiting-for-sign-in"
+					s.LastError = "Sign in to Google Voice in the window FlipAi opened"
+				}
+			} else {
+				s.Connected = true
+				if !s.Ready && s.LastEvent != "background-api-error" {
+					s.LastEvent = "waiting-for-background-api"
+					s.LastError = "Waiting for Google Voice background connection"
+				}
 			}
 		})
 	})
