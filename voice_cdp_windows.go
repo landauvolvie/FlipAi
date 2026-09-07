@@ -31,11 +31,16 @@ const (
 	// does not disappear for a long time.
 	voiceDevToolsTimeout = 8 * time.Second
 
-	// Browser chat turns intentionally use one awaited Runtime.evaluate promise.
-	// The provider JavaScript may wait up to 90 seconds for the model to finish,
-	// so the generic Google Voice deadline would falsely report failure while
-	// the page continued answering.
+	// Browser chat text turns intentionally use one awaited Runtime.evaluate
+	// promise. The page detector is still bounded at 90 seconds, but generated
+	// image turns recover below by continuing a separate media collector after
+	// that detector returns. This keeps ordinary text failures bounded without
+	// falsely failing an image that is still rendering.
 	chatGPTTurnDevToolsTimeout = 95 * time.Second
+
+	// The generated-media collector is itself an awaited page expression and is
+	// deliberately allowed to outlive the ordinary 90-second text detector.
+	browserChatReturnedMediaDevToolsTimeout = browserChatGeneratedImageWait + 15*time.Second
 
 	// A Google Voice UI send waits for the real composer to clear, an outgoing
 	// bubble to appear, or a page error to surface. That confirmation window is
@@ -72,6 +77,9 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	}
 	await, _ := m["awaitPromise"].(bool)
 	expression, _ := m["expression"].(string)
+	if await && strings.Contains(expression, browserChatReturnedMediaMarker) {
+		return browserChatReturnedMediaDevToolsTimeout
+	}
 	if await && isBrowserChatTurnExpression(expression) {
 		return chatGPTTurnDevToolsTimeout
 	}
@@ -97,6 +105,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 	}
 
 	browserTurn := false
+	generatedImageTurn := false
 	// Browser-chat media turns carry a private marker inside the prompt sent to
 	// the worker. Strip it before the page sees the prompt, upload those local
 	// temp files through the site's own file input, then run the normal provider
@@ -108,6 +117,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 				browserTurn = isBrowserChatTurnExpression(expression)
 				if browserTurn {
 					clearCapturedBrowserChatReturnedMedia()
+					generatedImageTurn = browserChatPromptRequestsGeneratedImage(expression)
 				}
 				clean, attachments, found, err := extractBrowserChatAttachmentMarker(expression)
 				if err != nil {
@@ -175,11 +185,16 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 			}
 		}
 		if browserTurn {
-			// The normal turn has already completed and its assistant response is
-			// stable. Read only media inside that newest assistant response. This
-			// second expression does not contain the turn marker, so it cannot
-			// recurse back into this branch.
-			captureBrowserChatReturnedMediaAfterTurn(d)
+			// Image creation frequently continues after the provider's text DOM
+			// has stabilized or after its 90-second detector expires. Run that
+			// collector asynchronously so /chat can finish, then the SMS wrapper
+			// waits for the actual media before delivery. Ordinary text turns keep
+			// the fast 1.6-second final-media scan.
+			if generatedImageTurn {
+				go captureBrowserChatReturnedMediaAfterTurnWithWait(d, browserChatGeneratedImageWait)
+			} else {
+				captureBrowserChatReturnedMediaAfterTurn(d)
+			}
 		}
 		return nil
 	case <-time.After(timeout):
