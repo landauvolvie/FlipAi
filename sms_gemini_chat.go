@@ -89,7 +89,7 @@ func cleanGeminiChatReply(reply string) string {
 	return rest
 }
 
-func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+func geminiChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureGeminiChatReady(readyCtx, dataDir)
 	cancel()
@@ -109,6 +109,10 @@ func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string,
 		if strings.TrimSpace(out.Detail) == "" {
 			out.Detail = strings.TrimSpace(string(b))
 		}
+		if browserLongTurnTimeoutDetail(out.Detail) {
+			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "M", onProgress)
+			return cleanGeminiChatReply(reply), waitErr
+		}
 		return "", errors.New(out.Detail)
 	}
 	cleaned := cleanGeminiChatReply(out.Reply)
@@ -116,6 +120,10 @@ func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string,
 		return "", errors.New("Gemini Chat returned an empty reply")
 	}
 	return cleaned, nil
+}
+
+func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+	return geminiChatBrowserSendWithProgress(ctx, dataDir, prompt, nil)
 }
 
 func geminiChatBrowserNewConversation(ctx context.Context, dataDir string) error {
@@ -155,7 +163,8 @@ func (b *Bridge) composeGeminiChatSMSPrompt(command string) string {
 }
 
 func (b *Bridge) runGeminiChatSMS(ctx context.Context, command string) (string, error) {
-	reply, err := geminiChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeGeminiChatSMSPrompt(command))
+	dataDir := filepath.Dir(b.statePath)
+	reply, err := geminiChatBrowserSendWithProgress(ctx, dataDir, b.composeGeminiChatSMSPrompt(command), b.setProgress)
 	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 

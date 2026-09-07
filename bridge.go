@@ -739,11 +739,11 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	b.mu.Unlock()
 	_ = saveState(b.statePath, s)
 	defer func() { b.mu.Lock(); b.busy = false; b.progress = ""; b.mu.Unlock() }()
-	timeout := time.Duration(b.cfg.TurnTimeoutMinutes) * time.Minute
-	if timeout <= 0 {
-		timeout = 90 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	// Agent/model turns have no elapsed-time deadline. Long browser work, Codex,
+	// Claude Code, research, and image generation may legitimately run for many
+	// minutes. The turn ends only when the provider completes/fails or when the
+	// parent app context is cancelled during a real shutdown.
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	// A NEW modifier may be reset-only (OW NEW:) or reset-and-run

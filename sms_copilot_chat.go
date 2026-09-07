@@ -56,7 +56,7 @@ type copilotChatSMSReply struct {
 	ConversationID string `json:"conversationId"`
 }
 
-func copilotChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+func copilotChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureCopilotChatReady(readyCtx, dataDir)
 	cancel()
@@ -76,12 +76,19 @@ func copilotChatBrowserSend(ctx context.Context, dataDir, prompt string) (string
 		if strings.TrimSpace(out.Detail) == "" {
 			out.Detail = strings.TrimSpace(string(b))
 		}
+		if browserLongTurnTimeoutDetail(out.Detail) {
+			return waitForBrowserLongTurn(ctx, dataDir, "P", onProgress)
+		}
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" {
 		return "", errors.New("Microsoft Copilot Chat returned an empty reply")
 	}
 	return strings.TrimSpace(out.Reply), nil
+}
+
+func copilotChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+	return copilotChatBrowserSendWithProgress(ctx, dataDir, prompt, nil)
 }
 
 func copilotChatBrowserNewConversation(ctx context.Context, dataDir string) error {
@@ -121,7 +128,8 @@ func (b *Bridge) composeCopilotChatSMSPrompt(command string) string {
 }
 
 func (b *Bridge) runCopilotChatSMS(ctx context.Context, command string) (string, error) {
-	reply, err := copilotChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeCopilotChatSMSPrompt(command))
+	dataDir := filepath.Dir(b.statePath)
+	reply, err := copilotChatBrowserSendWithProgress(ctx, dataDir, b.composeCopilotChatSMSPrompt(command), b.setProgress)
 	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 

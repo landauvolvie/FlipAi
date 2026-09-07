@@ -56,7 +56,7 @@ type grokChatSMSReply struct {
 	ConversationID string `json:"conversationId"`
 }
 
-func grokChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureGrokChatReady(readyCtx, dataDir)
 	cancel()
@@ -76,12 +76,19 @@ func grokChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, e
 		if strings.TrimSpace(out.Detail) == "" {
 			out.Detail = strings.TrimSpace(string(b))
 		}
+		if browserLongTurnTimeoutDetail(out.Detail) {
+			return waitForBrowserLongTurn(ctx, dataDir, "X", onProgress)
+		}
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" {
 		return "", errors.New("Grok Chat returned an empty reply")
 	}
 	return strings.TrimSpace(out.Reply), nil
+}
+
+func grokChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
+	return grokChatBrowserSendWithProgress(ctx, dataDir, prompt, nil)
 }
 
 func grokChatBrowserNewConversation(ctx context.Context, dataDir string) error {
@@ -121,7 +128,8 @@ func (b *Bridge) composeGrokChatSMSPrompt(command string) string {
 }
 
 func (b *Bridge) runGrokChatSMS(ctx context.Context, command string) (string, error) {
-	reply, err := grokChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeGrokChatSMSPrompt(command))
+	dataDir := filepath.Dir(b.statePath)
+	reply, err := grokChatBrowserSendWithProgress(ctx, dataDir, b.composeGrokChatSMSPrompt(command), b.setProgress)
 	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
