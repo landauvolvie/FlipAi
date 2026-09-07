@@ -17,22 +17,28 @@ func TestBridgeExecuteHasNoHardTurnDeadline(t *testing.T) {
 	}
 	text := string(src)
 	start := strings.Index(text, "func (b *Bridge) execute(")
-	end := strings.Index(text[start:], "\n// heartbeat texts")
-	if start < 0 || end < 0 {
+	if start < 0 {
 		t.Fatal("could not locate Bridge.execute in bridge.go")
 	}
-	execute := text[start : start+end]
+	// Only inspect the agent-turn portion of execute. Final Google Voice
+	// delivery intentionally has its own short network timeout so a completed
+	// model turn cannot hang forever while sending the reply.
+	relEnd := strings.Index(text[start:], "\n\t// Delivery is unconditional")
+	if relEnd < 0 {
+		t.Fatal("could not locate the delivery boundary in Bridge.execute")
+	}
+	executeTurn := text[start : start+relEnd]
 
 	for _, forbidden := range []string{
 		"TurnTimeoutMinutes",
 		"context.WithTimeout(parent",
 		"90 * time.Minute",
 	} {
-		if strings.Contains(execute, forbidden) {
-			t.Fatalf("Bridge.execute contains hard turn deadline marker %q", forbidden)
+		if strings.Contains(executeTurn, forbidden) {
+			t.Fatalf("Bridge.execute agent-turn section contains hard turn deadline marker %q", forbidden)
 		}
 	}
-	if !strings.Contains(execute, "context.WithCancel(parent)") {
+	if !strings.Contains(executeTurn, "context.WithCancel(parent)") {
 		t.Fatal("Bridge.execute must inherit cancellation from the app without adding an elapsed-time deadline")
 	}
 }
