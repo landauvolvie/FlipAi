@@ -10,20 +10,25 @@ import (
 // the image work; this function only decides whether FlipAi should wait for the
 // media collector instead of forwarding a premature text placeholder/failure.
 func finishBrowserGeneratedImageTurn(ctx context.Context, command, reply string, turnErr error) (string, error) {
-	if !browserChatPromptRequestsGeneratedImage(command) {
+	requestedImage := browserChatPromptRequestsGeneratedImage(command)
+	pendingImage := browserChatReplySuggestsPendingImage(reply)
+	if !requestedImage && !pendingImage {
 		return reply, turnErr
 	}
 
 	// Most images are already present by the time the text turn returns. Give
 	// that normal case a short grace period before deciding whether a longer
-	// generation wait is needed.
+	// generation wait is needed. A provider can also reveal image intent only
+	// through its temporary reply (for example a contextual "make it better"
+	// follow-up), so pending-image text is enough to enter this path even when
+	// the current prompt is not an explicit "generate an image" sentence.
 	if waitForCapturedBrowserChatReturnedMedia(ctx, browserChatInitialMediaWait) {
 		return completedBrowserGeneratedImageReply(reply), nil
 	}
 
-	shouldKeepWaiting := browserChatReplySuggestsPendingImage(reply)
-	if turnErr != nil {
-		shouldKeepWaiting = browserChatImageTurnCanStillBeRendering(turnErr)
+	shouldKeepWaiting := pendingImage
+	if turnErr != nil && browserChatImageTurnCanStillBeRendering(turnErr) {
+		shouldKeepWaiting = true
 	}
 	if !shouldKeepWaiting {
 		return reply, turnErr

@@ -110,9 +110,10 @@ func takeCapturedBrowserChatReturnedMedia() *browserChatReturnedMedia {
 }
 
 // browserChatPromptRequestsGeneratedImage intentionally recognizes explicit
-// creation requests only. It is used both on the original SMS prompt and on the
-// browser-turn expression, so broad words such as "image" by themselves would
-// create false positives in page-driver JavaScript.
+// creation requests and clear image-refinement follow-ups. The refinement path
+// matters for conversational prompts such as "Make it better. I need the better
+// image": providers keep the prior image context, but FlipAi only sees the
+// current turn when deciding how long the returned-media collector should run.
 func browserChatPromptRequestsGeneratedImage(prompt string) bool {
 	s := strings.ToLower(strings.Join(strings.Fields(prompt), " "))
 	if s == "" {
@@ -133,6 +134,51 @@ func browserChatPromptRequestsGeneratedImage(prompt string) bool {
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(s, pattern) {
+			return true
+		}
+	}
+
+	// A follow-up image edit often omits "generate" because the provider still
+	// has the previous image in conversational context. Require an image noun so
+	// ordinary requests such as "make it better" do not become four-minute media
+	// turns by accident.
+	hasImageNoun := strings.Contains(s, "image") || strings.Contains(s, "picture") || strings.Contains(s, "photo")
+	if !hasImageNoun {
+		return false
+	}
+	refinementSignals := []string{
+		"make it better", "make this better", "make that better",
+		"make the image better", "make this image better", "make that image better",
+		"make the picture better", "make this picture better", "make that picture better",
+		"make the photo better", "make this photo better", "make that photo better",
+		"improve the image", "improve this image", "improve that image",
+		"improve the picture", "improve this picture", "improve that picture",
+		"improve the photo", "improve this photo", "improve that photo",
+		"enhance the image", "enhance this image", "enhance that image",
+		"enhance the picture", "enhance this picture", "enhance that picture",
+		"enhance the photo", "enhance this photo", "enhance that photo",
+		"edit the image", "edit this image", "edit that image",
+		"edit the picture", "edit this picture", "edit that picture",
+		"edit the photo", "edit this photo", "edit that photo",
+		"modify the image", "modify this image", "modify that image",
+		"modify the picture", "modify this picture", "modify that picture",
+		"modify the photo", "modify this photo", "modify that photo",
+		"change the image", "change this image", "change that image",
+		"change the picture", "change this picture", "change that picture",
+		"change the photo", "change this photo", "change that photo",
+		"regenerate the image", "regenerate this image", "regenerate that image",
+		"regenerate the picture", "regenerate this picture", "regenerate that picture",
+		"regenerate the photo", "regenerate this photo", "regenerate that photo",
+		"redo the image", "redo this image", "redo that image",
+		"redo the picture", "redo this picture", "redo that picture",
+		"redo the photo", "redo this photo", "redo that photo",
+		"remake the image", "remake this image", "remake that image",
+		"remake the picture", "remake this picture", "remake that picture",
+		"remake the photo", "remake this photo", "remake that photo",
+		"better image", "better picture", "better photo",
+	}
+	for _, signal := range refinementSignals {
+		if strings.Contains(s, signal) {
 			return true
 		}
 	}
