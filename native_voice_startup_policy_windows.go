@@ -12,8 +12,8 @@ import (
 // Windows policy for the current FlipAi product:
 //   * direct Google Voice is the live SMS transport;
 //   * the background host always comes back at the next interactive sign-in;
-//   * the optional elevated boot task remains the separate "before sign-in"
-//     switch.
+//   * pre-sign-in/S4U startup is retired because persistent WebView2 sessions
+//     must restore inside the user's normal Windows session.
 //
 // Gmail source is deliberately not deleted. The v0.46.50 Gmail-capable state
 // is also preserved on the archive/gmail-voice-bridge-v0.46.50 branch.
@@ -42,9 +42,10 @@ func init() {
 		return
 	}
 
-	// Logon startup is intentionally always present. The visible setting now
-	// controls only the stronger pre-sign-in scheduled task. Using the normal
-	// watchdog keeps the existing tray/desktop broker architecture unchanged.
+	// Signed-in startup is intentionally always present and is now the only
+	// supported Windows startup path. It keeps the existing tray/desktop broker
+	// architecture and all persistent WebView2 profiles in the interactive user
+	// session that created their credentials.
 	if exe, err := os.Executable(); err == nil {
 		_ = installAutostart(exe)
 	}

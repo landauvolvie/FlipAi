@@ -14,7 +14,7 @@ func TestSettingsPageKeepsOnlyAppLevelControls(t *testing.T) {
 
 	for _, want := range []string{
 		"Start FlipAi with Windows",
-		"Start before sign-in",
+		"Start when I sign in",
 		"Call status & diagnostics",
 		"Desktop voice apps",
 	} {
@@ -23,7 +23,13 @@ func TestSettingsPageKeepsOnlyAppLevelControls(t *testing.T) {
 		}
 	}
 
+	// Old release tests still identify the retired startup feature by hidden
+	// text markers. What matters to the product is that no live form/checkbox can
+	// turn it on again.
 	for _, retired := range []string{
+		"Start host before sign-in",
+		`<form method="post" action="/settings/bootstartup"`,
+		`name="bootStartup"`,
 		"Check for new version",
 		"Latest v",
 		`action="/update/check"`,
