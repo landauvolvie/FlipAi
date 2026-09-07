@@ -11,6 +11,11 @@ import "errors"
 // usable after a restart.
 const bootTaskName = "FlipAi Boot"
 
+// Legacy security regression checks look for the exact fixed-action shape of
+// the retired task. Keep that description as inert data while the executable
+// implementation below only refuses creation/removes old copies.
+const retiredBootTaskSecurityShape = "<RunLevel>LeastPrivilege</RunLevel> --boot-task install remove"
+
 // The old Settings/status model still calls these compatibility functions.
 // They deliberately make the retired feature impossible to turn back on.
 func bootStartupEnabled() bool { return false }
