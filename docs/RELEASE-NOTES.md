@@ -1,25 +1,35 @@
-# FlipAi v0.46.55
+# FlipAi v0.46.58
 
-This release fixes generated-image replies over Google Voice and simplifies the default reply instruction sent to browser chat models.
+This release makes long-running AI tasks reliable across FlipAi's browser-chat integrations and keeps the user informed while a model is still working.
 
-## Image generation and MMS replies
+## Long-running model tasks
 
-- Long-running browser image generation no longer fails at the old 90-second response limit; FlipAi can keep waiting for generated media for up to 4 minutes.
-- Progress text such as “Image”, “Creating your image”, or other transient working states is no longer treated as the final reply when an image is still being generated.
-- FlipAi captures the generated browser-chat image and sends the actual image back through Google Voice as MMS instead of returning only a text status or link when direct media delivery is available.
-- Returned browser media is preserved until the final Google Voice reply so progress messages cannot consume the image before delivery.
-- The browser media path applies to ChatGPT, Gemini, Claude, Grok, and Microsoft Copilot chat integrations.
+- The old 90-second browser response limit is now a checkpoint, not a failure.
+- ChatGPT/ChatGPT Work, Gemini, Claude Chat, Grok, and Microsoft Copilot can continue working for as long as the provider itself remains active.
+- FlipAi no longer imposes an elapsed-time hard cap on agent/model turns. A task ends when the model completes, the provider reports a real failure, or FlipAi is actually shutting down.
+- The original prompt is not resent when a task crosses the checkpoint; FlipAi continues monitoring the same in-progress turn.
+
+## Live progress updates
+
+- FlipAi can capture concise visible provider statuses such as “Thinking…”, “Generating…”, “Searching…”, or “Finishing…” and surface them through the existing progress-message path.
+- Long or reasoning-like text is deliberately filtered instead of being forwarded as progress, so progress updates stay short and do not expose detailed internal reasoning.
+- When no safe provider status is available, the normal generic “still working” heartbeat remains the fallback.
+
+## Generated images and media
+
+- Generated-image work is no longer abandoned simply because several minutes have elapsed while the provider is still active.
+- Temporary replies such as “Creating your image” remain non-final; FlipAi continues watching for the actual generated image and preserves it for Google Voice MMS delivery.
+- The returned-media path continues to support ChatGPT, Gemini, Claude, Grok, and Microsoft Copilot browser chats.
 
 ## Reply instruction
 
-- The default reply hint is now exactly: `Please keep your reply short and to the point.`
-- Existing installs using the previous SMS/plain-text reply instruction are migrated automatically.
-- The old wording that mentioned SMS and plain text is no longer injected into model prompts.
+- The default reply hint remains exactly: `Please keep your reply short and to the point.`
+- The prompt no longer adds SMS/plain-text wording that can confuse a model about what task it is being asked to perform.
 
 ## Validation
 
-- Added tests for long browser image waits, generated-media capture and delivery, Windows browser behavior, and reply-hint migration.
-- Branch CI completed successfully before merge.
-- The release pipeline runs the full Linux and Windows tests, real-browser checks, vet/race checks, Google Voice smoke tests, Defender scans, installer smoke tests, SBOM generation, checksums, and provenance before publishing.
+- Added regression coverage to prevent a hard agent-turn timeout from being reintroduced.
+- Added tests for long-turn provider detection, progress filtering, explicit failure handling, and Windows browser continuation behavior.
+- The release pipeline runs Linux and Windows tests, real-browser call-flow checks, vet/race checks, Google Voice checks, Microsoft Defender scans, installer install/uninstall smoke tests, CycloneDX SBOM generation, SHA-256 checksums, and provenance attestation before publishing.
 
 No Authenticode/code-signing certificate is included in this release.
