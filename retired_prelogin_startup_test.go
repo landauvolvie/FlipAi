@@ -15,13 +15,19 @@ func TestRetiredPreLoginStartupGuardStaysInWindowsBuild(t *testing.T) {
 	for _, want := range []string{
 		`mode == "--boot-task"`,
 		`mode != "--watchdog"`,
-		"ProcessIdToSessionId",
-		"WTSGetActiveConsoleSessionId",
+		"GetProcessWindowStation",
+		"GetUserObjectInformationW",
+		`"WinSta0"`,
 		"bestEffortDeleteRetiredBootTask",
 		`"/Delete", "/TN", bootTaskName, "/F"`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("retired boot guard is missing %q", want)
+		}
+	}
+	for _, wrong := range []string{"WTSGetActiveConsoleSessionId", "ProcessIdToSessionId"} {
+		if strings.Contains(src, wrong) {
+			t.Fatalf("startup guard must not compare against the physical console because that breaks RDP: found %q", wrong)
 		}
 	}
 }
