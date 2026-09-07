@@ -42,6 +42,35 @@ func TestGoogleVoiceSMSSupervisorRecoversFromStaleProcessFlags(t *testing.T) {
 	}
 }
 
+// A temporary signed-out page during WebView2 startup is not the same thing as
+// the user pressing Disconnect. Connected is the persisted intent that tells
+// the supervisor to keep restoring the private Google Voice browser after a
+// Windows reboot. Clearing it from the page-status callback makes one transient
+// navigation permanently disable restart recovery.
+func TestGoogleVoiceSMSPageStatusDoesNotEraseSavedConnection(t *testing.T) {
+	raw, err := os.ReadFile("google_voice_sms_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	start := strings.Index(body, "w.Bind(\"flipGoogleVoiceSMSStatus\"")
+	if start < 0 {
+		t.Fatal("the Google Voice SMS page-status binding is gone")
+	}
+	status := body[start:]
+	if end := strings.Index(status, "\n\t// Installed before any page script"); end > 0 {
+		status = status[:end]
+	}
+	if strings.Contains(status, "s.Connected = false") {
+		t.Fatal("a temporary signed-out page can still erase the saved Google Voice connection")
+	}
+	for _, want := range []string{"s.Connected = true", "s.LastEvent = \"session-restoring\""} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("the page-status binding is missing restart-session recovery behavior %q", want)
+		}
+	}
+}
+
 // Readiness must never go back to the retired DOM observer's stamp, which
 // nothing writes: keying off it made the listener permanently "not ready".
 func TestGoogleVoiceSMSReadinessGateStaysOnTheLivePoll(t *testing.T) {
