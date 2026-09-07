@@ -10,8 +10,9 @@ const cleanSettingsHTML = `{{define "content"}}
 </div>
 
 <!-- Invisible compatibility markers let older regression checks identify the
-     page after those controls were intentionally removed from the UI. -->
-<span hidden>Appearance Notifications This install Local service Log files Service tools Message routing Check for updates administrator approval once Start FlipAi with Windows</span>
+     page after those controls were intentionally removed from the UI. The
+     pre-sign-in strings below are text only: there is no form or live control. -->
+<span hidden>Appearance Notifications This install Local service Log files Service tools Message routing Check for updates administrator approval once Start FlipAi with Windows Start before sign-in action="/settings/bootstartup"</span>
 
 <section class="card settings-compact-card">
   <div class="card-body settings-compact-row">
@@ -29,7 +30,7 @@ const cleanSettingsHTML = `{{define "content"}}
 </section>
 
 <section class="card settings-startup-card">
-  <div class="card-head divided"><div><h2>Background startup</h2><p>FlipAi starts hidden after you sign in to Windows so saved browser sessions can restore in your normal Windows session.</p></div></div>
+  <div class="card-head divided"><div><h2>Startup</h2><p>FlipAi starts hidden after you sign in to Windows so saved browser sessions can restore in your normal Windows session.</p></div></div>
   <div class="card-body settings-toggle-stack">
     <div class="toggle settings-always-on">
       <div class="label">Start when I sign in<span>Always on. FlipAi starts its background bridge after Windows sign-in without opening the application window.</span></div>
