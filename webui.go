@@ -254,6 +254,22 @@ func (a *App) gmailTest(w http.ResponseWriter, r *http.Request) {
 	}
 	renderResult(w, r, 200, true, "Gmail is working", gmailMethodLabel(cfg.Gmail.Method)+" connected successfully. FlipAi can access the mailbox with the selected method.")
 }
+
+// Tombstones keep old bookmarks/tests deterministic without reviving either
+// retired feature. They never touch credentials, create a task, or contact
+// Gmail; the published UI contains no link or control that reaches them.
+func (a *App) retiredBootStartup(w http.ResponseWriter, r *http.Request) {
+	renderResult(w, r, http.StatusInternalServerError, false,
+		"Pre-sign-in startup removed",
+		"Starting FlipAi before Windows sign-in has been retired. FlipAi starts after you sign in so saved browser sessions can restore normally.")
+}
+
+func (a *App) retiredGmailTest(w http.ResponseWriter, r *http.Request) {
+	renderResult(w, r, http.StatusGone, false,
+		"Gmail connection retired",
+		"This FlipAi release uses the direct Google Voice connection. Gmail is not started or tested by the published app.")
+}
+
 func (a *App) quit(w http.ResponseWriter, r *http.Request) {
 	requestQuit(a.dataDir, "settings quit")
 	renderResult(w, r, 200, true, "FlipAi is stopping", "The tray, background host, and watchdog are being stopped completely. Launch AISMSBridge.exe again whenever you want to reconnect.")
@@ -336,6 +352,7 @@ func (a *App) handler() http.Handler {
 		"/agents/numbers/remove":   a.removeAgentNumber,
 		"/settings/save":           a.saveSettings,
 		"/settings/startup":        a.saveStartup,
+		"/settings/bootstartup":    a.retiredBootStartup,
 		"/settings/updates":        a.saveUpdates,
 		"/update/check":            a.updateCheck,
 		"/update/install":          a.updateInstall,
@@ -352,6 +369,7 @@ func (a *App) handler() http.Handler {
 		"/chatgpt-direct/probe": a.chatGPTDirectProbe,
 		"/codex/test":           a.codexTestCorrected,
 		"/claude/test":          a.claudeTestCorrected,
+		"/gmail/test":           a.retiredGmailTest,
 		"/logs/export":          a.exportLogs,
 		"/open/folder":          a.openLocalFolder,
 	} {
