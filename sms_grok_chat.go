@@ -121,7 +121,8 @@ func (b *Bridge) composeGrokChatSMSPrompt(command string) string {
 }
 
 func (b *Bridge) runGrokChatSMS(ctx context.Context, command string) (string, error) {
-	return grokChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeGrokChatSMSPrompt(command))
+	reply, err := grokChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeGrokChatSMSPrompt(command))
+	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
 func (b *Bridge) newGrokChatConversation(ctx context.Context) error {
