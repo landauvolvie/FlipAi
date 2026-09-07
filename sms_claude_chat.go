@@ -56,7 +56,7 @@ type claudeChatSMSReply struct {
 	ConversationID string `json:"conversationId"`
 }
 
-func claudeChatBrowserSendMode(ctx context.Context, dataDir, prompt, mode string) (string, error) {
+func claudeChatBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mode string, onProgress func(string)) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureClaudeChatReady(readyCtx, dataDir)
 	cancel()
@@ -76,12 +76,19 @@ func claudeChatBrowserSendMode(ctx context.Context, dataDir, prompt, mode string
 		if strings.TrimSpace(out.Detail) == "" {
 			out.Detail = strings.TrimSpace(string(b))
 		}
+		if browserLongTurnTimeoutDetail(out.Detail) {
+			return waitForBrowserLongTurn(ctx, dataDir, "H", onProgress)
+		}
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" {
 		return "", errors.New("Claude returned an empty reply")
 	}
 	return strings.TrimSpace(out.Reply), nil
+}
+
+func claudeChatBrowserSendMode(ctx context.Context, dataDir, prompt, mode string) (string, error) {
+	return claudeChatBrowserSendModeWithProgress(ctx, dataDir, prompt, mode, nil)
 }
 
 func claudeChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
@@ -137,7 +144,8 @@ func (b *Bridge) runClaudeChatSMS(ctx context.Context, command string) (string, 
 	if mode == "" {
 		mode = browserModeChat
 	}
-	reply, err := claudeChatBrowserSendMode(ctx, filepath.Dir(b.statePath), b.composeClaudeChatSMSPrompt(command), mode)
+	dataDir := filepath.Dir(b.statePath)
+	reply, err := claudeChatBrowserSendModeWithProgress(ctx, dataDir, b.composeClaudeChatSMSPrompt(command), mode, b.setProgress)
 	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
