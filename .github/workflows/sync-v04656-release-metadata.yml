@@ -1,4 +1,4 @@
-name: sync-v04656-release-metadata
+name: sync-v04657-release-metadata
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   sync:
-    if: github.event.head_commit.message != 'Sync v0.46.56 release metadata'
+    if: github.event.head_commit.message != 'Sync v0.46.57 release metadata'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +17,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Sync compiled and installer versions, then retry release
+      - name: Sync version metadata and trigger release
         shell: bash
         run: |
           set -euo pipefail
@@ -26,41 +26,34 @@ jobs:
 
           p = Path('config.go')
           s = p.read_text()
-          old = 'const version = "0.46.55"'
-          new = 'const version = "0.46.56"'
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif new not in s:
+          for old in ('const version = "0.46.55"', 'const version = "0.46.56"'):
+              if old in s:
+                  s = s.replace(old, 'const version = "0.46.57"', 1)
+                  break
+          if 'const version = "0.46.57"' not in s:
               raise SystemExit('unexpected compiled version in config.go')
           p.write_text(s)
 
           p = Path('installer/FlipAi.iss')
           s = p.read_text()
-          old = '#define MyVersion "0.46.55"'
-          new = '#define MyVersion "0.46.56"'
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif new not in s:
+          for old in ('#define MyVersion "0.46.55"', '#define MyVersion "0.46.56"'):
+              if old in s:
+                  s = s.replace(old, '#define MyVersion "0.46.57"', 1)
+                  break
+          if '#define MyVersion "0.46.57"' not in s:
               raise SystemExit('unexpected installer version in installer/FlipAi.iss')
           p.write_text(s)
 
-          p = Path('.github/workflows/release.yml')
-          s = p.read_text()
-          marker = '# Release metadata synchronized for v0.46.56.'
-          if marker not in s:
-              anchor = '# Touching this workflow intentionally retries a release after version metadata is synchronized.'
-              if anchor not in s:
-                  raise SystemExit('release workflow retry anchor not found')
-              s = s.replace(anchor, anchor + '\n' + marker, 1)
-              p.write_text(s)
+          p = Path('VERSION')
+          p.write_text('0.46.57\n')
           PY
 
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add config.go installer/FlipAi.iss .github/workflows/release.yml
+          git add config.go installer/FlipAi.iss VERSION
           if git diff --cached --quiet; then
             echo 'Release metadata already synchronized.'
             exit 0
           fi
-          git commit -m 'Sync v0.46.56 release metadata'
+          git commit -m 'Sync v0.46.57 release metadata'
           git push origin HEAD:main
