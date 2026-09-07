@@ -53,15 +53,7 @@ func TestGoogleVoiceSMSPageStatusDoesNotEraseSavedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(raw)
-	start := strings.Index(body, `w.Bind("flipGoogleVoiceSMSStatus"`)
-	if start < 0 {
-		// The source contains normal Go quotes; keep a second literal form here
-		// so this regression test cannot itself depend on an escaped display.
-		start = strings.Index(body, `w.Bind("flipGoogleVoiceSMSStatus"`)
-	}
-	if start < 0 {
-		start = strings.Index(body, "w.Bind(\"flipGoogleVoiceSMSStatus\"")
-	}
+	start := strings.Index(body, "w.Bind(\"flipGoogleVoiceSMSStatus\"")
 	if start < 0 {
 		t.Fatal("the Google Voice SMS page-status binding is gone")
 	}
