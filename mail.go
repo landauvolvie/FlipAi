@@ -130,7 +130,11 @@ func buildConfiguredMailClient(cfg GmailConfig, dataDir, tokenFile string) (Mail
 	case GmailMethodGoogleVoice:
 		return newGoogleVoiceMediaMailClient(dataDir), nil, nil
 	case "":
-		return nil, nil, errors.New("connect Google Voice SMS under Connections")
+		// A fresh published install may reach the host before Google Voice has
+		// been connected. That is an idle setup state, not a Gmail backend
+		// failure, so leave the transport nil and let the Voice startup path
+		// report that it is waiting for setup.
+		return nil, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported message connection method %q", cfg.Method)
 	}
