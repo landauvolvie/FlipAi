@@ -38,15 +38,25 @@ func activityLogForStatePath(statePath string) *ActivityLog {
 	return &ActivityLog{path: filepath.Join(filepath.Dir(statePath), "activity.jsonl")}
 }
 
-// retiredGmailActivity keeps the published Activity surface aligned with the
-// published transport. Gmail remains in the source tree only as an archived
-// recovery backend; it must not look like a live connection during startup.
-// Filtering on read also cleans old entries already present on upgraded PCs.
-func retiredGmailActivity(stage, message string) bool {
-	if strings.EqualFold(strings.TrimSpace(stage), "gmail") {
-		return true
+// publishedActivityText keeps the published Activity surface aligned with the
+// direct Google Voice transport. Older bridge code used the stage name "gmail"
+// even for a real Google Voice candidate. Preserve that useful event but
+// relabel it; suppress the actual retired Gmail backend noise. Applying the
+// same migration while reading also cleans existing activity.jsonl files.
+func publishedActivityText(stage, message string) (string, string, bool) {
+	stage = strings.TrimSpace(stage)
+	message = strings.TrimSpace(message)
+	lower := strings.ToLower(message)
+	if strings.EqualFold(stage, "gmail") {
+		if strings.Contains(lower, "new google voice candidate") {
+			return "google-voice", "New Google Voice candidate detected", true
+		}
+		return stage, message, false
 	}
-	return strings.Contains(strings.ToLower(message), "gmail")
+	if strings.Contains(lower, "gmail") {
+		return stage, message, false
+	}
+	return stage, message, true
 }
 
 func (l *ActivityLog) Add(level, stage, message, sender, agent, messageID string) {
@@ -59,14 +69,15 @@ func (l *ActivityLog) AddTimed(level, stage, message, sender, agent, messageID s
 	if l == nil || strings.TrimSpace(l.path) == "" {
 		return
 	}
-	if retiredGmailActivity(stage, message) {
+	stage, message, visible := publishedActivityText(stage, message)
+	if !visible {
 		return
 	}
 	e := ActivityEvent{
 		Time:      time.Now(),
 		Level:     strings.TrimSpace(level),
-		Stage:     strings.TrimSpace(stage),
-		Message:   strings.TrimSpace(message),
+		Stage:     stage,
+		Message:   message,
 		Sender:    normalizeUSPhone(sender),
 		Agent:     strings.TrimSpace(agent),
 		MessageID: strings.TrimSpace(messageID),
@@ -142,9 +153,15 @@ func (l *ActivityLog) recentLocked(limit int) []ActivityEvent {
 	s.Buffer(make([]byte, 32*1024), 512*1024)
 	for s.Scan() {
 		var e ActivityEvent
-		if json.Unmarshal(s.Bytes(), &e) == nil && !retiredGmailActivity(e.Stage, e.Message) {
-			all = append(all, e)
+		if json.Unmarshal(s.Bytes(), &e) != nil {
+			continue
 		}
+		stage, message, visible := publishedActivityText(e.Stage, e.Message)
+		if !visible {
+			continue
+		}
+		e.Stage, e.Message = stage, message
+		all = append(all, e)
 	}
 	if len(all) > limit {
 		all = all[len(all)-limit:]
