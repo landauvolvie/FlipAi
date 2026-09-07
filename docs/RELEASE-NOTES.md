@@ -1,20 +1,25 @@
-# FlipAi v0.46.54
+# FlipAi v0.46.55
 
-The Agents page now matches FlipAi's public SMS routing, and every shortcut supports starting a fresh chat or session. This release includes all updater improvements from v0.46.53.
+This release fixes generated-image replies over Google Voice and simplifies the default reply instruction sent to browser chat models.
 
-## Agents and SMS routing
+## Image generation and MMS replies
 
-- The Agents page shows the real public shortcuts: `O:` ChatGPT Chat, `OW:` ChatGPT Work, `OC:` Codex, `A:` Claude Chat, `AW:` Claude Cowork, `AC:` Claude Code Web, `AL:` Claude Code Local, `G:` Gemini, `M:` Microsoft Copilot, and `X:` Grok.
-- Stale internal shortcut letters are no longer presented as the primary UI routing codes; stored legacy aliases remain compatible behind the scenes.
-- Add the configured new-session word after any shortcut to start fresh. With the default word: `OW NEW: research this`, `AC NEW: fix this repository`, or `X NEW: explain this`.
-- `OW NEW:` with no prompt resets only that exact destination. `OW NEW: <prompt>` resets it and runs the first task in the new session as one queued operation.
-- Fresh browser sessions preserve the exact requested mode: ChatGPT Work remains Work, Claude Cowork remains Cowork, and Claude Code Web remains Code Web.
-- Codex, Claude Code Local, Gemini, Microsoft Copilot, Grok, ChatGPT Chat, and Claude Chat also start their corresponding fresh conversation or session.
-- Fresh turns retain normal attachment, progress, health, and reply handling.
+- Long-running browser image generation no longer fails at the old 90-second response limit; FlipAi can keep waiting for generated media for up to 4 minutes.
+- Progress text such as “Image”, “Creating your image”, or other transient working states is no longer treated as the final reply when an image is still being generated.
+- FlipAi captures the generated browser-chat image and sends the actual image back through Google Voice as MMS instead of returning only a text status or link when direct media delivery is available.
+- Returned browser media is preserved until the final Google Voice reply so progress messages cannot consume the image before delivery.
+- The browser media path applies to ChatGPT, Gemini, Claude, Grok, and Microsoft Copilot chat integrations.
+
+## Reply instruction
+
+- The default reply hint is now exactly: `Please keep your reply short and to the point.`
+- Existing installs using the previous SMS/plain-text reply instruction are migrated automatically.
+- The old wording that mentioned SMS and plain text is no longer injected into model prompts.
 
 ## Validation
 
-- Added tests for `NEW` across every public shortcut, reset-only syntax, custom new-session words, and the Agents-page shortcut map.
+- Added tests for long browser image waits, generated-media capture and delivery, Windows browser behavior, and reply-hint migration.
+- Branch CI completed successfully before merge.
 - The release pipeline runs the full Linux and Windows tests, real-browser checks, vet/race checks, Google Voice smoke tests, Defender scans, installer smoke tests, SBOM generation, checksums, and provenance before publishing.
 
 No Authenticode/code-signing certificate is included in this release.
