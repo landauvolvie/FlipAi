@@ -169,7 +169,7 @@ type chatGPTSMSReply struct {
 	ConversationID string `json:"conversationId"`
 }
 
-func chatGPTBrowserSendMode(ctx context.Context, dataDir, prompt, mode string) (string, error) {
+func chatGPTBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mode string, onProgress func(string)) (string, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
@@ -189,12 +189,19 @@ func chatGPTBrowserSendMode(ctx context.Context, dataDir, prompt, mode string) (
 		if strings.TrimSpace(out.Detail) == "" {
 			out.Detail = strings.TrimSpace(string(b))
 		}
+		if browserLongTurnTimeoutDetail(out.Detail) {
+			return waitForBrowserLongTurn(ctx, dataDir, "G", onProgress)
+		}
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" {
 		return "", errors.New("ChatGPT returned an empty reply")
 	}
 	return strings.TrimSpace(out.Reply), nil
+}
+
+func chatGPTBrowserSendMode(ctx context.Context, dataDir, prompt, mode string) (string, error) {
+	return chatGPTBrowserSendModeWithProgress(ctx, dataDir, prompt, mode, nil)
 }
 
 func chatGPTBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) {
@@ -251,7 +258,7 @@ func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, err
 		mode = browserModeChat
 	}
 	dataDir := filepath.Dir(b.statePath)
-	reply, err := chatGPTBrowserSendMode(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode)
+	reply, err := chatGPTBrowserSendModeWithProgress(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode, b.setProgress)
 	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
