@@ -19,7 +19,7 @@ type App struct {
 	mu                                        sync.Mutex
 	cfg                                       Config
 	mail                                      MailClient
-	gmail                                     *GmailClient // OAuth backend only, for the OAuth browser flow.
+	gmail                                     *GmailClient // Archived OAuth backend only; not exposed by the published UI.
 	codex                                     *CodexClient
 	claude                                    *ClaudeClient
 	bridge                                    *Bridge
@@ -183,6 +183,9 @@ func (a *App) restartSoon() {
 		a.stop()
 	}
 }
+
+// Archived Gmail handlers remain compiled for source-level recovery, but the
+// current published handler does not register routes to them.
 func (a *App) oauthStart(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	g, cfg := a.gmail, a.cfg
@@ -269,7 +272,6 @@ func (a *App) handler() http.Handler {
 		fmt.Fprintf(w, `{"ok":true,"version":%q}`, version)
 	})
 	m.HandleFunc("/assets/", a.serveAsset)
-	m.HandleFunc("/oauth/google/callback", a.oauthCallback)
 	// The live-session hook helper posts here. It authenticates with its own
 	// per-run secret rather than the page token, because its caller is a child
 	// process rather than the desktop window.
@@ -335,7 +337,6 @@ func (a *App) handler() http.Handler {
 		"/settings/save":           a.saveSettings,
 		"/settings/startup":        a.saveStartup,
 		"/settings/updates":        a.saveUpdates,
-		"/settings/bootstartup":    a.saveBootStartup,
 		"/update/check":            a.updateCheck,
 		"/update/install":          a.updateInstall,
 		"/settings/reset":          a.resetSetup,
@@ -348,13 +349,11 @@ func (a *App) handler() http.Handler {
 
 	// Links that read state or open a local window.
 	for path, action := range map[string]http.HandlerFunc{
-		"/gmail/test":           a.gmailTest,
 		"/chatgpt-direct/probe": a.chatGPTDirectProbe,
 		"/codex/test":           a.codexTestCorrected,
 		"/claude/test":          a.claudeTestCorrected,
 		"/logs/export":          a.exportLogs,
 		"/open/folder":          a.openLocalFolder,
-		"/oauth/google/start":   a.oauthStart,
 	} {
 		m.HandleFunc(path, a.requireAuth(action))
 	}
@@ -384,25 +383,24 @@ func (a *App) startBridge(ctx context.Context) {
 	a.mu.Lock()
 	cfg, mc := a.cfg, a.mail
 	a.mu.Unlock()
-	if cfg.Gmail.Method == "" {
-		log.Printf("Gmail connection method not selected; background host is alive and waiting for setup")
+	if cfg.Gmail.Method != GmailMethodGoogleVoice {
+		log.Printf("Google Voice SMS is not connected; background host is alive and waiting for setup")
 		return
 	}
 	if mc == nil || !mc.Authorized() {
-		log.Printf("Gmail not configured for %s; background host is alive and waiting for setup", gmailMethodLabel(cfg.Gmail.Method))
+		log.Printf("Google Voice SMS background connection is not ready; waiting for the saved browser session")
 		return
 	}
-	// Gmail monitoring is transport-level and must start as soon as the mailbox
-	// is connected. Phone allowlists and security codes belong to routing and are
-	// enforced when a message is read; they must never prevent the mailbox from
-	// being watched or leave "Last mailbox check" stuck at "Not checked yet".
-	tctx, cancelMail := context.WithTimeout(ctx, 35*time.Second)
+	// The direct Google Voice transport starts as soon as its saved background
+	// browser session is usable. Phone allowlists and security codes belong to
+	// routing and are enforced after each received message, not at startup.
+	tctx, cancelTransport := context.WithTimeout(ctx, 35*time.Second)
 	if err := mc.Test(tctx); err != nil {
-		cancelMail()
-		log.Printf("Gmail connection test failed: %v", err)
+		cancelTransport()
+		log.Printf("Google Voice SMS connection test failed: %v", err)
 		return
 	}
-	cancelMail()
+	cancelTransport()
 	var codex *CodexClient
 	c := NewCodexClient(cfg.CodexPath, cfg.codexWorkingDir())
 	if err := c.Start(ctx); err != nil {
@@ -440,10 +438,7 @@ func (a *App) startBridge(ctx context.Context) {
 	b.SetAgentResultSink(func(agent string, ok bool, detail string) {
 		a.recordCheck(agent, ok, detail)
 	})
-	// Start the mailbox loop before any optional Claude live-session preflight.
-	// Bridge.Run performs an immediate first poll, then App Password mode enters
-	// IMAP IDLE so Gmail wakes FlipAi on EXISTS/RECENT instead of waiting for a
-	// polling interval. The 30-second poll remains only as a dropped-IDLE backup.
+	// Start SMS monitoring before any optional Claude live-session preflight.
 	go b.Run(ctx)
 	// Live mode is attached after the bridge exists so its preflight can log
 	// through the same Activity log the user reads, and so a refusal leaves a
@@ -455,9 +450,5 @@ func (a *App) startBridge(ctx context.Context) {
 	// browser-less one is named in the Activity log rather than only in whatever
 	// Claude ends up texting back.
 	go a.warmClaudeConnection(ctx, cfg, b, claude)
-	if cfg.Gmail.Method == GmailMethodAppPassword {
-		log.Printf("Gmail monitoring active via App Password with IMAP IDLE")
-	} else {
-		log.Printf("Gmail monitoring active via Google API/OAuth at %ds interval", cfg.Gmail.PollSeconds)
-	}
+	log.Printf("Google Voice SMS monitoring active through the signed-in background browser")
 }
