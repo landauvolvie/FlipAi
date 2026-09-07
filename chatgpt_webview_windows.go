@@ -51,51 +51,96 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
   const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden';
-  const label=n=>norm((n&&n.getAttribute&&n.getAttribute('aria-label'))+' '+(n&&n.getAttribute&&n.getAttribute('title'))+' '+(n&&n.innerText||n&&n.textContent||''));
-  const selected=n=>{
-    if(!n)return false;
-    const vals=[n.getAttribute('aria-selected'),n.getAttribute('aria-pressed'),n.getAttribute('aria-checked'),n.getAttribute('data-state')].map(norm);
-    if(vals.some(v=>v==='true'||v==='active'||v==='on'||v==='checked'||v==='selected'))return true;
-    return /(^|\s)(active|selected)(\s|$)/i.test(String(n.className||''));
+  const stateSelected=n=>{
+    if(!n||!n.getAttribute)return false;
+    const vals=[n.getAttribute('aria-selected'),n.getAttribute('aria-pressed'),n.getAttribute('aria-checked'),n.getAttribute('aria-current'),n.getAttribute('data-state')].map(norm);
+    if(vals.some(v=>v==='true'||v==='active'||v==='on'||v==='checked'||v==='selected'||v==='page'))return true;
+    return /(^|\s)(active|selected|current)(\s|$)/i.test(String(n.className||''));
   };
-  const controls=()=>Array.from(document.querySelectorAll('button,[role="button"],[role="tab"],[role="menuitem"],[role="option"]')).filter(visible);
-  const exact=name=>controls().filter(n=>{const t=norm(n.innerText||n.textContent||'');const a=norm(n.getAttribute('aria-label'));return t===name||a===name||t===name+' mode'||a===name+' mode';});
-  const findSelected=name=>exact(name).find(selected)||null;
+  const selected=n=>{
+    for(let cur=n,i=0;cur&&i<5;cur=cur.parentElement,i++)if(stateSelected(cur))return true;
+    return false;
+  };
+  const clickable=n=>{
+    if(!n)return null;
+    return n.closest&&n.closest('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"]')||n;
+  };
+  const controls=()=>Array.from(document.querySelectorAll('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"],[aria-label],[title],[data-testid]')).filter(visible);
+  const values=n=>[n&&n.innerText,n&&n.textContent,n&&n.getAttribute&&n.getAttribute('aria-label'),n&&n.getAttribute&&n.getAttribute('title')].map(norm).filter(Boolean);
+  const isName=(n,name)=>values(n).some(v=>v===name||v===name+' mode'||v===name+' beta'||v.startsWith(name+' ·')||v.startsWith(name+' -'));
+  const named=name=>{
+    const found=controls().filter(n=>isName(n,name)).map(clickable);
+    const leaves=Array.from(document.querySelectorAll('span,div,p')).filter(n=>visible(n)&&norm(n.textContent)===name).map(clickable);
+    return Array.from(new Set(found.concat(leaves))).filter(visible);
+  };
+  const findSelected=name=>named(name).find(selected)||null;
   const composerReady=()=>!!document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"]');
   wanted=norm(wanted)==='work'?'work':'chat';
   const other=wanted==='work'?'chat':'work';
 
-  // A fresh navigation can restore /api/auth/session before ChatGPT's SPA
-  // has rendered the composer and mode controls. NEW must wait for the UI
-  // before verifying Work, otherwise OW NEW: fails while ordinary OW: works.
+  // Auth can restore before ChatGPT finishes mounting the fresh composer and
+  // experience toggle. Wait for the actual interactive UI, not only auth.
   for(let i=0;i<100&&!composerReady();i++)await sleep(200);
 
   if(findSelected(wanted))return {ok:true,mode:wanted,href:location.href};
 
-  let target=exact(wanted)[0]||null;
+  let target=named(wanted)[0]||null;
   if(!target){
-    const current=findSelected(other)||exact(other)[0]||null;
-    if(current){current.click();await sleep(300);target=exact(wanted)[0]||null;}
+    const current=findSelected(other)||named(other)[0]||null;
+    if(current){
+      current.click();
+      for(let i=0;i<20&&!target;i++){await sleep(150);target=named(wanted)[0]||null;}
+    }
+  }
+  if(!target){
+    // Some ChatGPT builds expose Chat/Work through one combined toggle whose
+    // children are not buttons until it is opened. Open only a short, explicit
+    // control that names both experiences, then look for the exact Work item.
+    const picker=controls().find(n=>{
+      const v=values(n).join(' ');
+      return v.length<100&&/(^|\s)chat(\s|$)/.test(v)&&/(^|\s)work(\s|$)/.test(v);
+    });
+    if(picker){
+      picker.click();
+      for(let i=0;i<20&&!target;i++){await sleep(150);target=named(wanted)[0]||null;}
+    }
   }
   if(target){
     target.click();
-    for(let i=0;i<28;i++){
+    for(let i=0;i<40;i++){
       await sleep(150);
       if(findSelected(wanted))return {ok:true,mode:wanted,href:location.href};
-      // Many dropdowns close after selection and leave the newly selected mode
-      // as the only exact-value trigger. That is a valid verified state too.
-      const wantedExact=exact(wanted), otherExact=exact(other);
+      const wantedExact=named(wanted), otherExact=named(other);
       if(wantedExact.length===1&&otherExact.length===0)return {ok:true,mode:wanted,href:location.href};
+      const href=norm(location.href);
+      if(wanted==='work'&&(/(^|[/?#=&_-])work([/?#=&_-]|$)/.test(href)))return {ok:true,mode:wanted,href:location.href};
     }
   }
 
   if(wanted==='chat'){
-    // Regular Chat predates the toggle. On accounts where the selector is not
-    // rendered, allow Chat only if Work is not visibly selected.
     if(!findSelected('work'))return {ok:true,mode:'chat',href:location.href,legacy:true};
   }
   return {ok:false,detail:'FlipAi could not verify ChatGPT '+(wanted==='work'?'Work':'Chat')+' mode. The task was not sent so it cannot accidentally run in the wrong experience.',href:location.href};
 })(%s)`
+
+// Prefer ChatGPT's own New chat control for explicit NEW requests. Clicking it
+// preserves the currently selected Chat/Work experience more reliably than a
+// blind top-level navigation. If the control is unavailable, Go falls back to
+// navigating to chatgpt.com and then re-verifies the requested experience.
+const chatGPTClickNewChatJS = `(()=>{
+  const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden';
+  const controls=Array.from(document.querySelectorAll('button,a,[role="button"],[role="link"],[aria-label],[title],[data-testid]')).filter(visible);
+  const vals=n=>[n.innerText,n.textContent,n.getAttribute&&n.getAttribute('aria-label'),n.getAttribute&&n.getAttribute('title')].map(norm).filter(Boolean);
+  let target=controls.find(n=>vals(n).some(v=>v==='new chat'||v==='new conversation'))||null;
+  if(!target){
+    const leaf=Array.from(document.querySelectorAll('span,div,p')).find(n=>visible(n)&&(norm(n.textContent)==='new chat'||norm(n.textContent)==='new conversation'))||null;
+    if(leaf)target=leaf.closest&&leaf.closest('button,a,[role="button"],[role="link"]')||leaf;
+  }
+  if(!target)return false;
+  target.click();
+  return true;
+})()`
 
 // chatGPTTurnJS deliberately uses ChatGPT's own page controls inside FlipAi's
 // private WebView. It does not use Windows accessibility, global keyboard/mouse
@@ -447,34 +492,55 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		return got
 	}
 
+	prepareFresh := func(mode string) chatGPTTurnResult {
+		var clicked bool
+		if err := chatGPTEval(dev, chatGPTClickNewChatJS, false, &clicked); err != nil {
+			clicked = false
+		}
+		if !clicked {
+			var ignored bool
+			if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+				return chatGPTTurnResult{OK: false, Detail: err.Error()}
+			}
+		}
+		// Give a SPA click or full navigation time to commit before auth can
+		// immediately report the previous page as signed in.
+		time.Sleep(650 * time.Millisecond)
+		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
+			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a new chat"}
+		}
+		return ensureMode(mode)
+	}
+
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool, mode string) {
 		if !authorized(r) {
 			http.Error(rw, "FlipAi token required", http.StatusForbidden)
 			return
 		}
 		if newChat {
-			var ignored bool
-			if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+			modeResult := prepareFresh(mode)
+			if !modeResult.OK {
 				rw.WriteHeader(http.StatusBadGateway)
-				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail})
 				return
 			}
-		}
-		if !waitForChatGPTPageSignedIn(dev, 20*time.Second) {
-			s := loadChatGPTRuntime(dataDir)
-			detail := "ChatGPT is not signed in inside FlipAi. Press Connect ChatGPT and complete sign-in first."
-			if s.Connected {
-				detail = "The saved ChatGPT session is still restoring or ChatGPT has expired it. Retry once; use Connect ChatGPT only if the saved account session no longer restores."
+		} else {
+			if !waitForChatGPTPageSignedIn(dev, 20*time.Second) {
+				s := loadChatGPTRuntime(dataDir)
+				detail := "ChatGPT is not signed in inside FlipAi. Press Connect ChatGPT and complete sign-in first."
+				if s.Connected {
+					detail = "The saved ChatGPT session is still restoring or ChatGPT has expired it. Retry once; use Connect ChatGPT only if the saved account session no longer restores."
+				}
+				rw.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": detail})
+				return
 			}
-			rw.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": detail})
-			return
-		}
-		modeResult := ensureMode(mode)
-		if !modeResult.OK {
-			rw.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail})
-			return
+			modeResult := ensureMode(mode)
+			if !modeResult.OK {
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail})
+				return
+			}
 		}
 		expr := fmt.Sprintf(chatGPTTurnJS, chatGPTJSString(prompt))
 		var got chatGPTTurnResult
@@ -518,18 +584,7 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 			Mode string `json:"mode"`
 		}
 		_ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&body)
-		var ignored bool
-		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-			rw.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
-			return
-		}
-		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
-			rw.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT did not restore the saved sign-in after opening a new chat"})
-			return
-		}
-		modeResult := ensureMode(body.Mode)
+		modeResult := prepareFresh(body.Mode)
 		if !modeResult.OK {
 			rw.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail})
