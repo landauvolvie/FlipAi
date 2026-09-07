@@ -4,7 +4,7 @@ name: release
 # Existing assets are replaced only after every release check passes.
 # Release-time CycloneDX SBOM generation and upload are intentionally part of this job.
 # Touching this workflow intentionally retries a release after version metadata is synchronized.
-# v0.46.58 release notes synchronized; retry publishing.
+# v0.46.59 ChatGPT Work NEW fix synchronized; publish this release.
 on:
   push:
     branches: [main]
@@ -132,7 +132,6 @@ jobs:
           if(-not $iscc){choco install innosetup --yes --no-progress;$iscc=$candidates|Where-Object {Test-Path $_}|Select-Object -First 1}
           if(-not $iscc){throw 'Inno Setup compiler was not found'}
           "ISCC=$iscc" >> $env:GITHUB_ENV
-
       - name: Build Windows installer
         shell: pwsh
         run: |
