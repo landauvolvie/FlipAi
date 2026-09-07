@@ -7,22 +7,39 @@ import (
 	"testing"
 )
 
-func TestPublishedActivitySuppressesRetiredGmailNoise(t *testing.T) {
+func TestPublishedActivityRemovesGmailNoiseButKeepsUsefulVoiceDiagnostics(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	log := activityLogForStatePath(statePath)
 
 	log.Add("warn", "gmail", "Gmail backend is not ready", "", "", "")
 	log.Add("warn", "bridge", "SMS processing did not start. Check Gmail and agent diagnostics.", "", "", "")
+	log.Add("info", "gmail", "New Google Voice candidate detected in Gmail", "", "", "candidate-1")
 	log.Add("info", "google-voice", "Google Voice background session restored.", "", "", "")
 
 	events := log.Recent(20)
-	if len(events) != 1 {
-		t.Fatalf("got %d visible events, want only the Google Voice event: %#v", len(events), events)
+	if len(events) != 3 {
+		t.Fatalf("got %d visible events, want three useful Google Voice diagnostics: %#v", len(events), events)
 	}
-	if events[0].Stage != "google-voice" {
-		t.Fatalf("visible stage = %q, want google-voice", events[0].Stage)
+	for _, e := range events {
+		if strings.Contains(strings.ToLower(e.Message), "gmail") {
+			t.Fatalf("retired Gmail wording leaked into Activity: %#v", e)
+		}
 	}
+	foundCandidate := false
+	foundStartupWarning := false
+	for _, e := range events {
+		if e.Stage == "google-voice" && e.Message == "New Google Voice candidate detected" {
+			foundCandidate = true
+		}
+		if e.Message == "SMS processing did not start. Check Google Voice and agent diagnostics." {
+			foundStartupWarning = true
+		}
+	}
+	if !foundCandidate || !foundStartupWarning {
+		t.Fatalf("useful legacy events were not relabeled correctly: %#v", events)
+	}
+
 	b, err := os.ReadFile(filepath.Join(dir, "activity.jsonl"))
 	if err != nil {
 		t.Fatal(err)
