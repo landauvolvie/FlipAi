@@ -155,7 +155,8 @@ func (b *Bridge) composeGeminiChatSMSPrompt(command string) string {
 }
 
 func (b *Bridge) runGeminiChatSMS(ctx context.Context, command string) (string, error) {
-	return geminiChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeGeminiChatSMSPrompt(command))
+	reply, err := geminiChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeGeminiChatSMSPrompt(command))
+	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
 func (b *Bridge) newGeminiChatConversation(ctx context.Context) error {

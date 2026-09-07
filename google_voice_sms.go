@@ -299,19 +299,25 @@ func (g *GoogleVoiceSMSClient) SendReply(ctx context.Context, original GmailMess
 	if err != nil {
 		return err
 	}
-	if media := takeCapturedBrowserChatReturnedMedia(); media != nil {
-		fallbackBody, image := prepareBrowserChatReturnedMediaReply(body, media)
-		if image != nil {
-			// Use FlipAi's normal hidden Google Voice image-send surface. If
-			// Google Voice rejects the asset or this install has no usable image
-			// sender session, keep the text reply and give the user the exact
-			// browser conversation instead of dropping the generated media.
-			if err := sendGoogleVoiceImageMMS(ctx, original, body, image); err == nil {
-				return nil
+	// Ack/progress texts share this same exact-thread sender. Never let one of
+	// those transient updates consume a generated browser image that arrived a
+	// few milliseconds before the final answer; the final reply owns the media
+	// slot and sends it as MMS.
+	if !isTransientVoiceReply(body) {
+		if media := takeCapturedBrowserChatReturnedMedia(); media != nil {
+			fallbackBody, image := prepareBrowserChatReturnedMediaReply(body, media)
+			if image != nil {
+				// Use FlipAi's normal hidden Google Voice image-send surface. If
+				// Google Voice rejects the asset or this install has no usable image
+				// sender session, keep the text reply and give the user the exact
+				// browser conversation instead of dropping the generated media.
+				if err := sendGoogleVoiceImageMMS(ctx, original, body, image); err == nil {
+					return nil
+				}
+				body = appendBrowserMediaConversationLink(body, media.ConversationURL)
+			} else {
+				body = fallbackBody
 			}
-			body = appendBrowserMediaConversationLink(body, media.ConversationURL)
-		} else {
-			body = fallbackBody
 		}
 	}
 	return requestGoogleVoiceTextThread(ctx, g.dataDir, phone, thread, body)

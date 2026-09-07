@@ -137,7 +137,8 @@ func (b *Bridge) runClaudeChatSMS(ctx context.Context, command string) (string, 
 	if mode == "" {
 		mode = browserModeChat
 	}
-	return claudeChatBrowserSendMode(ctx, filepath.Dir(b.statePath), b.composeClaudeChatSMSPrompt(command), mode)
+	reply, err := claudeChatBrowserSendMode(ctx, filepath.Dir(b.statePath), b.composeClaudeChatSMSPrompt(command), mode)
+	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
 func (b *Bridge) newClaudeChatConversation(ctx context.Context) error {

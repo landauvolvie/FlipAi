@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const browserChatReturnedMediaMarker = "__FLIPAI_BROWSER_RETURN_MEDIA__"
@@ -90,12 +92,24 @@ const browserChatReturnedMediaJS = `/*` + browserChatReturnedMediaMarker + `*/(a
   return {kind:choice.kind,filename,mediaType,base64,conversationUrl:href,x:rect.left+scrollX,y:rect.top+scrollY,width:rect.width,height:rect.height};
 })()`
 
+func browserChatReturnedMediaExpression(wait time.Duration) string {
+	if wait < 1600*time.Millisecond {
+		wait = 1600 * time.Millisecond
+	}
+	ms := wait.Milliseconds()
+	return strings.Replace(browserChatReturnedMediaJS, "const until=Date.now()+1600;", "const until=Date.now()+"+strconv.FormatInt(ms, 10)+";", 1)
+}
+
 func captureBrowserChatReturnedMediaAfterTurn(d voiceDevTools) {
+	captureBrowserChatReturnedMediaAfterTurnWithWait(d, 1600*time.Millisecond)
+}
+
+func captureBrowserChatReturnedMediaAfterTurnWithWait(d voiceDevTools, wait time.Duration) {
 	if d == nil {
 		return
 	}
 	var page *browserChatPageMedia
-	if err := voiceEval(d, browserChatReturnedMediaJS, true, &page); err != nil || page == nil {
+	if err := voiceEval(d, browserChatReturnedMediaExpression(wait), true, &page); err != nil || page == nil {
 		return
 	}
 	var data []byte
