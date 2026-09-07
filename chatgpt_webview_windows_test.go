@@ -39,10 +39,29 @@ func TestChatGPTWorkModeWaitsForFreshPageUI(t *testing.T) {
 	for _, want := range []string{
 		"const composerReady=()=>!!document.querySelector",
 		"for(let i=0;i<100&&!composerReady();i++)await sleep(200);",
-		"modeResult := ensureMode(body.Mode)",
+		"modeResult := prepareFresh(body.Mode)",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("fresh ChatGPT Work mode lost readiness guard %q", want)
+		}
+	}
+}
+
+func TestChatGPTWorkNewUsesNativeNewChatAndBroadModeControls(t *testing.T) {
+	b, err := os.ReadFile("chatgpt_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"const chatGPTClickNewChatJS",
+		`button,a,[role="button"]`,
+		"aria-current",
+		"prepareFresh := func(mode string) chatGPTTurnResult",
+		"target.click()",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("ChatGPT Work NEW lost robust fresh-session behavior %q", want)
 		}
 	}
 }
