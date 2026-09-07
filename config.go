@@ -17,10 +17,15 @@ import (
 
 const version = "0.46.54"
 
-// defaultReplyStyleHint is the only behavioural framing FlipAi adds to an SMS
-// command. FlipAi delivers the reply itself, so the agent is never told how or
-// where to send anything — only that its answer travels as a text message.
-const defaultReplyStyleHint = "Reply for SMS. Keep it brief and plain text."
+// defaultReplyStyleHint is the only behavioural framing FlipAi adds to a phone
+// command. It deliberately says nothing about SMS or plain text so providers
+// remain free to use their normal tools, including image/file generation.
+const defaultReplyStyleHint = "Please keep your reply short and to the point."
+
+const (
+	legacyReplyStyleHintSMSV1 = "Reply for SMS. Keep it brief and plain text."
+	legacyReplyStyleHintSMSV0 = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."
+)
 
 // replyStyleHintMaxChars caps a hand-written instruction. FlipAi is a transport
 // between a phone and the agent the user already trusts, so this line is meant
@@ -380,10 +385,7 @@ func (c Config) progressIntervalFor(agent string) time.Duration {
 
 func (c Config) replyStyleHintFor(agent string) string {
 	_ = agent
-	if shared := strings.TrimSpace(c.GoogleVoice.ReplyStyleHint); shared != "" {
-		return shared
-	}
-	return defaultReplyStyleHint
+	return migrateLegacyReplyStyleHint(c.GoogleVoice.ReplyStyleHint)
 }
 
 func normalizeReplyStyleHint(v string) string {
@@ -392,6 +394,16 @@ func normalizeReplyStyleHint(v string) string {
 		v = strings.TrimSpace(v[:replyStyleHintMaxChars])
 	}
 	return v
+}
+
+func migrateLegacyReplyStyleHint(v string) string {
+	v = normalizeReplyStyleHint(v)
+	switch v {
+	case "", legacyReplyStyleHintSMSV1, legacyReplyStyleHintSMSV0:
+		return defaultReplyStyleHint
+	default:
+		return v
+	}
 }
 
 func (c Config) claudeWorkingDir() string {
@@ -444,10 +456,7 @@ func loadConfig(path, dataDir string) (Config, error) {
 	if cfg.GoogleVoice.ReplyMaxChars < 80 {
 		cfg.GoogleVoice.ReplyMaxChars = 300
 	}
-	if strings.TrimSpace(cfg.GoogleVoice.ReplyStyleHint) == "" {
-		cfg.GoogleVoice.ReplyStyleHint = defaultReplyStyleHint
-	}
-	cfg.GoogleVoice.ReplyStyleHint = normalizeReplyStyleHint(cfg.GoogleVoice.ReplyStyleHint)
+	cfg.GoogleVoice.ReplyStyleHint = migrateLegacyReplyStyleHint(cfg.GoogleVoice.ReplyStyleHint)
 	cfg.Codex.Instruction = normalizeReplyStyleHint(cfg.Codex.Instruction)
 	cfg.Claude.Instruction = normalizeReplyStyleHint(cfg.Claude.Instruction)
 	cfg.ChatGPT.Instruction = normalizeReplyStyleHint(cfg.ChatGPT.Instruction)
