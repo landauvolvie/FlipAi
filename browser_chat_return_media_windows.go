@@ -15,7 +15,9 @@ const browserChatReturnedMediaMarker = "__FLIPAI_BROWSER_RETURN_MEDIA__"
 
 func isBrowserChatTurnExpression(expression string) bool {
 	// Every browser-chat provider uses the same bounded 90-second awaited page
-	// turn. Login probes and ordinary page checks do not contain this deadline.
+	// turn as its first checkpoint. Login probes and ordinary page checks do not
+	// contain this deadline. FlipAi can continue the actual model turn after the
+	// checkpoint without imposing an elapsed-time cap.
 	return strings.Contains(expression, "const deadline=Date.now()+90000;") ||
 		strings.Contains(expression, "const deadline = Date.now() + 90000;")
 }
@@ -163,4 +165,43 @@ func captureBrowserChatReturnedMediaAfterTurnWithWait(d voiceDevTools, wait time
 		Data:            data,
 		ConversationURL: clean.ConversationURL,
 	})
+}
+
+// captureBrowserChatReturnedMediaUntilSettled replaces the former four-minute
+// generated-image collector. Each individual page scan stays bounded so a
+// wedged DevTools call cannot hold the UI thread, but there is no total elapsed
+// deadline. As long as the provider still shows work/pending image state, FlipAi
+// keeps looking for the actual media.
+func captureBrowserChatReturnedMediaUntilSettled(d voiceDevTools, provider string) {
+	if d == nil {
+		return
+	}
+	consecutiveControlErrors := 0
+	for {
+		if hasCapturedBrowserChatReturnedMedia() {
+			return
+		}
+		captureBrowserChatReturnedMediaAfterTurnWithWait(d, 5*time.Second)
+		if hasCapturedBrowserChatReturnedMedia() {
+			return
+		}
+
+		snapshot, err := readBrowserLongTurnSnapshot(d)
+		if err != nil {
+			consecutiveControlErrors++
+			if consecutiveControlErrors >= 3 {
+				return
+			}
+			continue
+		}
+		consecutiveControlErrors = 0
+		if strings.TrimSpace(snapshot.Failure) != "" {
+			return
+		}
+		reply := strings.TrimSpace(snapshot.Reply)
+		if !snapshot.Working && reply != "" && !browserChatReplySuggestsPendingImage(reply) {
+			return
+		}
+		_ = provider // reserved for provider-specific media selectors if needed
+	}
 }
