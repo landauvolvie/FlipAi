@@ -31,11 +31,11 @@ const (
 	// does not disappear for a long time.
 	voiceDevToolsTimeout = 8 * time.Second
 
-	// Browser chat text turns intentionally use one awaited Runtime.evaluate
-	// promise. The page detector is still bounded at 90 seconds, but generated
-	// image turns recover below by continuing a separate media collector after
-	// that detector returns. This keeps ordinary text failures bounded without
-	// falsely failing an image that is still rendering.
+	// The provider page drivers still use a 90-second first-pass checkpoint so
+	// the private worker HTTP request can return before its legacy transport
+	// deadline. A timed-out *model turn* is no longer a failure: Call starts the
+	// indefinite browserLongTurn continuation before returning that checkpoint
+	// to the SMS layer, which then waits on the persisted continuation state.
 	chatGPTTurnDevToolsTimeout = 95 * time.Second
 
 	// The generated-media collector is itself an awaited page expression and is
@@ -65,8 +65,8 @@ func newWebViewDevTools(view webview2.WebView) *webViewDevTools {
 
 // webViewDevToolsCallTimeout keeps the short Google Voice timeout as the
 // default, but recognizes long-running page turns and gives only those awaited
-// expressions enough time to finish. This channel is shared by the private
-// browser sessions, so a single global timeout is not correct for all of them.
+// expressions enough time to reach their first checkpoint. Long model work is
+// continued separately after that checkpoint; ordinary page probes stay short.
 func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	if method != "Runtime.evaluate" {
 		return voiceDevToolsTimeout
@@ -105,6 +105,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 	}
 
 	browserTurn := false
+	browserProvider := ""
 	generatedImageTurn := false
 	// Browser-chat media turns carry a private marker inside the prompt sent to
 	// the worker. Strip it before the page sees the prompt, upload those local
@@ -118,6 +119,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 				if browserTurn {
 					clearCapturedBrowserChatReturnedMedia()
 					generatedImageTurn = browserChatPromptRequestsGeneratedImage(expression)
+					browserProvider = beginBrowserLongTurn(expression)
 				}
 				clean, attachments, found, err := extractBrowserChatAttachmentMarker(expression)
 				if err != nil {
@@ -185,11 +187,20 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 			}
 		}
 		if browserTurn {
+			// The page drivers' 90-second result is a checkpoint, not a failure.
+			// If the provider visibly says it is still working, continue sampling
+			// that same page without resending the prompt. The main FlipAi process
+			// waits on the persisted state and can keep texting safe visible status
+			// updates for as long as the provider remains active.
+			if value, ok := browserTurnValueFromDevTools(got.result); ok && !value.OK && browserLongTurnTimeoutDetail(value.Detail) && browserProvider != "" {
+				started := strings.Contains(strings.ToLower(value.Detail), "started answering") || strings.Contains(strings.ToLower(value.Detail), "started responding")
+				go continueBrowserLongTurn(d, browserProvider, started)
+			}
+
 			// Image creation frequently continues after the provider's text DOM
-			// has stabilized or after its 90-second detector expires. Run that
-			// collector asynchronously so /chat can finish, then the SMS wrapper
-			// waits for the actual media before delivery. Ordinary text turns keep
-			// the fast 1.6-second final-media scan.
+			// has stabilized or after its first checkpoint. Keep the existing media
+			// collector in parallel with the long-turn continuation so the actual
+			// image can still be handed to the Google Voice MMS path.
 			if generatedImageTurn {
 				go captureBrowserChatReturnedMediaAfterTurnWithWait(d, browserChatGeneratedImageWait)
 			} else {
