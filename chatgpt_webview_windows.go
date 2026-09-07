@@ -61,8 +61,14 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
   const controls=()=>Array.from(document.querySelectorAll('button,[role="button"],[role="tab"],[role="menuitem"],[role="option"]')).filter(visible);
   const exact=name=>controls().filter(n=>{const t=norm(n.innerText||n.textContent||'');const a=norm(n.getAttribute('aria-label'));return t===name||a===name||t===name+' mode'||a===name+' mode';});
   const findSelected=name=>exact(name).find(selected)||null;
+  const composerReady=()=>!!document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"]');
   wanted=norm(wanted)==='work'?'work':'chat';
   const other=wanted==='work'?'chat':'work';
+
+  // A fresh navigation can restore /api/auth/session before ChatGPT's SPA
+  // has rendered the composer and mode controls. NEW must wait for the UI
+  // before verifying Work, otherwise OW NEW: fails while ordinary OW: works.
+  for(let i=0;i<100&&!composerReady();i++)await sleep(200);
 
   if(findSelected(wanted))return {ok:true,mode:wanted,href:location.href};
 
@@ -269,7 +275,13 @@ func platformStopChatGPTWorker(dataDir string) error {
 	}
 	if s.ControlPort < 1 || s.ControlToken == "" {
 		mutateChatGPTRuntime(dataDir, func(v *ChatGPTWebRuntime) {
-			v.Running = false; v.Starting = false; v.Visible = false; v.LoginActive = false; v.SignedIn = false; v.ControlPort = 0; v.ControlToken = ""
+			v.Running = false
+			v.Starting = false
+			v.Visible = false
+			v.LoginActive = false
+			v.SignedIn = false
+			v.ControlPort = 0
+			v.ControlToken = ""
 		})
 		return nil
 	}
@@ -278,7 +290,13 @@ func platformStopChatGPTWorker(dataDir string) error {
 	_, _, err := chatGPTControlRequest(ctx, s, http.MethodPost, "/stop", strings.NewReader(`{}`))
 	if err != nil {
 		mutateChatGPTRuntime(dataDir, func(v *ChatGPTWebRuntime) {
-			v.Running = false; v.Starting = false; v.Visible = false; v.LoginActive = false; v.SignedIn = false; v.ControlPort = 0; v.ControlToken = ""
+			v.Running = false
+			v.Starting = false
+			v.Visible = false
+			v.LoginActive = false
+			v.SignedIn = false
+			v.ControlPort = 0
+			v.ControlToken = ""
 		})
 	}
 	return err
@@ -315,12 +333,24 @@ func runChatGPTWebView(dataDir string, visible bool) error {
 	_ = w.Bind("flipChatGPTStatus", func(signedIn bool, href string) {
 		stateChanged := signedIn != wasSignedIn
 		mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
-			s.Running = true; s.Starting = false; s.Visible = visible; s.LoginActive = visible; s.SignedIn = signedIn; s.LastURL = href
+			s.Running = true
+			s.Starting = false
+			s.Visible = visible
+			s.LoginActive = visible
+			s.SignedIn = signedIn
+			s.LastURL = href
 			if signedIn {
-				s.Connected = true; s.LastError = ""
-				if stateChanged || s.LastEvent == "browser-starting" || s.LastEvent == "background-starting" { s.LastEvent = "session-ready" }
+				s.Connected = true
+				s.LastError = ""
+				if stateChanged || s.LastEvent == "browser-starting" || s.LastEvent == "background-starting" {
+					s.LastEvent = "session-ready"
+				}
 			} else if stateChanged || s.LastEvent == "browser-starting" || s.LastEvent == "background-starting" {
-				if s.Connected { s.LastEvent = "session-restoring" } else { s.LastEvent = "waiting-for-sign-in" }
+				if s.Connected {
+					s.LastEvent = "session-restoring"
+				} else {
+					s.LastEvent = "waiting-for-sign-in"
+				}
 			}
 		})
 		if signedIn && !wasSignedIn {
@@ -336,39 +366,76 @@ func runChatGPTWebView(dataDir string, visible bool) error {
 	w.Init(chatGPTPageMonitorJS)
 	dev := newWebViewDevTools(w)
 	port, closer := startChatGPTControlEndpoint(dataDir, w, dev)
-	if closer != nil { defer closer.Close() }
+	if closer != nil {
+		defer closer.Close()
+	}
 	mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
-		s.Running = true; s.Starting = false; s.Visible = visible; s.LoginActive = visible; s.ControlPort = port; s.SignedIn = false; s.LastEvent = "browser-starting"; s.LastError = ""
+		s.Running = true
+		s.Starting = false
+		s.Visible = visible
+		s.LoginActive = visible
+		s.ControlPort = port
+		s.SignedIn = false
+		s.LastEvent = "browser-starting"
+		s.LastError = ""
 	})
-	if visible { chatGPTActivity(dataDir, "info", "chatgpt-session", "Dedicated ChatGPT sign-in browser opened.", 0) } else { chatGPTActivity(dataDir, "info", "chatgpt-session", "Dedicated ChatGPT background browser started off-screen.", 0) }
+	if visible {
+		chatGPTActivity(dataDir, "info", "chatgpt-session", "Dedicated ChatGPT sign-in browser opened.", 0)
+	} else {
+		chatGPTActivity(dataDir, "info", "chatgpt-session", "Dedicated ChatGPT background browser started off-screen.", 0)
+	}
 	w.Navigate(chatGPTWebURL)
 	w.Run()
 	mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
-		s.Running = false; s.Starting = false; s.Visible = false; s.LoginActive = false; s.SignedIn = false; s.ControlPort = 0; s.ControlToken = ""
-		if s.Connected { s.LastEvent = "background-restart-pending" } else { s.LastEvent = "browser-closed" }
+		s.Running = false
+		s.Starting = false
+		s.Visible = false
+		s.LoginActive = false
+		s.SignedIn = false
+		s.ControlPort = 0
+		s.ControlToken = ""
+		if s.Connected {
+			s.LastEvent = "background-restart-pending"
+		} else {
+			s.LastEvent = "browser-closed"
+		}
 	})
-	if visible && loadChatGPTRuntime(dataDir).Connected { chatGPTActivity(dataDir, "info", "chatgpt-session", "ChatGPT sign-in window closed; the saved session will continue invisibly in the background.", 0) }
+	if visible && loadChatGPTRuntime(dataDir).Connected {
+		chatGPTActivity(dataDir, "info", "chatgpt-session", "ChatGPT sign-in window closed; the saved session will continue invisibly in the background.", 0)
+	}
 	return nil
 }
 
 func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDevTools) (int, io.Closer) {
-	if dev == nil { return 0, nil }
+	if dev == nil {
+		return 0, nil
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { return 0, nil }
+	if err != nil {
+		return 0, nil
+	}
 	token, err := secureRandomToken(24)
-	if err != nil { _ = ln.Close(); return 0, nil }
+	if err != nil {
+		_ = ln.Close()
+		return 0, nil
+	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) { s.ControlToken = token; s.ControlPort = port })
 	authorized := func(r *http.Request) bool { return token != "" && r.Header.Get("X-FlipAi-Token") == token }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(rw http.ResponseWriter, r *http.Request) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "signedIn": chatGPTPageIsSignedIn(dev)})
 	})
 
 	ensureMode := func(mode string) chatGPTTurnResult {
 		mode = strings.ToLower(strings.TrimSpace(mode))
-		if mode == "" { mode = browserModeChat }
+		if mode == "" {
+			mode = browserModeChat
+		}
 		if mode != browserModeChat && mode != browserModeWork {
 			return chatGPTTurnResult{OK: false, Detail: "unsupported ChatGPT browser mode: " + mode}
 		}
@@ -381,74 +448,135 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 	}
 
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool, mode string) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		if newChat {
 			var ignored bool
 			if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-				rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()}); return
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+				return
 			}
 		}
 		if !waitForChatGPTPageSignedIn(dev, 20*time.Second) {
 			s := loadChatGPTRuntime(dataDir)
 			detail := "ChatGPT is not signed in inside FlipAi. Press Connect ChatGPT and complete sign-in first."
-			if s.Connected { detail = "The saved ChatGPT session is still restoring or ChatGPT has expired it. Retry once; use Connect ChatGPT only if the saved account session no longer restores." }
-			rw.WriteHeader(http.StatusUnauthorized); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": detail}); return
+			if s.Connected {
+				detail = "The saved ChatGPT session is still restoring or ChatGPT has expired it. Retry once; use Connect ChatGPT only if the saved account session no longer restores."
+			}
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": detail})
+			return
 		}
 		modeResult := ensureMode(mode)
 		if !modeResult.OK {
-			rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail}); return
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail})
+			return
 		}
 		expr := fmt.Sprintf(chatGPTTurnJS, chatGPTJSString(prompt))
 		var got chatGPTTurnResult
 		if err := chatGPTEval(dev, expr, true, &got); err != nil {
-			rw.WriteHeader(http.StatusInternalServerError); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the ChatGPT page driver: " + err.Error()}); return
+			rw.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the ChatGPT page driver: " + err.Error()})
+			return
 		}
 		cid := chatGPTConversationID(got.Href)
 		mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
-			s.Connected = true; s.SignedIn = true; s.LastURL = got.Href; s.ConversationID = cid
-			if got.OK { s.LastEvent = "turn-complete"; s.LastError = "" } else { s.LastEvent = "turn-failed"; s.LastError = got.Detail }
+			s.Connected = true
+			s.SignedIn = true
+			s.LastURL = got.Href
+			s.ConversationID = cid
+			if got.OK {
+				s.LastEvent = "turn-complete"
+				s.LastError = ""
+			} else {
+				s.LastEvent = "turn-failed"
+				s.LastError = got.Detail
+			}
 		})
 		status := http.StatusOK
-		if !got.OK { status = http.StatusBadGateway }
+		if !got.OK {
+			status = http.StatusBadGateway
+		}
 		rw.WriteHeader(status)
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
 	}
 
 	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		var body struct{ Mode string `json:"mode"` }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Mode string `json:"mode"`
+		}
 		_ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&body)
 		var ignored bool
 		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-			rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()}); return
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+			return
 		}
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
-			rw.WriteHeader(http.StatusUnauthorized); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT did not restore the saved sign-in after opening a new chat"}); return
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT did not restore the saved sign-in after opening a new chat"})
+			return
 		}
 		modeResult := ensureMode(body.Mode)
 		if !modeResult.OK {
-			rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail}); return
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail})
+			return
 		}
 		mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
-			s.Connected = true; s.SignedIn = true; s.ConversationID = ""; s.LastEvent = "new-chat-ready"; s.LastError = ""
+			s.Connected = true
+			s.SignedIn = true
+			s.ConversationID = ""
+			s.LastEvent = "new-chat-ready"
+			s.LastError = ""
 		})
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/test", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
 		turn(rw, r, "Reply with exactly: FLIPAI_OK", true, browserModeChat)
 	})
 	mux.HandleFunc("/chat", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		var body struct { Prompt string `json:"prompt"`; New bool `json:"new"`; Mode string `json:"mode"` }
-		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&body); err != nil { http.Error(rw, err.Error(), http.StatusBadRequest); return }
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Prompt string `json:"prompt"`
+			New    bool   `json:"new"`
+			Mode   string `json:"mode"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&body); err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
 		body.Prompt = strings.TrimSpace(body.Prompt)
-		if body.Prompt == "" { http.Error(rw, "prompt required", http.StatusBadRequest); return }
+		if body.Prompt == "" {
+			http.Error(rw, "prompt required", http.StatusBadRequest)
+			return
+		}
 		turn(rw, r, body.Prompt, body.New, body.Mode)
 	})
 	mux.HandleFunc("/stop", func(rw http.ResponseWriter, r *http.Request) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		_ = json.NewEncoder(rw).Encode(map[string]bool{"ok": true})
 		go func() { time.Sleep(80 * time.Millisecond); w.Terminate() }()
 	})
@@ -458,13 +586,23 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 }
 
 func recordChatGPTWorkerError(dataDir string, err error) {
-	if err == nil { return }
+	if err == nil {
+		return
+	}
 	mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
-		s.Running = false; s.Starting = false; s.Visible = false; s.LoginActive = false; s.SignedIn = false; s.LastEvent = "browser-error"; s.LastError = err.Error()
+		s.Running = false
+		s.Starting = false
+		s.Visible = false
+		s.LoginActive = false
+		s.SignedIn = false
+		s.LastEvent = "browser-error"
+		s.LastError = err.Error()
 	})
 	chatGPTActivity(dataDir, "error", "chatgpt-session", "ChatGPT browser stopped with an error: "+err.Error(), 0)
 }
 
 func chatGPTWorkerMain(dataDir string, visible bool) {
-	if err := runChatGPTWebView(dataDir, visible); err != nil { recordChatGPTWorkerError(dataDir, err) }
+	if err := runChatGPTWebView(dataDir, visible); err != nil {
+		recordChatGPTWorkerError(dataDir, err)
+	}
 }

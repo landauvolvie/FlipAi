@@ -30,6 +30,23 @@ func TestChatGPTWebViewUsesDedicatedProfileAndPrivateLoopback(t *testing.T) {
 	}
 }
 
+func TestChatGPTWorkModeWaitsForFreshPageUI(t *testing.T) {
+	b, err := os.ReadFile("chatgpt_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"const composerReady=()=>!!document.querySelector",
+		"for(let i=0;i<100&&!composerReady();i++)await sleep(200);",
+		"modeResult := ensureMode(body.Mode)",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("fresh ChatGPT Work mode lost readiness guard %q", want)
+		}
+	}
+}
+
 func TestChatGPTWebViewDoesNotUseGlobalUIAutomation(t *testing.T) {
 	b, err := os.ReadFile("chatgpt_webview_windows.go")
 	if err != nil {
