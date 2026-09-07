@@ -6,10 +6,7 @@ import (
 	"testing"
 )
 
-// Gmail is the transport. Once its credentials are usable, watching the inbox
-// must not depend on phone routing or the retired global security-code fields.
-// Those checks belong to each message after it arrives.
-func TestStartBridgeDoesNotGateGmailMonitoringOnSMSSetup(t *testing.T) {
+func TestPublishedStartBridgeUsesOnlyDirectGoogleVoiceTransport(t *testing.T) {
 	raw, err := os.ReadFile("webui.go")
 	if err != nil {
 		t.Fatal(err)
@@ -20,25 +17,51 @@ func TestStartBridgeDoesNotGateGmailMonitoringOnSMSSetup(t *testing.T) {
 		t.Fatal("startBridge not found")
 	}
 	body := src[start:]
-	if end := strings.Index(body, "\n}"); end >= 0 {
-		body = body[:end+2]
-	}
 
-	for _, forbidden := range []string{
-		"cfg.Security.CodeHash",
-		"normalizeAllowedPhoneList(cfg.GoogleVoice.AllowedFrom)",
+	for _, want := range []string{
+		"cfg.Gmail.Method != GmailMethodGoogleVoice",
+		"Google Voice SMS background connection is not ready",
+		"Google Voice SMS connection test failed",
+		"Google Voice SMS monitoring active through the signed-in background browser",
+		"go b.Run(ctx)",
 	} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("Gmail monitoring is still blocked by SMS setup: found %q in startBridge", forbidden)
+		if !strings.Contains(body, want) {
+			t.Fatalf("published Google Voice startup is missing %q", want)
 		}
 	}
 
-	runAt := strings.Index(body, "go b.Run(ctx)")
-	liveAt := strings.Index(body, "a.startClaudeLive(ctx, cfg, b)")
-	if runAt < 0 {
-		t.Fatal("startBridge does not start the Gmail bridge")
+	for _, retired := range []string{
+		"Gmail monitoring active",
+		"Gmail connection method not selected",
+		"Gmail connection test failed",
+		"Gmail not configured",
+	} {
+		if strings.Contains(body, retired) {
+			t.Fatalf("published startup still contains retired Gmail log text %q", retired)
+		}
 	}
-	if liveAt >= 0 && runAt > liveAt {
-		t.Fatal("Gmail monitoring starts after Claude live preflight; mailbox watching must start first")
+}
+
+func TestPublishedHandlerDoesNotExposeRetiredGmailOrBootStartupRoutes(t *testing.T) {
+	raw, err := os.ReadFile("webui.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	start := strings.Index(src, "func (a *App) handler() http.Handler")
+	end := strings.Index(src[start:], "func pageMovedTo")
+	if start < 0 || end < 0 {
+		t.Fatal("handler bounds not found")
+	}
+	body := src[start : start+end]
+	for _, retired := range []string{
+		`"/gmail/test"`,
+		`"/oauth/google/start"`,
+		`"/oauth/google/callback"`,
+		`"/settings/bootstartup"`,
+	} {
+		if strings.Contains(body, retired) {
+			t.Fatalf("published handler still exposes retired route %s", retired)
+		}
 	}
 }
