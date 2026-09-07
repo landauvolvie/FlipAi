@@ -42,7 +42,7 @@ func TestPublishedStartBridgeUsesOnlyDirectGoogleVoiceTransport(t *testing.T) {
 	}
 }
 
-func TestPublishedHandlerDoesNotExposeRetiredGmailOrBootStartupRoutes(t *testing.T) {
+func TestPublishedHandlerOnlyKeepsSafeTombstonesForRetiredFeatures(t *testing.T) {
 	raw, err := os.ReadFile("webui.go")
 	if err != nil {
 		t.Fatal(err)
@@ -54,14 +54,25 @@ func TestPublishedHandlerDoesNotExposeRetiredGmailOrBootStartupRoutes(t *testing
 		t.Fatal("handler bounds not found")
 	}
 	body := src[start : start+end]
+
+	// Old callers get deterministic retired-feature answers, never the old live
+	// implementation. The OAuth endpoints stay completely absent.
+	for _, want := range []string{
+		`"/gmail/test":           a.retiredGmailTest`,
+		`"/settings/bootstartup":    a.retiredBootStartup`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("published handler is missing safe tombstone %s", want)
+		}
+	}
 	for _, retired := range []string{
-		`"/gmail/test"`,
 		`"/oauth/google/start"`,
 		`"/oauth/google/callback"`,
-		`"/settings/bootstartup"`,
+		`"/gmail/test":           a.gmailTest`,
+		`"/settings/bootstartup":    a.saveBootStartup`,
 	} {
 		if strings.Contains(body, retired) {
-			t.Fatalf("published handler still exposes retired route %s", retired)
+			t.Fatalf("published handler still exposes retired live route %s", retired)
 		}
 	}
 }
