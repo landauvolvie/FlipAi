@@ -15,9 +15,11 @@ import (
 // WebView2 credentials in that non-interactive session, so the feature is
 // retired. Keep this guard in the executable so upgraded PCs are safe even if
 // Windows still has an old task registered from a previous release.
-var retiredBootKernel32 = syscall.NewLazyDLL("kernel32.dll")
-var retiredBootProcessIDToSessionID = retiredBootKernel32.NewProc("ProcessIdToSessionId")
-var retiredBootActiveConsoleSessionID = retiredBootKernel32.NewProc("WTSGetActiveConsoleSessionId")
+var retiredBootUser32 = syscall.NewLazyDLL("user32.dll")
+var retiredBootGetProcessWindowStation = retiredBootUser32.NewProc("GetProcessWindowStation")
+var retiredBootGetUserObjectInformationW = retiredBootUser32.NewProc("GetUserObjectInformationW")
+
+const retiredBootUOIName = 2
 
 func init() {
 	if len(os.Args) < 2 {
@@ -35,11 +37,12 @@ func init() {
 		return
 	}
 
-	// Normal HKCU Run startup happens after the user signs in and therefore
-	// shares the active console session. The retired S4U boot task runs outside
-	// that interactive session; stop it before it can start the host, tray, or
-	// any persistent WebView2 profile.
-	if !watchdogInActiveConsoleSession() {
+	// A real console OR RDP sign-in runs on the interactive WinSta0 window
+	// station. The retired S4U BootTrigger runs on a non-interactive service
+	// window station. Checking the station instead of comparing against the
+	// physical console session is important: an RDP user is interactive even
+	// though its session id differs from the machine's physical console id.
+	if !watchdogHasInteractiveWindowStation() {
 		bestEffortDeleteRetiredBootTask()
 		os.Exit(0)
 	}
@@ -49,21 +52,24 @@ func init() {
 	bestEffortDeleteRetiredBootTask()
 }
 
-func watchdogInActiveConsoleSession() bool {
-	var processSession uint32
-	r, _, _ := retiredBootProcessIDToSessionID.Call(
-		uintptr(os.Getpid()),
-		uintptr(unsafe.Pointer(&processSession)),
+func watchdogHasInteractiveWindowStation() bool {
+	station, _, _ := retiredBootGetProcessWindowStation.Call()
+	if station == 0 {
+		return false
+	}
+	var name [256]uint16
+	var needed uint32
+	r, _, _ := retiredBootGetUserObjectInformationW.Call(
+		station,
+		uintptr(retiredBootUOIName),
+		uintptr(unsafe.Pointer(&name[0])),
+		uintptr(len(name)*2),
+		uintptr(unsafe.Pointer(&needed)),
 	)
 	if r == 0 {
 		return false
 	}
-	active, _, _ := retiredBootActiveConsoleSessionID.Call()
-	activeSession := uint32(active)
-	if activeSession == 0xffffffff {
-		return false
-	}
-	return processSession == activeSession
+	return strings.EqualFold(syscall.UTF16ToString(name[:]), "WinSta0")
 }
 
 func bestEffortDeleteRetiredBootTask() {
