@@ -38,9 +38,10 @@ const (
 	// to the SMS layer, which then waits on the persisted continuation state.
 	chatGPTTurnDevToolsTimeout = 95 * time.Second
 
-	// The generated-media collector is itself an awaited page expression and is
-	// deliberately allowed to outlive the ordinary 90-second text detector.
-	browserChatReturnedMediaDevToolsTimeout = browserChatGeneratedImageWait + 15*time.Second
+	// Returned-media scans are individually short. Generated image turns repeat
+	// these scans for as long as the provider remains active, so this is only a
+	// per-scan safety bound and never a total model/image deadline.
+	browserChatReturnedMediaDevToolsTimeout = 20 * time.Second
 
 	// A Google Voice UI send waits for the real composer to clear, an outgoing
 	// bubble to appear, or a page error to surface. That confirmation window is
@@ -197,12 +198,12 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 				go continueBrowserLongTurn(d, browserProvider, started)
 			}
 
-			// Image creation frequently continues after the provider's text DOM
-			// has stabilized or after its first checkpoint. Keep the existing media
-			// collector in parallel with the long-turn continuation so the actual
-			// image can still be handed to the Google Voice MMS path.
+			// Image creation gets the same no-hard-cap behavior. Each media scan is
+			// bounded, but the collector repeats while the page still shows active
+			// work or an image-generation placeholder. A normal text turn keeps the
+			// fast one-shot scan.
 			if generatedImageTurn {
-				go captureBrowserChatReturnedMediaAfterTurnWithWait(d, browserChatGeneratedImageWait)
+				go captureBrowserChatReturnedMediaUntilSettled(d, browserProvider)
 			} else {
 				captureBrowserChatReturnedMediaAfterTurn(d)
 			}
