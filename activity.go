@@ -38,6 +38,17 @@ func activityLogForStatePath(statePath string) *ActivityLog {
 	return &ActivityLog{path: filepath.Join(filepath.Dir(statePath), "activity.jsonl")}
 }
 
+// retiredGmailActivity keeps the published Activity surface aligned with the
+// published transport. Gmail remains in the source tree only as an archived
+// recovery backend; it must not look like a live connection during startup.
+// Filtering on read also cleans old entries already present on upgraded PCs.
+func retiredGmailActivity(stage, message string) bool {
+	if strings.EqualFold(strings.TrimSpace(stage), "gmail") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(message), "gmail")
+}
+
 func (l *ActivityLog) Add(level, stage, message, sender, agent, messageID string) {
 	l.AddTimed(level, stage, message, sender, agent, messageID, 0)
 }
@@ -46,6 +57,9 @@ func (l *ActivityLog) Add(level, stage, message, sender, agent, messageID string
 // duration is omitted, so untimed events look exactly as they did before.
 func (l *ActivityLog) AddTimed(level, stage, message, sender, agent, messageID string, took time.Duration) {
 	if l == nil || strings.TrimSpace(l.path) == "" {
+		return
+	}
+	if retiredGmailActivity(stage, message) {
 		return
 	}
 	e := ActivityEvent{
@@ -128,7 +142,7 @@ func (l *ActivityLog) recentLocked(limit int) []ActivityEvent {
 	s.Buffer(make([]byte, 32*1024), 512*1024)
 	for s.Scan() {
 		var e ActivityEvent
-		if json.Unmarshal(s.Bytes(), &e) == nil {
+		if json.Unmarshal(s.Bytes(), &e) == nil && !retiredGmailActivity(e.Stage, e.Message) {
 			all = append(all, e)
 		}
 	}
