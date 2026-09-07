@@ -39,24 +39,46 @@ func activityLogForStatePath(statePath string) *ActivityLog {
 }
 
 // publishedActivityText keeps the published Activity surface aligned with the
-// direct Google Voice transport. Older bridge code used the stage name "gmail"
-// even for a real Google Voice candidate. Preserve that useful event but
-// relabel it; suppress the actual retired Gmail backend noise. Applying the
-// same migration while reading also cleans existing activity.jsonl files.
+// direct Google Voice transport. The bridge still has an archived MailClient
+// compatibility layer whose historical stage/string names mention Gmail. For
+// the current product, preserve useful direct-Voice events under accurate
+// labels and hide events that can only belong to the retired Gmail backends.
+// Applying the same migration while reading also cleans existing activity.jsonl
+// files on upgraded machines.
 func publishedActivityText(stage, message string) (string, string, bool) {
 	stage = strings.TrimSpace(stage)
 	message = strings.TrimSpace(message)
 	lower := strings.ToLower(message)
+
 	if strings.EqualFold(stage, "gmail") {
-		if strings.Contains(lower, "new google voice candidate") {
+		switch {
+		case strings.Contains(lower, "new google voice candidate"):
 			return "google-voice", "New Google Voice candidate detected", true
+		case strings.Contains(lower, "mailbox baseline established"):
+			return "google-voice", "Google Voice message baseline established; older messages will not execute", true
+		case strings.HasPrefix(lower, "mailbox check failed:"):
+			return "google-voice", "Google Voice message check failed:" + strings.TrimPrefix(message, "Mailbox check failed:"), true
+		case strings.HasPrefix(lower, "could not read matching gmail message:"):
+			return "google-voice", "Could not read matching Google Voice message:" + strings.TrimPrefix(message, "Could not read matching Gmail message:"), true
+		default:
+			// IMAP IDLE/OAuth and other Gmail-only diagnostics are retained in the
+			// archived source but are not part of the published transport.
+			return stage, message, false
 		}
-		return stage, message, false
 	}
-	if strings.Contains(lower, "gmail") {
+
+	switch {
+	case strings.EqualFold(message, "Background bridge started and is monitoring Gmail"):
+		return stage, "Background bridge started and is monitoring Google Voice", true
+	case strings.Contains(lower, "sms processing did not start. check gmail"):
+		return stage, "SMS processing did not start. Check Google Voice and agent diagnostics.", true
+	case strings.Contains(lower, "gmail backend is not ready"):
+		return stage, "Google Voice transport is not ready yet.", true
+	case strings.Contains(lower, "gmail"):
 		return stage, message, false
+	default:
+		return stage, message, true
 	}
-	return stage, message, true
 }
 
 func (l *ActivityLog) Add(level, stage, message, sender, agent, messageID string) {
