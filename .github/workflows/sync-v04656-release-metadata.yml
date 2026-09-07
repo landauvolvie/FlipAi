@@ -1,4 +1,4 @@
-name: sync-v04658-build-metadata
+name: fix-and-release-v04659-chatgpt-work-new
 
 on:
   push:
@@ -8,8 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  sync:
-    if: github.event.head_commit.message != 'Sync v0.46.58 build metadata'
+  fix-and-release:
+    if: github.event.head_commit.message != 'Fix explicit new ChatGPT Work sessions and release v0.46.59'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,40 +17,136 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Sync compiled and installer versions
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.13'
+
+      - name: Apply targeted ChatGPT Work NEW fix and release metadata
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          p = Path('config.go')
-          s = p.read_text()
-          old = 'const version = "0.46.57"'
-          new = 'const version = "0.46.58"'
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif new not in s:
-              raise SystemExit('unexpected compiled version in config.go')
-          p.write_text(s)
+          version = Path('VERSION').read_text().strip()
+          if version not in {'0.46.58', '0.46.59'}:
+              raise SystemExit(f'refusing to overwrite newer or unexpected VERSION {version!r}')
 
-          p = Path('installer/FlipAi.iss')
+          p = Path('chatgpt_webview_windows.go')
           s = p.read_text()
-          old = '#define MyVersion "0.46.57"'
-          new = '#define MyVersion "0.46.58"'
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif new not in s:
+          marker = "for(let i=0;i<100&&!composerReady();i++)await sleep(200);"
+          if marker not in s:
+              anchor = "\n".join([
+                  "  const findSelected=name=>exact(name).find(selected)||null;",
+                  "  wanted=norm(wanted)==='work'?'work':'chat';",
+                  "  const other=wanted==='work'?'chat':'work';",
+                  "",
+                  "  if(findSelected(wanted))return {ok:true,mode:wanted,href:location.href};",
+                  "",
+              ])
+              replacement = "\n".join([
+                  "  const findSelected=name=>exact(name).find(selected)||null;",
+                  "  const composerReady=()=>!!document.querySelector('#prompt-textarea,textarea[data-testid=\"prompt-textarea\"],[data-testid=\"prompt-textarea\"],[contenteditable=\"true\"][data-virtualkeyboard],[contenteditable=\"true\"]');",
+                  "  wanted=norm(wanted)==='work'?'work':'chat';",
+                  "  const other=wanted==='work'?'chat':'work';",
+                  "",
+                  "  // A fresh navigation can restore /api/auth/session before ChatGPT's SPA",
+                  "  // has rendered the composer and mode controls. NEW must wait for the UI",
+                  "  // before verifying Work, otherwise OW NEW: fails while ordinary OW: works.",
+                  "  for(let i=0;i<100&&!composerReady();i++)await sleep(200);",
+                  "",
+                  "  if(findSelected(wanted))return {ok:true,mode:wanted,href:location.href};",
+                  "",
+              ])
+              if anchor not in s:
+                  raise SystemExit('expected ChatGPT mode-selection block not found')
+              p.write_text(s.replace(anchor, replacement, 1))
+
+          t = Path('chatgpt_webview_windows_test.go')
+          ts = t.read_text()
+          test_name = 'TestChatGPTWorkModeWaitsForFreshPageUI'
+          if test_name not in ts:
+              insertion_marker = 'func TestChatGPTWebViewDoesNotUseGlobalUIAutomation(t *testing.T) {'
+              if insertion_marker not in ts:
+                  raise SystemExit('ChatGPT WebView test insertion marker not found')
+              test = "\n".join([
+                  'func TestChatGPTWorkModeWaitsForFreshPageUI(t *testing.T) {',
+                  '\tb, err := os.ReadFile("chatgpt_webview_windows.go")',
+                  '\tif err != nil {',
+                  '\t\tt.Fatal(err)',
+                  '\t}',
+                  '\ts := string(b)',
+                  '\tfor _, want := range []string{',
+                  '\t\t"const composerReady=()=>!!document.querySelector",',
+                  '\t\t"for(let i=0;i<100&&!composerReady();i++)await sleep(200);",',
+                  '\t\t"modeResult := ensureMode(body.Mode)",',
+                  '\t} {',
+                  '\t\tif !strings.Contains(s, want) {',
+                  '\t\t\tt.Fatalf("fresh ChatGPT Work mode lost readiness guard %q", want)',
+                  '\t\t}',
+                  '\t}',
+                  '}',
+                  '',
+                  '',
+              ])
+              t.write_text(ts.replace(insertion_marker, test + insertion_marker, 1))
+
+          cfg = Path('config.go')
+          cs = cfg.read_text()
+          if 'const version = "0.46.58"' in cs:
+              cs = cs.replace('const version = "0.46.58"', 'const version = "0.46.59"', 1)
+          elif 'const version = "0.46.59"' not in cs:
+              raise SystemExit('unexpected compiled version in config.go')
+          cfg.write_text(cs)
+
+          iss = Path('installer/FlipAi.iss')
+          ins = iss.read_text()
+          if '#define MyVersion "0.46.58"' in ins:
+              ins = ins.replace('#define MyVersion "0.46.58"', '#define MyVersion "0.46.59"', 1)
+          elif '#define MyVersion "0.46.59"' not in ins:
               raise SystemExit('unexpected installer version in installer/FlipAi.iss')
-          p.write_text(s)
+          iss.write_text(ins)
+
+          Path('VERSION').write_text('0.46.59\n')
+          notes = "\n".join([
+              '# FlipAi v0.46.59',
+              '',
+              'This release fixes starting an explicit new ChatGPT Work session from SMS.',
+              '',
+              '## ChatGPT Work NEW',
+              '',
+              '- `OW:` continues to use ChatGPT Work exactly as before.',
+              '- `OW NEW:` now waits for ChatGPT\'s fresh page UI to finish rendering before FlipAi verifies Work mode.',
+              '- The fix targets the fresh-session path that could report a valid signed-in session before the Work selector and composer were ready.',
+              '- FlipAi still refuses to send a task if it cannot verify Work mode, so the safety check is preserved rather than bypassed.',
+              '',
+              '## Validation',
+              '',
+              '- Added regression coverage for the fresh-page readiness guard used before Work-mode verification.',
+              '- The normal release pipeline still runs Linux and Windows tests, real-browser call-flow checks, vet/race checks, Google Voice checks, Microsoft Defender scans, installer smoke tests, SBOM generation, checksums, and provenance attestation before publishing.',
+              '',
+              'No Authenticode/code-signing certificate is included in this release.',
+              '',
+          ])
+          Path('docs/RELEASE-NOTES.md').write_text(notes)
           PY
 
+          gofmt -w chatgpt_webview_windows.go chatgpt_webview_windows_test.go
+          go test ./...
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go test -c -o /tmp/flipai.test.exe .
+
+      - name: Commit tested fix to main
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add config.go installer/FlipAi.iss
+          git add chatgpt_webview_windows.go chatgpt_webview_windows_test.go config.go installer/FlipAi.iss VERSION docs/RELEASE-NOTES.md
           if git diff --cached --quiet; then
-            echo 'Build metadata already synchronized.'
+            echo 'v0.46.59 fix is already applied.'
             exit 0
           fi
-          git commit -m 'Sync v0.46.58 build metadata'
+          git commit -m 'Fix explicit new ChatGPT Work sessions and release v0.46.59'
+          git pull --rebase origin main
           git push origin HEAD:main
