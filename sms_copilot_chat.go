@@ -121,7 +121,8 @@ func (b *Bridge) composeCopilotChatSMSPrompt(command string) string {
 }
 
 func (b *Bridge) runCopilotChatSMS(ctx context.Context, command string) (string, error) {
-	return copilotChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeCopilotChatSMSPrompt(command))
+	reply, err := copilotChatBrowserSend(ctx, filepath.Dir(b.statePath), b.composeCopilotChatSMSPrompt(command))
+	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
 func (b *Bridge) newCopilotChatConversation(ctx context.Context) error {
