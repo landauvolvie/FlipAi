@@ -85,7 +85,6 @@ func TestChatGPTWebViewDoesNotUseGlobalUIAutomation(t *testing.T) {
 	}
 }
 
-
 func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
 	b, err := os.ReadFile("chatgpt_webview_windows.go")
 	if err != nil {
@@ -100,28 +99,30 @@ func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
 	}
 }
 
-func TestChatGPTWorkNewSelectsWorkBeforeNativeNewChat(t *testing.T) {
+func TestChatGPTRouteBoundariesAreExplicit(t *testing.T) {
 	b, err := os.ReadFile("chatgpt_webview_windows.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
-	pre := strings.Index(s, "if mode == browserModeWork {")
-	click := strings.Index(s, "chatGPTEval(dev, chatGPTClickNewChatJS")
-	if pre < 0 || click < 0 || pre > click {
-		t.Fatal("ChatGPT Work NEW must verify Work before clicking New chat")
-	}
 	for _, want := range []string{
-		"switching out of Work also failed",
-		"if chat := ensureMode(browserModeChat); !chat.OK",
+		"const workEvidence=named('work');",
+		"if(workEvidence.length===0)return {ok:true,mode:'chat'",
+		"O: means regular ChatGPT Chat",
+		"openFreshChat := func() chatGPTTurnResult",
+		"if fresh := openFreshChat(); !fresh.OK",
 		"if work := ensureMode(browserModeWork); !work.OK",
-		"mounted controls even when CSS says they are not currently visible",
-		"[data-testid],[href]",
-		"fresh composer did not become ready",
+		"return openFreshChat()",
 	} {
 		if !strings.Contains(s, want) {
-			t.Fatalf("ChatGPT Work NEW lost %q", want)
+			t.Fatalf("ChatGPT route boundary lost %q", want)
 		}
+	}
+	if strings.Contains(s, "if(!findSelected('work'))return {ok:true,mode:'chat'") {
+		t.Fatal("Chat mode must not be accepted merely because Work lacks selected-state attributes")
+	}
+	if strings.Contains(s, "chatGPTEval(dev, chatGPTClickNewChatJS") {
+		t.Fatal("OW NEW must not depend on ChatGPT Work exposing a New chat button")
 	}
 }
 

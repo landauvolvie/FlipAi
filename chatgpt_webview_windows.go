@@ -63,9 +63,9 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
   };
   const clickable=n=>{
     if(!n)return null;
-    return n.closest&&n.closest('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"]')||n;
+    return n.closest&&n.closest('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"],[aria-haspopup],[tabindex]')||n;
   };
-  const controls=()=>Array.from(document.querySelectorAll('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"],[aria-label],[title],[data-testid]')).filter(visible);
+  const controls=()=>Array.from(document.querySelectorAll('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"],[aria-label],[title],[data-testid],[aria-haspopup],[tabindex]')).filter(visible);
   const values=n=>[n&&n.innerText,n&&n.textContent,n&&n.getAttribute&&n.getAttribute('aria-label'),n&&n.getAttribute&&n.getAttribute('title')].map(norm).filter(Boolean);
   const isName=(n,name)=>values(n).some(v=>v===name||v===name+' mode'||v===name+' beta'||v.startsWith(name+' ·')||v.startsWith(name+' -'));
   const named=name=>{
@@ -118,7 +118,11 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
   }
 
   if(wanted==='chat'){
-    if(!findSelected('work'))return {ok:true,mode:'chat',href:location.href,legacy:true};
+    // Never call the page "Chat" merely because Work lacks selected-state
+    // attributes. The Work header itself is enough evidence that we must
+    // leave Work before an O: command can be sent.
+    const workEvidence=named('work');
+    if(workEvidence.length===0)return {ok:true,mode:'chat',href:location.href,legacy:true};
   }
   return {ok:false,detail:'FlipAi could not verify ChatGPT '+(wanted==='work'?'Work':'Chat')+' mode. The task was not sent so it cannot accidentally run in the wrong experience.',href:location.href};
 })(%s)`
@@ -491,57 +495,36 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		if mode != browserModeChat && mode != browserModeWork {
 			return chatGPTTurnResult{OK: false, Detail: "unsupported ChatGPT browser mode: " + mode}
 		}
-		expr := fmt.Sprintf(chatGPTSelectModeJS, chatGPTJSString(mode))
-		var got chatGPTTurnResult
-		if err := chatGPTEval(dev, expr, true, &got); err != nil {
-			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not switch the ChatGPT experience: " + err.Error()}
-		}
-		return got
-	}
-
-	prepareFresh := func(mode string) chatGPTTurnResult {
-		mode = strings.ToLower(strings.TrimSpace(mode))
-		if mode == "" {
-			mode = browserModeChat
-		}
-
-		if mode == browserModeWork {
-			if before := ensureMode(mode); !before.OK {
-				return before
+		evalMode := func() chatGPTTurnResult {
+			expr := fmt.Sprintf(chatGPTSelectModeJS, chatGPTJSString(mode))
+			var got chatGPTTurnResult
+			if err := chatGPTEval(dev, expr, true, &got); err != nil {
+				return chatGPTTurnResult{OK: false, Detail: "FlipAi could not switch the ChatGPT experience: " + err.Error()}
 			}
+			return got
+		}
+		got := evalMode()
+		if got.OK || mode != browserModeChat {
+			return got
 		}
 
-		var clicked bool
-		if err := chatGPTEval(dev, chatGPTClickNewChatJS, false, &clicked); err != nil {
-			clicked = false
+		// O: means regular ChatGPT Chat, even when the shared browser is currently
+		// sitting in Work. If ChatGPT's mode picker cannot safely prove the switch,
+		// the canonical root is a safe Chat boundary. This may start a fresh Chat
+		// conversation when crossing out of Work, which is preferable to ever
+		// sending an O: request into the Work conversation.
+		var ignored bool
+		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not open regular ChatGPT Chat: " + err.Error()}
 		}
-		if !clicked {
-			if mode == browserModeWork {
-				// Some Work builds do not mount a separate New chat button at all.
-				// In that UI the reliable "new Work" action is the same experience
-				// switch the user can do manually: leave Work for Chat, then enter
-				// Work again. OW: already proves those selectors on this account.
-				if chat := ensureMode(browserModeChat); !chat.OK {
-					return chatGPTTurnResult{OK: false, Detail: "FlipAi could not create a fresh ChatGPT Work session: no New chat control was mounted, and switching out of Work also failed. The task was not sent."}
-				}
-				time.Sleep(350 * time.Millisecond)
-				if work := ensureMode(browserModeWork); !work.OK {
-					return chatGPTTurnResult{OK: false, Detail: "FlipAi could not create a fresh ChatGPT Work session after switching back into Work. The task was not sent."}
-				}
-				clicked = true
-			} else {
-				var ignored bool
-				if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-					return chatGPTTurnResult{OK: false, Detail: err.Error()}
-				}
-			}
-		}
-
 		time.Sleep(650 * time.Millisecond)
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
-			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a new chat"}
+			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in while switching from Work to Chat"}
 		}
+		return evalMode()
+	}
 
+	waitForFreshComposer := func() chatGPTTurnResult {
 		composerReady := false
 		deadline := time.Now().Add(20 * time.Second)
 		for time.Now().Before(deadline) {
@@ -553,15 +536,49 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		if !composerReady {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT opened a new chat but the fresh composer did not become ready"}
 		}
+		return chatGPTTurnResult{OK: true}
+	}
 
-		if mode == browserModeWork {
-			// Work was verified immediately before using ChatGPT's native New chat
-			// control. Requiring the Work picker to remain mounted on the blank
-			// conversation caused false failures even though the new Work chat was
-			// already ready. The native Work New chat action is the mode boundary.
-			return chatGPTTurnResult{OK: true}
+	openFreshChat := func() chatGPTTurnResult {
+		// O NEW: already works reliably in the user's real ChatGPT account. Make it
+		// the single reset primitive: the root is always a fresh regular ChatGPT
+		// Chat conversation, independent of whether the previous page was Chat or Work.
+		var ignored bool
+		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not open a fresh ChatGPT Chat session: " + err.Error()}
 		}
-		return ensureMode(mode)
+		time.Sleep(650 * time.Millisecond)
+		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
+			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a fresh Chat session"}
+		}
+		if ready := waitForFreshComposer(); !ready.OK {
+			return ready
+		}
+		if chat := ensureMode(browserModeChat); !chat.OK {
+			return chat
+		}
+		return chatGPTTurnResult{OK: true}
+	}
+
+	prepareFresh := func(mode string) chatGPTTurnResult {
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if mode == "" {
+			mode = browserModeChat
+		}
+		if mode == browserModeWork {
+			// OW NEW: is deliberately built from the two operations that are proven
+			// reliable in the live UI: O NEW: creates a fresh regular Chat, then OW:
+			// switches that blank conversation into Work. This guarantees the task can
+			// never reuse the old Work conversation.
+			if fresh := openFreshChat(); !fresh.OK {
+				return fresh
+			}
+			if work := ensureMode(browserModeWork); !work.OK {
+				return chatGPTTurnResult{OK: false, Detail: "FlipAi opened a fresh ChatGPT conversation but could not switch that new conversation into Work. The task was not sent."}
+			}
+			return waitForFreshComposer()
+		}
+		return openFreshChat()
 	}
 
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool, mode string) {
