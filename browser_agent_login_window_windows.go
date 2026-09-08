@@ -58,9 +58,6 @@ func runBrowserAgentLoginWindowPromoter(dataDir string) {
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		if quitRequested(dataDir) {
-			return
-		}
 		for _, watch := range watches {
 			if !watch.active() {
 				delete(seen, watch.title)
@@ -84,5 +81,7 @@ func init() {
 	if err != nil {
 		return
 	}
+	// The tray process owns this goroutine. It exits with that process, so no
+	// separate shutdown signal is needed.
 	go runBrowserAgentLoginWindowPromoter(dataDir)
 }
