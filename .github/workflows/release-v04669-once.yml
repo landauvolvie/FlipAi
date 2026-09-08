@@ -1,0 +1,102 @@
+name: release-v04669-browser-reconnect-once
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release-v04669-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.13'
+
+      - name: Synchronize v0.46.69 release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          old = '0.46.68'
+          new = '0.46.69'
+
+          version = Path('VERSION').read_text().strip()
+          if version not in {old, new}:
+              raise SystemExit(f'refusing to overwrite unexpected VERSION {version!r}')
+
+          cfg = Path('config.go')
+          cs = cfg.read_text()
+          if f'const version = "{old}"' in cs:
+              cs = cs.replace(f'const version = "{old}"', f'const version = "{new}"', 1)
+          elif f'const version = "{new}"' not in cs:
+              raise SystemExit('unexpected compiled version in config.go')
+          cfg.write_text(cs)
+
+          iss = Path('installer/FlipAi.iss')
+          ins = iss.read_text()
+          if f'#define MyVersion "{old}"' in ins:
+              ins = ins.replace(f'#define MyVersion "{old}"', f'#define MyVersion "{new}"', 1)
+          elif f'#define MyVersion "{new}"' not in ins:
+              raise SystemExit('unexpected installer version in installer/FlipAi.iss')
+          iss.write_text(ins)
+
+          Path('VERSION').write_text(new + '\n')
+          notes = "\n".join([
+              '# FlipAi v0.46.69',
+              '',
+              'This release fixes browser-agent reconnect behavior after restart or sign-in loss.',
+              '',
+              '## Accurate connection status',
+              '',
+              '- ChatGPT Chat, Claude Chat, Gemini, Grok, and Microsoft Copilot now show Connected only when the live private browser is actually signed in.',
+              '- If a session expires or fails to restore, FlipAi shows the agent as disconnected and presents Connect immediately; users no longer have to press Disconnect first.',
+              '',
+              '## Sign-in windows open visibly',
+              '',
+              '- Connect now restores and brings each agent sign-in window to the foreground instead of leaving it minimized or hidden behind FlipAi.',
+              '',
+              '## Reliable reconnects without Task Manager',
+              '',
+              '- FlipAi now closes and releases the WebView2 controller and profile cleanly before restarting a browser agent.',
+              '- This prevents the stale profile lock/race that could leave the next sign-in window blank white.',
+              '- Reconnecting multiple browser agents should no longer require killing FlipAi processes between agents.',
+              '',
+              '## Regression coverage',
+              '',
+              '- Added coverage that locks visible browser-agent connection status to live sign-in state.',
+              '',
+              'No Authenticode/code-signing certificate is included in this release.',
+              '',
+          ])
+          Path('docs/RELEASE-NOTES.md').write_text(notes)
+          PY
+
+          go test ./...
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go test -c -o /tmp/flipai.test.exe .
+
+      - name: Commit synchronized release metadata to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/release-v04669-once.yml
+          git add config.go installer/FlipAi.iss VERSION docs/RELEASE-NOTES.md
+          git commit -m 'Release FlipAi v0.46.69'
+          git pull --rebase origin main
+          git push origin HEAD:main
