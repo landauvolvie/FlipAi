@@ -1,23 +1,25 @@
-# FlipAi v0.46.67
+# FlipAi v0.46.68
 
-This release makes ChatGPT Chat and ChatGPT Work explicit route boundaries instead of letting the shared browser state leak between them.
+This release changes `OW NEW:` to literally reuse the two paths that are already proven on the live account instead of trying to invent a special Work-new transition.
 
-## ChatGPT routing semantics
+## `OW NEW:` is now `O NEW` + normal `OW`
 
-- `O:` always runs in regular ChatGPT Chat. If the shared browser is currently in Work and ChatGPT's picker cannot safely switch out, FlipAi opens the canonical regular Chat root rather than sending the request into Work.
-- `O NEW:` always opens a fresh regular ChatGPT Chat conversation.
-- `OW:` always runs in ChatGPT Work and keeps the existing Work conversation when it is already the selected route.
-- `OW NEW:` always creates a fresh Work conversation, regardless of whether the browser currently shows Chat or Work.
+- Stage 1 uses the exact regular-Chat reset primitive used by the working `O NEW:` command.
+- FlipAi does **not** ask ChatGPT Work to create or verify a new Work session during that reset.
+- The user's command keeps its Work route marker.
+- Stage 2 runs the user's message through the normal `OW:` send path, exactly as if the user had first created a fresh ChatGPT Chat and then sent `OW:`.
+- This avoids the failing `/new`-in-Work path entirely.
 
-## `OW NEW:` implementation
+## Existing routing semantics retained
 
-- `OW NEW:` no longer depends on Work exposing a `New chat` button.
-- FlipAi first performs the same fresh regular-Chat reset used by the already-working `O NEW:` path, then switches that blank conversation into Work using the same selector used by `OW:`.
-- The old Work conversation therefore cannot be reused by an explicit `OW NEW:` request.
+- `O:` always targets regular ChatGPT Chat.
+- `O NEW:` creates a fresh regular ChatGPT Chat.
+- `OW:` targets ChatGPT Work and can continue the current Work conversation.
+- `OW NEW:` resets through regular Chat first, then enters Work through the normal `OW:` route for the first user turn.
 
-## Mode verification
+## Regression coverage
 
-- FlipAi no longer treats a page as regular Chat merely because a visible Work label lacks `aria-selected` or similar selected-state attributes.
-- Chat/Work picker detection now also recognizes `aria-haspopup` and tabindex-based controls.
+- Added a test that explicitly locks the fresh Work plan to `reset=Chat` while preserving `turn=Work`.
+- Existing parsing tests continue to verify that `OW NEW:` retains the Work marker and the user's text.
 
 No Authenticode/code-signing certificate is included in this release.

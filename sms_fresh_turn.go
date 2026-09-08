@@ -45,9 +45,21 @@ func remoteCommandDisplayName(rc remoteCommand) string {
 	}
 }
 
+// chatGPTFreshResetMode deliberately makes Work NEW use the exact reset that is
+// already proven by O NEW on the live account. The subsequent turn still keeps
+// its Work marker, so runChatGPTSMS follows the normal OW path after the reset.
+// In other words: OW NEW = O NEW (without sending the user's prompt) + OW.
+func chatGPTFreshResetMode(requested string) string {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if requested == "" || requested == browserModeWork {
+		return browserModeChat
+	}
+	return requested
+}
+
 // resetAgentConversation resets exactly the destination selected by the public
-// SMS route. For browser agents this preserves Chat vs Work/Cowork/Code rather
-// than silently falling back to the provider's regular chat mode.
+// SMS route. ChatGPT Work is the one intentional exception: its reliable fresh
+// boundary is regular Chat first, then the normal OW route runs the user's turn.
 func (b *Bridge) resetAgentConversation(ctx context.Context, rc remoteCommand) (string, error) {
 	mode, _ := extractBrowserModeCommand(rc.Text)
 	switch rc.Agent {
@@ -64,7 +76,7 @@ func (b *Bridge) resetAgentConversation(ctx context.Context, rc remoteCommand) (
 		if mode == browserModeWork {
 			label = "ChatGPT Work"
 		}
-		return "New " + label + " session started.", b.newChatGPTConversationMode(ctx, mode)
+		return "New " + label + " session started.", b.newChatGPTConversationMode(ctx, chatGPTFreshResetMode(mode))
 	case "H":
 		if mode == "" {
 			mode = browserModeChat
@@ -91,7 +103,10 @@ func (b *Bridge) resetAgentConversation(ctx context.Context, rc remoteCommand) (
 
 // runFreshAgentTurn performs the reset and the user's task as one queued bridge
 // job. That guarantees no later SMS can slip between the reset and the first
-// turn of the new conversation.
+// turn of the new conversation. For OW NEW specifically, resetAgentConversation
+// leaves ChatGPT at the proven O NEW boundary while rc.Text still carries Work;
+// runChatGPTSMS below therefore executes the same normal OW route that already
+// works when the user switches into Work from another route.
 func (b *Bridge) runFreshAgentTurn(ctx context.Context, rc remoteCommand, inbound []InboundAttachment) (string, error) {
 	if _, err := b.resetAgentConversation(ctx, rc); err != nil {
 		return "", err
