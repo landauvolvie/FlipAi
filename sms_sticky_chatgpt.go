@@ -30,7 +30,7 @@ func smsTargetAllowed(sourceAgent, target string) bool {
 	sourceAgent = strings.ToUpper(strings.TrimSpace(sourceAgent))
 	target = strings.ToUpper(strings.TrimSpace(target))
 	if sourceAgent == "B" {
-		return target == "C" || target == "A" || target == "G" || target == "H" || target == "M" || target == "X" || target == "P"
+		return target == "C" || target == "A" || target == "G" || target == "H" || target == "M" || target == "X" || target == "P" || target == "U"
 	}
 	return target != "" && strings.Contains(sourceAgent, target)
 }
@@ -101,6 +101,8 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 			rc, err = parseGrokChatSMSCommand(rewritten, cfg)
 		case "P":
 			rc, err = parseCopilotChatSMSCommand(rewritten, cfg)
+		case "U":
+			rc, err = parseMuseChatSMSCommand(rewritten, cfg)
 		default:
 			rc, err = parseRemoteCommand(rewritten, cfg, route.Agent)
 		}
@@ -145,7 +147,7 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 
 func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
 	agent = strings.ToUpper(strings.TrimSpace(agent))
-	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" && agent != "P" {
+	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" && agent != "P" && agent != "U" {
 		return fmt.Errorf("unknown sticky SMS agent %q", agent)
 	}
 	key := stickySMSKey(sender)
