@@ -147,7 +147,11 @@ const chatGPTClickNewChatJS = `(()=>{
 // input, the user's visible ChatGPT app, or coordinates.
 const chatGPTTurnJS = `(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  const text=n=>(n&&n.innerText||n&&n.textContent||'').trim();
+  const clean=s=>String(s||'')
+    .replace(/Unable to display this message due to an error\.?\s*Reload the page to try again\.?/gi,' ')
+    .replace(/Unable to display this message due to an error\.?/gi,' ')
+    .replace(/\s+/g,' ').trim();
+  const text=n=>clean(n&&n.innerText||n&&n.textContent||'');
   const users=()=>Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
   const assistants=()=>Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
   const composer=()=>document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"]');
@@ -493,23 +497,60 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 	}
 
 	prepareFresh := func(mode string) chatGPTTurnResult {
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if mode == "" {
+			mode = browserModeChat
+		}
+
+		// Work NEW used to click New chat first and only then try to recover Work.
+		// On the current ChatGPT UI that click can land on the normal Chat
+		// experience, where the Work selector is no longer mounted, producing a
+		// false "could not verify Work mode" failure. Select the requested
+		// experience first (the same path that already works for OW:), then open a
+		// fresh conversation inside that experience.
+		if mode == browserModeWork {
+			if before := ensureMode(mode); !before.OK {
+				return before
+			}
+		}
+
+		openRoot := func() chatGPTTurnResult {
+			var ignored bool
+			if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+				return chatGPTTurnResult{OK: false, Detail: err.Error()}
+			}
+			time.Sleep(650 * time.Millisecond)
+			if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
+				return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a new chat"}
+			}
+			return ensureMode(mode)
+		}
+
 		var clicked bool
 		if err := chatGPTEval(dev, chatGPTClickNewChatJS, false, &clicked); err != nil {
 			clicked = false
 		}
 		if !clicked {
-			var ignored bool
-			if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-				return chatGPTTurnResult{OK: false, Detail: err.Error()}
-			}
+			return openRoot()
 		}
-		// Give a SPA click or full navigation time to commit before auth can
-		// immediately report the previous page as signed in.
+
+		// Give the SPA click time to commit before auth can immediately report the
+		// previous page as signed in.
 		time.Sleep(650 * time.Millisecond)
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a new chat"}
 		}
-		return ensureMode(mode)
+		if after := ensureMode(mode); after.OK {
+			return after
+		} else if mode != browserModeWork {
+			return after
+		}
+
+		// Last-resort Work recovery: the global New chat control can still reset
+		// to Chat on some ChatGPT builds. Navigating to the blank root guarantees
+		// a new conversation, then the already-proven OW mode selector activates
+		// Work before any prompt is sent.
+		return openRoot()
 	}
 
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool, mode string) {
