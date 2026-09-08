@@ -34,10 +34,10 @@ func TestProviderGroupedSMSRoutes(t *testing.T) {
 	}
 
 	cases := []struct {
-		raw       string
-		agent     string
-		mode      string
-		wantText  string
+		raw      string
+		agent    string
+		mode     string
+		wantText string
 	}{
 		{"O: hello", "G", browserModeChat, "hello"},
 		{"OW: research this", "G", browserModeWork, "research this"},
@@ -78,15 +78,32 @@ func TestLegacyStickyAgentStillMapsToOldProvider(t *testing.T) {
 	}
 }
 
+func TestStickyWorkRouteSurvivesUnprefixedFollowUp(t *testing.T) {
+	cfg := stickyRoutingConfig(t)
+	owner, _, _ := agentForSender(cfg, "18455550123")
+	rc, err := parseRemoteCommandForMessageSticky("Check my Gmail for packages from today", cfg, owner, "route:OW", GmailMessage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode, text := extractBrowserModeCommand(rc.Text)
+	if rc.Agent != "G" || mode != browserModeWork || text != "Check my Gmail for packages from today" {
+		t.Fatalf("sticky Work follow-up lost route: rc=%+v mode=%q text=%q", rc, mode, text)
+	}
+	if got := remoteCommandDisplayName(rc); got != "ChatGPT Work" {
+		t.Fatalf("sticky Work follow-up display=%q", got)
+	}
+}
+
 func TestStickySMSAgentPersistsPerSender(t *testing.T) {
 	dir := t.TempDir()
-	b := &Bridge{statePath: filepath.Join(dir, "state.json")}
-	if err := b.rememberStickySMSAgent("(845) 555-0123", "G"); err != nil {
+	cfg := stickyRoutingConfig(t)
+	b := &Bridge{cfg: cfg, statePath: filepath.Join(dir, "state.json")}
+	if err := b.rememberStickySMSRoute("(845) 555-0123", smsRouteChatGPTWork); err != nil {
 		t.Fatal(err)
 	}
 	st := loadState(b.statePath)
-	if got := st.LastAgentBySender["8455550123"]; got != "G" {
-		t.Fatalf("persisted sticky agent=%q, want G", got)
+	if got := st.LastAgentBySender["8455550123"]; got != "route:OW" {
+		t.Fatalf("persisted sticky route=%q, want route:OW", got)
 	}
 }
 
