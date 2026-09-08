@@ -12,7 +12,7 @@ import "strings"
 // WebView agent reports the visible connection state from SignedIn only. The
 // saved-profile flag remains untouched for background restore logic.
 func init() {
-	registerPage("agents", browserAgentLiveConnectionUI(smsRouteAgentsUI(copilotChatDirectUI(exactWebAgentsHTML()))))
+	registerPage("agents", browserAgentLiveConnectionUI(smsRouteAgentsUI(museChatDirectUI(copilotChatDirectUI(exactWebAgentsHTML())))))
 }
 
 func browserAgentLiveConnectionUI(body string) string {
