@@ -1,8 +1,7 @@
-name: fix-and-release-v04659-chatgpt-work-new
+name: retired-v04659-chatgpt-work-new-fixer
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
