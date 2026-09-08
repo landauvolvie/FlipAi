@@ -99,3 +99,42 @@ func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
 		t.Fatal("ChatGPT must wait for non-empty assistant text before declaring a successful reply")
 	}
 }
+
+func TestChatGPTWorkNewSelectsWorkBeforeOpeningFreshChat(t *testing.T) {
+	b, err := os.ReadFile("chatgpt_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	pre := strings.Index(s, "if mode == browserModeWork {")
+	click := strings.Index(s, "chatGPTEval(dev, chatGPTClickNewChatJS")
+	if pre < 0 || click < 0 || pre > click {
+		t.Fatal("ChatGPT Work NEW must verify/select Work before clicking New chat")
+	}
+	for _, want := range []string{
+		"if before := ensureMode(mode); !before.OK",
+		"return openRoot()",
+		"Last-resort Work recovery",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("ChatGPT Work NEW recovery lost %q", want)
+		}
+	}
+}
+
+func TestChatGPTRichCardRenderErrorsAreNotTextedAsReplies(t *testing.T) {
+	b, err := os.ReadFile("chatgpt_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"Unable to display this message due to an error",
+		"Reload the page to try again",
+		"const text=n=>clean(",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("ChatGPT reply cleanup lost %q", want)
+		}
+	}
+}
