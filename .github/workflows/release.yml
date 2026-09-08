@@ -1,4 +1,5 @@
 name: release
+# v0.46.65 repaired-build publish retry
 
 # Version, compiled app and installer version are kept in lockstep before publishing.
 # Existing assets are replaced only after every release check passes.
