@@ -1,28 +1,25 @@
-# FlipAi v0.46.62
+# FlipAi v0.46.63
 
-This release retires the broken pre-sign-in Windows startup path and cleans obsolete Gmail transport noise from the published app.
+This release improves long-running SMS turns across every supported model and fixes ChatGPT final-reply delivery.
 
-## Windows startup
+## Long-running model turns
 
-- Removed the **Start before sign-in** option from Settings.
-- The old S4U `FlipAi Boot` scheduled task can no longer be created by FlipAi.
-- Upgraded installs remove the retired task automatically when possible.
-- If an old pre-login task still launches, FlipAi exits before starting the host, tray, or persistent WebView2 browser profiles.
-- Normal hidden startup after the user signs in to Windows remains enabled.
-- Interactive RDP/remote sessions remain supported and are not mistaken for the retired pre-login startup path.
+- Fast requests that finish within 30 seconds send only the final answer.
+- If a model is still working after 30 seconds, FlipAi sends the first short acknowledgement so the sender knows the request was received.
+- Existing periodic progress updates remain available for genuinely long tasks.
+- The behavior is shared across Codex, Claude, ChatGPT Chat, Claude Chat, Gemini Chat, Grok Chat, and Microsoft Copilot Chat.
+- Long tasks continue running until the provider finishes or actually fails; progress messages never replace the final result.
 
-## Published Google Voice transport
+## ChatGPT final reply
 
-- The published bridge now starts only through the direct Google Voice transport.
-- Retired Gmail/OAuth connection controls are no longer exposed as live setup paths.
-- Old Gmail startup and connection messages are suppressed from Activity.
-- Historical Activity entries created by the retired Gmail bridge are filtered on read so upgraded installs no longer show stale Gmail failures.
-- Real Google Voice candidate events are preserved and relabeled as Google Voice instead of being hidden.
-- A fresh install that has not connected Google Voice is reported as waiting for Google Voice setup instead of producing a Gmail error.
+- Removed the internal `ChatGPT completed the turn.` fallback from SMS delivery.
+- FlipAi now waits for real, non-empty assistant text before treating the ChatGPT turn as successfully complete.
+- This preserves the long-turn continuation path while ensuring the final model response is what reaches Google Voice.
 
 ## Validation
 
-- Added regression coverage for the retired pre-sign-in startup path, RDP-safe interactive startup detection, and Gmail-log cleanup.
+- Added regression coverage for the universal 30-second acknowledgement.
+- Added regression coverage preventing ChatGPT completion-status text from being used as the final reply.
 - The normal release pipeline runs Linux and Windows tests, real-browser call-flow checks, vet/race checks, Google Voice checks, Microsoft Defender scans, installer smoke tests, SBOM generation, checksums, and provenance attestation before publishing.
 
 No Authenticode/code-signing certificate is included in this release.

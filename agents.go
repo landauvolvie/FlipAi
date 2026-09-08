@@ -82,8 +82,12 @@ func (s AgentSettings) progressEnabled() bool {
 }
 
 func (s AgentSettings) ackDelay() time.Duration {
+	// A fast turn should produce only its final answer. If the model is still
+	// running after 30 seconds, send the first lightweight acknowledgement so
+	// the sender knows the request was received. Keep this provider-neutral so
+	// Codex, Claude, and every browser-backed model follow the same rule.
 	if s.AckDelaySeconds <= 0 {
-		return 0
+		return 30 * time.Second
 	}
 	return time.Duration(s.AckDelaySeconds) * time.Second
 }

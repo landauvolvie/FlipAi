@@ -84,3 +84,18 @@ func TestChatGPTWebViewDoesNotUseGlobalUIAutomation(t *testing.T) {
 		}
 	}
 }
+
+
+func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
+	b, err := os.ReadFile("chatgpt_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if strings.Contains(s, "reply:now||'ChatGPT completed the turn.'") {
+		t.Fatal("ChatGPT completion status must never be substituted for an empty final reply")
+	}
+	if !strings.Contains(s, "if(!stop()&&stable>=5&&now)return {ok:true,reply:now") {
+		t.Fatal("ChatGPT must wait for non-empty assistant text before declaring a successful reply")
+	}
+}
