@@ -1,25 +1,24 @@
-# FlipAi v0.46.68
+# FlipAi v0.46.69
 
-This release changes `OW NEW:` to literally reuse the two paths that are already proven on the live account instead of trying to invent a special Work-new transition.
+This release fixes browser-agent reconnect behavior after restart or sign-in loss.
 
-## `OW NEW:` is now `O NEW` + normal `OW`
+## Accurate connection status
 
-- Stage 1 uses the exact regular-Chat reset primitive used by the working `O NEW:` command.
-- FlipAi does **not** ask ChatGPT Work to create or verify a new Work session during that reset.
-- The user's command keeps its Work route marker.
-- Stage 2 runs the user's message through the normal `OW:` send path, exactly as if the user had first created a fresh ChatGPT Chat and then sent `OW:`.
-- This avoids the failing `/new`-in-Work path entirely.
+- ChatGPT Chat, Claude Chat, Gemini, Grok, and Microsoft Copilot now show Connected only when the live private browser is actually signed in.
+- If a session expires or fails to restore, FlipAi shows the agent as disconnected and presents Connect immediately; users no longer have to press Disconnect first.
 
-## Existing routing semantics retained
+## Sign-in windows open visibly
 
-- `O:` always targets regular ChatGPT Chat.
-- `O NEW:` creates a fresh regular ChatGPT Chat.
-- `OW:` targets ChatGPT Work and can continue the current Work conversation.
-- `OW NEW:` resets through regular Chat first, then enters Work through the normal `OW:` route for the first user turn.
+- Connect now restores and brings each agent sign-in window to the foreground instead of leaving it minimized or hidden behind FlipAi.
+
+## Reliable reconnects without Task Manager
+
+- FlipAi now closes and releases the WebView2 controller and profile cleanly before restarting a browser agent.
+- This prevents the stale profile lock/race that could leave the next sign-in window blank white.
+- Reconnecting multiple browser agents should no longer require killing FlipAi processes between agents.
 
 ## Regression coverage
 
-- Added a test that explicitly locks the fresh Work plan to `reset=Chat` while preserving `turn=Work`.
-- Existing parsing tests continue to verify that `OW NEW:` retains the Work marker and the user's text.
+- Added coverage that locks visible browser-agent connection status to live sign-in state.
 
 No Authenticode/code-signing certificate is included in this release.
