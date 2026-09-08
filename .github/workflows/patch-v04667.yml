@@ -1,0 +1,255 @@
+name: patch-v04667-once
+
+on:
+  push:
+    branches: [fix/chatgpt-route-boundaries-v04667]
+    paths: [.github/workflows/patch-v04667.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/chatgpt-route-boundaries-v04667
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Patch ChatGPT route boundaries
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('chatgpt_webview_windows.go')
+          s = path.read_text()
+
+          old = '''  const clickable=n=>{
+            if(!n)return null;
+            return n.closest&&n.closest('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"]')||n;
+          };
+          const controls=()=>Array.from(document.querySelectorAll('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"],[aria-label],[title],[data-testid]')).filter(visible);
+          '''
+          new = '''  const clickable=n=>{
+            if(!n)return null;
+            return n.closest&&n.closest('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"],[aria-haspopup],[tabindex]')||n;
+          };
+          const controls=()=>Array.from(document.querySelectorAll('button,a,[role="button"],[role="tab"],[role="menuitem"],[role="option"],[role="link"],[aria-label],[title],[data-testid],[aria-haspopup],[tabindex]')).filter(visible);
+          '''
+          assert old in s, 'mode clickable block not found'
+          s = s.replace(old, new, 1)
+
+          old = '''  if(wanted==='chat'){
+            if(!findSelected('work'))return {ok:true,mode:'chat',href:location.href,legacy:true};
+          }
+          '''
+          new = '''  if(wanted==='chat'){
+            // Never call the page "Chat" merely because Work lacks selected-state
+            // attributes. The Work header itself is enough evidence that we must
+            // leave Work before an O: command can be sent.
+            const workEvidence=named('work');
+            if(workEvidence.length===0)return {ok:true,mode:'chat',href:location.href,legacy:true};
+          }
+          '''
+          assert old in s, 'chat legacy guard not found'
+          s = s.replace(old, new, 1)
+
+          start = s.index('\tensureMode := func(mode string) chatGPTTurnResult {')
+          end = s.index('\n\tprepareFresh := func(mode string) chatGPTTurnResult {', start)
+          ensure = r'''	ensureMode := func(mode string) chatGPTTurnResult {
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if mode == "" {
+			mode = browserModeChat
+		}
+		if mode != browserModeChat && mode != browserModeWork {
+			return chatGPTTurnResult{OK: false, Detail: "unsupported ChatGPT browser mode: " + mode}
+		}
+		evalMode := func() chatGPTTurnResult {
+			expr := fmt.Sprintf(chatGPTSelectModeJS, chatGPTJSString(mode))
+			var got chatGPTTurnResult
+			if err := chatGPTEval(dev, expr, true, &got); err != nil {
+				return chatGPTTurnResult{OK: false, Detail: "FlipAi could not switch the ChatGPT experience: " + err.Error()}
+			}
+			return got
+		}
+		got := evalMode()
+		if got.OK || mode != browserModeChat {
+			return got
+		}
+
+		// O: means regular ChatGPT Chat, even when the shared browser is currently
+		// sitting in Work. If ChatGPT's mode picker cannot safely prove the switch,
+		// the canonical root is a safe Chat boundary. This may start a fresh Chat
+		// conversation when crossing out of Work, which is preferable to ever
+		// sending an O: request into the Work conversation.
+		var ignored bool
+		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not open regular ChatGPT Chat: " + err.Error()}
+		}
+		time.Sleep(650 * time.Millisecond)
+		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
+			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in while switching from Work to Chat"}
+		}
+		return evalMode()
+	}
+'''
+          s = s[:start] + ensure + s[end:]
+
+          start = s.index('\tprepareFresh := func(mode string) chatGPTTurnResult {')
+          end = s.index('\n\tturn := func(', start)
+          fresh = r'''	waitForFreshComposer := func() chatGPTTurnResult {
+		composerReady := false
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if err := chatGPTEval(dev, `(()=>!!document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"]'))()`, false, &composerReady); err == nil && composerReady {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !composerReady {
+			return chatGPTTurnResult{OK: false, Detail: "ChatGPT opened a new chat but the fresh composer did not become ready"}
+		}
+		return chatGPTTurnResult{OK: true}
+	}
+
+	openFreshChat := func() chatGPTTurnResult {
+		// O NEW: already works reliably in the user's real ChatGPT account. Make it
+		// the single reset primitive: the root is always a fresh regular ChatGPT
+		// Chat conversation, independent of whether the previous page was Chat or Work.
+		var ignored bool
+		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not open a fresh ChatGPT Chat session: " + err.Error()}
+		}
+		time.Sleep(650 * time.Millisecond)
+		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
+			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a fresh Chat session"}
+		}
+		if ready := waitForFreshComposer(); !ready.OK {
+			return ready
+		}
+		if chat := ensureMode(browserModeChat); !chat.OK {
+			return chat
+		}
+		return chatGPTTurnResult{OK: true}
+	}
+
+	prepareFresh := func(mode string) chatGPTTurnResult {
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if mode == "" {
+			mode = browserModeChat
+		}
+		if mode == browserModeWork {
+			// OW NEW: is deliberately built from the two operations that are proven
+			// reliable in the live UI: O NEW: creates a fresh regular Chat, then OW:
+			// switches that blank conversation into Work. This guarantees the task can
+			// never reuse the old Work conversation.
+			if fresh := openFreshChat(); !fresh.OK {
+				return fresh
+			}
+			if work := ensureMode(browserModeWork); !work.OK {
+				return chatGPTTurnResult{OK: false, Detail: "FlipAi opened a fresh ChatGPT conversation but could not switch that new conversation into Work. The task was not sent."}
+			}
+			return waitForFreshComposer()
+		}
+		return openFreshChat()
+	}
+'''
+          s = s[:start] + fresh + s[end:]
+          path.write_text(s)
+
+          test = Path('chatgpt_webview_windows_test.go')
+          t = test.read_text()
+          fn = 'func TestChatGPTWorkNewSelectsWorkBeforeNativeNewChat(t *testing.T) {'
+          start = t.index(fn)
+          next_fn = t.find('\nfunc ', start + len(fn))
+          if next_fn < 0:
+              next_fn = len(t)
+          replacement = r'''func TestChatGPTRouteBoundariesAreExplicit(t *testing.T) {
+	b, err := os.ReadFile("chatgpt_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"const workEvidence=named('work');",
+		"if(workEvidence.length===0)return {ok:true,mode:'chat'",
+		"O: means regular ChatGPT Chat",
+		"openFreshChat := func() chatGPTTurnResult",
+		"if fresh := openFreshChat(); !fresh.OK",
+		"if work := ensureMode(browserModeWork); !work.OK",
+		"return openFreshChat()",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("ChatGPT route boundary lost %q", want)
+		}
+	}
+	if strings.Contains(s, "if(!findSelected('work'))return {ok:true,mode:'chat'") {
+		t.Fatal("Chat mode must not be accepted merely because Work lacks selected-state attributes")
+	}
+	if strings.Contains(s, "chatGPTEval(dev, chatGPTClickNewChatJS") {
+		t.Fatal("OW NEW must not depend on ChatGPT Work exposing a New chat button")
+	}
+}
+'''
+          t = t[:start] + replacement + t[next_fn:]
+          test.write_text(t)
+
+          v = Path('VERSION')
+          assert v.read_text().strip() == '0.46.66'
+          v.write_text('0.46.67\n')
+
+          cfg = Path('config.go')
+          c = cfg.read_text()
+          assert 'const version = "0.46.66"' in c
+          cfg.write_text(c.replace('const version = "0.46.66"', 'const version = "0.46.67"', 1))
+
+          iss = Path('installer/FlipAi.iss')
+          i = iss.read_text()
+          assert '#define MyVersion "0.46.66"' in i
+          iss.write_text(i.replace('#define MyVersion "0.46.66"', '#define MyVersion "0.46.67"', 1))
+
+          Path('docs/RELEASE-NOTES.md').write_text('''# FlipAi v0.46.67
+
+This release makes ChatGPT Chat and ChatGPT Work explicit route boundaries instead of letting the shared browser state leak between them.
+
+## ChatGPT routing semantics
+
+- `O:` always runs in regular ChatGPT Chat. If the shared browser is currently in Work and ChatGPT's picker cannot safely switch out, FlipAi opens the canonical regular Chat root rather than sending the request into Work.
+- `O NEW:` always opens a fresh regular ChatGPT Chat conversation.
+- `OW:` always runs in ChatGPT Work and keeps the existing Work conversation when it is already the selected route.
+- `OW NEW:` always creates a fresh Work conversation, regardless of whether the browser currently shows Chat or Work.
+
+## `OW NEW:` implementation
+
+- `OW NEW:` no longer depends on Work exposing a `New chat` button.
+- FlipAi first performs the same fresh regular-Chat reset used by the already-working `O NEW:` path, then switches that blank conversation into Work using the same selector used by `OW:`.
+- The old Work conversation therefore cannot be reused by an explicit `OW NEW:` request.
+
+## Mode verification
+
+- FlipAi no longer treats a page as regular Chat merely because a visible Work label lacks `aria-selected` or similar selected-state attributes.
+- Chat/Work picker detection now also recognizes `aria-haspopup` and tabindex-based controls.
+
+No Authenticode/code-signing certificate is included in this release.
+''')
+
+          wf = Path('.github/workflows/patch-v04667.yml')
+          if wf.exists():
+              wf.unlink()
+          PY
+
+          gofmt -w chatgpt_webview_windows.go chatgpt_webview_windows_test.go config.go
+          go test ./...
+
+      - name: Commit patched release
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix ChatGPT Chat/Work route boundaries and prepare v0.46.67"
+          git push origin HEAD:fix/chatgpt-route-boundaries-v04667
