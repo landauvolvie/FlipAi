@@ -43,10 +43,6 @@ const chatGPTSignedInJS = `(async()=>{
   return !!document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"]');
 })()`
 
-// Work is a real ChatGPT experience, not a model name. FlipAi must switch the
-// page into that experience before it fills the composer. The selector is
-// deliberately accessibility/text based rather than coordinate based because
-// ChatGPT's DOM classes change frequently.
 const chatGPTSelectModeJS = `(async(wanted)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
@@ -78,10 +74,7 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
   wanted=norm(wanted)==='work'?'work':'chat';
   const other=wanted==='work'?'chat':'work';
 
-  // Auth can restore before ChatGPT finishes mounting the fresh composer and
-  // experience toggle. Wait for the actual interactive UI, not only auth.
   for(let i=0;i<100&&!composerReady();i++)await sleep(200);
-
   if(findSelected(wanted))return {ok:true,mode:wanted,href:location.href};
 
   let target=named(wanted)[0]||null;
@@ -93,9 +86,6 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
     }
   }
   if(!target){
-    // Some ChatGPT builds expose Chat/Work through one combined toggle whose
-    // children are not buttons until it is opened. Open only a short, explicit
-    // control that names both experiences, then look for the exact Work item.
     const picker=controls().find(n=>{
       const v=values(n).join(' ');
       return v.length<100&&/(^|\s)chat(\s|$)/.test(v)&&/(^|\s)work(\s|$)/.test(v);
@@ -117,16 +107,10 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
     }
   }
 
-  if(wanted==='chat'){
-    if(!findSelected('work'))return {ok:true,mode:'chat',href:location.href,legacy:true};
-  }
+  if(wanted==='chat'&&!findSelected('work'))return {ok:true,mode:'chat',href:location.href,legacy:true};
   return {ok:false,detail:'FlipAi could not verify ChatGPT '+(wanted==='work'?'Work':'Chat')+' mode. The task was not sent so it cannot accidentally run in the wrong experience.',href:location.href};
 })(%s)`
 
-// Prefer ChatGPT's own New chat control for explicit NEW requests. Clicking it
-// preserves the currently selected Chat/Work experience more reliably than a
-// blind top-level navigation. If the control is unavailable, Go falls back to
-// navigating to chatgpt.com and then re-verifies the requested experience.
 const chatGPTClickNewChatJS = `(()=>{
   const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
   const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden';
@@ -142,9 +126,22 @@ const chatGPTClickNewChatJS = `(()=>{
   return true;
 })()`
 
-// chatGPTTurnJS deliberately uses ChatGPT's own page controls inside FlipAi's
-// private WebView. It does not use Windows accessibility, global keyboard/mouse
-// input, the user's visible ChatGPT app, or coordinates.
+const chatGPTFreshConversationJS = `(()=>{
+  const before=String(location.href||'');
+  const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden';
+  const controls=Array.from(document.querySelectorAll('button,a,[role="button"],[role="link"],[aria-label],[title],[data-testid]')).filter(visible);
+  const vals=n=>[n.innerText,n.textContent,n.getAttribute&&n.getAttribute('aria-label'),n.getAttribute&&n.getAttribute('title')].map(norm).filter(Boolean);
+  let target=controls.find(n=>vals(n).some(v=>v==='new chat'||v==='new conversation'))||null;
+  if(!target){
+    const leaf=Array.from(document.querySelectorAll('span,div,p')).find(n=>visible(n)&&(norm(n.textContent)==='new chat'||norm(n.textContent)==='new conversation'))||null;
+    if(leaf)target=leaf.closest&&leaf.closest('button,a,[role="button"],[role="link"]')||leaf;
+  }
+  if(!target)return {clicked:false,before,href:String(location.href||'')};
+  target.click();
+  return {clicked:true,before,href:String(location.href||'')};
+})()`
+
 const chatGPTTurnJS = `(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const clean=s=>String(s||'')
@@ -207,6 +204,12 @@ type chatGPTTurnResult struct {
 	Reply  string `json:"reply"`
 	Detail string `json:"detail"`
 	Href   string `json:"href"`
+}
+
+type chatGPTFreshClickResult struct {
+	Clicked bool   `json:"clicked"`
+	Before  string `json:"before"`
+	Href    string `json:"href"`
 }
 
 func chatGPTEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
@@ -502,55 +505,37 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 			mode = browserModeChat
 		}
 
-		// Work NEW used to click New chat first and only then try to recover Work.
-		// On the current ChatGPT UI that click can land on the normal Chat
-		// experience, where the Work selector is no longer mounted, producing a
-		// false "could not verify Work mode" failure. Select the requested
-		// experience first (the same path that already works for OW:), then open a
-		// fresh conversation inside that experience.
-		if mode == browserModeWork {
-			if before := ensureMode(mode); !before.OK {
-				return before
-			}
+		// First get into the requested experience using the exact same selector
+		// path used by a normal OW: turn. This is important because Work's own New
+		// chat control exists only while the Work shell is mounted.
+		if before := ensureMode(mode); !before.OK {
+			return before
 		}
 
-		openRoot := func() chatGPTTurnResult {
-			var ignored bool
-			if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-				return chatGPTTurnResult{OK: false, Detail: err.Error()}
-			}
-			time.Sleep(650 * time.Millisecond)
-			if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
-				return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a new chat"}
-			}
-			return ensureMode(mode)
+		var fresh chatGPTFreshClickResult
+		if err := chatGPTEval(dev, chatGPTFreshConversationJS, false, &fresh); err != nil {
+			fresh.Clicked = false
+		}
+		if !fresh.Clicked {
+			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not find ChatGPT's New chat control in the requested experience."}
 		}
 
-		var clicked bool
-		if err := chatGPTEval(dev, chatGPTClickNewChatJS, false, &clicked); err != nil {
-			clicked = false
-		}
-		if !clicked {
-			return openRoot()
-		}
-
-		// Give the SPA click time to commit before auth can immediately report the
-		// previous page as signed in.
-		time.Sleep(650 * time.Millisecond)
+		// Wait for the SPA to settle, then verify the requested mode again. Do not
+		// navigate to the generic root as a fallback: that was the path that could
+		// silently move the session back to normal Chat and made OW NEW unreliable.
+		time.Sleep(900 * time.Millisecond)
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a new chat"}
 		}
-		if after := ensureMode(mode); after.OK {
-			return after
-		} else if mode != browserModeWork {
+		if after := ensureMode(mode); !after.OK {
 			return after
 		}
 
-		// Last-resort Work recovery: the global New chat control can still reset
-		// to Chat on some ChatGPT builds. Navigating to the blank root guarantees
-		// a new conversation, then the already-proven OW mode selector activates
-		// Work before any prompt is sent.
-		return openRoot()
+		// A fresh blank ChatGPT conversation may keep the same root URL, so URL
+		// change is not required. The important guarantees are: New chat was
+		// actually clicked, the page returned to a signed-in composer, and the
+		// requested experience still verifies before any task is sent.
+		return chatGPTTurnResult{OK: true, Href: loadChatGPTRuntime(dataDir).LastURL}
 	}
 
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool, mode string) {
