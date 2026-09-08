@@ -66,7 +66,7 @@ func TestMuseChatSMSPrefixAndNewConversation(t *testing.T) {
 
 func TestMuseAgentsPaneAndCentralDispatchStayWired(t *testing.T) {
 	body := smsRouteAgentsUI(museChatDirectUI(copilotChatDirectUI(exactWebAgentsHTML())))
-	for _, want := range []string{"agent-muse-chat", "/muse-chat/connect", "/muse-chat/test", "/muse-chat/disconnect", "MU = Muse", "MuseChatAccess"} {
+	for _, want := range []string{"agent-muse-chat", "/muse-chat/connect", "/muse-chat/test", "/muse-chat/disconnect", "Answers MU: messages", "MuseChatAccess"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Agents page is missing %q", want)
 		}
@@ -78,9 +78,6 @@ func TestMuseAgentsPaneAndCentralDispatchStayWired(t *testing.T) {
 	}
 	bridgeText := string(bridge)
 	for _, want := range []string{`rc.Agent == "U"`, `b.runMuseChatSMS(ctx, rc.Text)`, `b.newMuseChatConversation(ctx)`} {
-		// Go raw-string literals above intentionally keep the production spelling,
-		// so normalize the one quoted agent check for readability in this test.
-		want = strings.ReplaceAll(want, `\"`, `"`)
 		if !strings.Contains(bridgeText, want) {
 			t.Fatalf("central SMS executor is missing %q", want)
 		}
