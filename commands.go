@@ -9,7 +9,7 @@ import (
 
 const (
 	// These are the legacy/internal parser defaults. Public SMS routing uses the
-	// provider-grouped shortcuts in sms_routes.go (O/OC/OW, A/AC/AW/AL, G/M/X).
+	// provider-grouped shortcuts in sms_routes.go (O/OC/OW, A/AC/AW/AL, G/M/MU/X).
 	// Keeping the internal defaults stable avoids changing unrelated voice,
 	// permission, and direct-parser behavior while the public SMS layer changes.
 	defaultCodexPrefix       = "C"
@@ -19,6 +19,7 @@ const (
 	defaultGeminiChatPrefix  = "M"
 	defaultGrokChatPrefix    = "X"
 	defaultCopilotChatPrefix = "P"
+	defaultMuseChatPrefix    = "U"
 	defaultNewSessionCommand = "NEW"
 )
 
@@ -78,6 +79,10 @@ func configuredGrokChatPrefix(cfg Config) string {
 
 func configuredCopilotChatPrefix(cfg Config) string {
 	return normalizeCommandToken(cfg.CopilotChatPrefix, defaultCopilotChatPrefix)
+}
+
+func configuredMuseChatPrefix(cfg Config) string {
+	return normalizeCommandToken(cfg.MuseChatPrefix, defaultMuseChatPrefix)
 }
 
 func configuredNewSessionCommand(cfg Config) string {
