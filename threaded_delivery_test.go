@@ -85,17 +85,20 @@ func TestBridgeAnswersOnTheThreadedPath(t *testing.T) {
 	cfg := defaultConfig(t.TempDir())
 	cfg.Security.RequireCode = false
 	allowTestNumber(&cfg, "C", "2125557777")
-	cfg.GoogleVoice.ReplyAck = true
 
 	mc := &threadingMailClient{msg: m}
 	b := NewBridge(cfg, t.TempDir()+"/state.json", State{GmailBaselineUnix: 1}, mc, nil, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	b.poll(ctx)
-	b.drainQueue(ctx)
+	rc := remoteCommand{Agent: "C", Sender: "2125557777"}
+
+	// Exercise both kinds of outbound message directly. A fast real turn no
+	// longer sends the acknowledgement, but when a long turn reaches the 30s
+	// checkpoint the acknowledgement and the eventual result must both stay
+	// threaded to the original Google Voice notification.
+	b.sendReceipt(context.Background(), m, rc, 1)
+	b.deliver(context.Background(), m, rc, "final answer")
 
 	bodies, originals, standalone := mc.sent()
-	if len(bodies) < 2 {
+	if len(bodies) != 2 {
 		t.Fatalf("expected an acknowledgement and a result, got %d: %q", len(bodies), bodies)
 	}
 	if standalone > 0 {
