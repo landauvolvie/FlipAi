@@ -4,7 +4,7 @@ name: release
 # Existing assets are replaced only after every release check passes.
 # Release-time CycloneDX SBOM generation and upload are intentionally part of this job.
 # Touching this workflow intentionally retries a release after version metadata is synchronized.
-# v0.46.59 ChatGPT Work NEW fix synchronized; publish this release.
+# v0.46.63 long-turn progress/final-reply release metadata synchronized; retry publish.
 on:
   push:
     branches: [main]
