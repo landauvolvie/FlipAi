@@ -1,28 +1,24 @@
-# FlipAi v0.46.64
+# FlipAi v0.46.65
 
-This release fixes ChatGPT Work fresh sessions and makes ChatGPT rich-card answers usable over SMS.
+This release fixes two ChatGPT Work routing regressions reproduced from Google Voice.
 
-## ChatGPT Work NEW
+## `OW NEW:` fresh Work sessions
 
-- `OW:` continues to select ChatGPT Work before sending the task.
-- `OW NEW:` now selects and verifies Work before pressing New chat, instead of opening a normal Chat session first and then trying to recover Work.
-- If ChatGPT's global New chat control still falls back to regular Chat, FlipAi opens a blank root conversation and re-selects Work before any prompt is sent.
-- The safety check remains fail-closed: FlipAi still will not send the task unless Work mode is verified.
+- `OW NEW:` now verifies ChatGPT Work first, clicks ChatGPT's native New chat control inside the Work experience, waits for the fresh composer, and verifies Work again before any task is sent.
+- The previous generic `chatgpt.com` root fallback is removed from this path because it could drop the browser back into regular Chat and cause `FlipAi could not verify ChatGPT Work mode`.
+- The existing fail-closed safety remains: if Work cannot be verified, FlipAi does not send the task into the wrong experience.
 
-## Gmail cards and rich UI over SMS
+## Sticky ChatGPT Work follow-ups
 
-- ChatGPT is now explicitly instructed to include the important contents of email previews, cards, widgets, calendar items, files, and other rich UI in plain text too.
-- The repeated ChatGPT rendering artifact `Unable to display this message due to an error. Reload the page to try again.` is filtered from extracted SMS replies instead of being forwarded to the phone.
-- This keeps useful text such as package/email summaries deliverable even when ChatGPT also renders rich cards.
-
-## Progress labels
-
-- Work-mode acknowledgements and heartbeats now say `ChatGPT Work working on it…` / `ChatGPT Work still working…` rather than incorrectly saying `ChatGPT Chat`.
-- Browser-route display names are kept mode-aware for ChatGPT Work and Claude web Code/Cowork routes.
+- Selecting `OW:` now persists the exact SMS route as `route:OW`, not only the shared ChatGPT engine ID.
+- Unprefixed follow-ups therefore stay in ChatGPT Work instead of silently decoding back to regular ChatGPT Chat.
+- Acknowledgements and heartbeats for those follow-ups now correctly say `ChatGPT Work working on it…` / `ChatGPT Work still working…`.
+- Legacy single-letter sticky values remain readable for existing installs.
 
 ## Validation
 
-- Added regression tests for `OW NEW:` parsing and mode preservation, Work-before-New ordering, Work recovery, rich-card plain-text prompting, card-render-error cleanup, and mode-aware SMS status labels.
-- The normal release pipeline still runs Linux and Windows tests, browser checks, vet/race checks, installer smoke tests, Defender scans, checksums, SBOM generation, and provenance attestation before publishing.
+- Added regression coverage proving an unprefixed follow-up after `OW:` keeps Work mode and the Work display label.
+- Added regression coverage proving `OW NEW:` selects Work before New chat, re-verifies Work afterward, and never uses the generic-root fallback.
+- The normal release pipeline still runs the full Linux and Windows test suites, browser checks, vet/race checks, installer smoke tests, Defender scans, SBOM generation, checksums, and provenance attestation before publishing.
 
 No Authenticode/code-signing certificate is included in this release.
