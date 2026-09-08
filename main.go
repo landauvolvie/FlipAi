@@ -88,6 +88,8 @@ func loadOrCreateConfig(cfgPath, dataDir string) Config {
 		cfg.Security.ClaudeChatAgentMigrated = true
 		cfg.Security.GeminiChatAgentMigrated = true
 		cfg.Security.GrokChatAgentMigrated = true
+		cfg.Security.CopilotChatAgentMigrated = true
+		cfg.Security.MuseChatAgentMigrated = true
 		if err := saveConfig(cfgPath, cfg); err != nil {
 			panic(err)
 		}
@@ -143,7 +145,7 @@ func waitForShutdown(dataDir, cfgPath string, d time.Duration) {
 	}
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() && !chatGPTBrowserStillOpen(dataDir) && !claudeChatBrowserStillOpen(dataDir) && !geminiChatBrowserStillOpen(dataDir) && !grokChatBrowserStillOpen(dataDir) {
+		if !hostResponding(cfg.Listen) && !platformVoiceStillOpen() && !chatGPTBrowserStillOpen(dataDir) && !claudeChatBrowserStillOpen(dataDir) && !geminiChatBrowserStillOpen(dataDir) && !grokChatBrowserStillOpen(dataDir) && !copilotChatBrowserStillOpen(dataDir) && !museChatBrowserStillOpen(dataDir) {
 			// WebView2 keeps helper processes and open handles inside the data
 			// folder for a moment after its window goes; Setup deletes that
 			// folder next, so give them time to let go.
@@ -483,6 +485,9 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 	// instead of leaving the user to find a download that looks like a first
 	// install.
 	go app.watchForUpdates(ctx)
+	// Muse restores a saved connected session after a FlipAi restart instead of
+	// waiting for the next SMS to discover that its worker is gone.
+	go runMuseChatBackgroundSupervisor(ctx, dataDir)
 	go func() {
 		time.Sleep(800 * time.Millisecond)
 		app.startBridge(ctx)

@@ -319,8 +319,8 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		if v, ok := formFlag(r, "claudeUseChrome"); ok {
 			cfg.Claude.UseChrome = v
 		}
-		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("chatgptPrefix") || r.Form.Has("claudeChatPrefix") || r.Form.Has("geminiChatPrefix") || r.Form.Has("grokChatPrefix") || r.Form.Has("copilotChatPrefix") || r.Form.Has("newSessionCommand") {
-			codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, geminiChatPrefix, grokChatPrefix, copilotChatPrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredChatGPTPrefix(*cfg), configuredClaudeChatPrefix(*cfg), configuredGeminiChatPrefix(*cfg), configuredGrokChatPrefix(*cfg), configuredCopilotChatPrefix(*cfg), configuredNewSessionCommand(*cfg)
+		if r.Form.Has("codexPrefix") || r.Form.Has("claudePrefix") || r.Form.Has("chatgptPrefix") || r.Form.Has("claudeChatPrefix") || r.Form.Has("geminiChatPrefix") || r.Form.Has("grokChatPrefix") || r.Form.Has("copilotChatPrefix") || r.Form.Has("museChatPrefix") || r.Form.Has("newSessionCommand") {
+			codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, geminiChatPrefix, grokChatPrefix, copilotChatPrefix, museChatPrefix, newSession := configuredCodexPrefix(*cfg), configuredClaudePrefix(*cfg), configuredChatGPTPrefix(*cfg), configuredClaudeChatPrefix(*cfg), configuredGeminiChatPrefix(*cfg), configuredGrokChatPrefix(*cfg), configuredCopilotChatPrefix(*cfg), configuredMuseChatPrefix(*cfg), configuredNewSessionCommand(*cfg)
 			var err error
 			if r.Form.Has("codexPrefix") {
 				codexPrefix, err = validateCommandToken(r.FormValue("codexPrefix"), "Codex prefix")
@@ -364,11 +364,17 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			}
-			prefixes := []string{codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, geminiChatPrefix, grokChatPrefix, copilotChatPrefix}
+			if r.Form.Has("museChatPrefix") {
+				museChatPrefix, err = validateCommandToken(r.FormValue("museChatPrefix"), "Muse shortcut")
+				if err != nil {
+					return err
+				}
+			}
+			prefixes := []string{codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, geminiChatPrefix, grokChatPrefix, copilotChatPrefix, museChatPrefix}
 			for i := range prefixes {
 				for j := i + 1; j < len(prefixes); j++ {
 					if strings.EqualFold(prefixes[i], prefixes[j]) {
-						return fmt.Errorf("Codex, Claude, ChatGPT Chat, Claude Chat, Gemini Chat, Grok Chat, and Microsoft Copilot Chat shortcuts must all be different")
+						return fmt.Errorf("Codex, Claude, ChatGPT Chat, Claude Chat, Gemini Chat, Grok Chat, Microsoft Copilot Chat, and Muse shortcuts must all be different")
 					}
 				}
 			}
@@ -378,7 +384,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			}
-			cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix, cfg.GrokChatPrefix, cfg.CopilotChatPrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, geminiChatPrefix, grokChatPrefix, copilotChatPrefix, newSession
+			cfg.CodexPrefix, cfg.ClaudePrefix, cfg.ChatGPTPrefix, cfg.ClaudeChatPrefix, cfg.GeminiChatPrefix, cfg.GrokChatPrefix, cfg.CopilotChatPrefix, cfg.MuseChatPrefix, cfg.NewSessionCommand = codexPrefix, claudePrefix, chatGPTPrefix, claudeChatPrefix, geminiChatPrefix, grokChatPrefix, copilotChatPrefix, museChatPrefix, newSession
 		}
 		if n, ok, err := formInt(r, "turnTimeout", 1, 600); err != nil {
 			return fmt.Errorf("turn timeout: %w", err)
@@ -404,7 +410,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		// The shared line itself falls back to the built-in default when cleared,
 		// because every turn needs some framing and a blank one would silently
 		// stop telling the agent its answer becomes a text message.
-		for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P"} {
+		for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P", "U"} {
 			if err := applyAgentAccessForm(cfg, r, agent); err != nil {
 				return err
 			}
@@ -445,6 +451,7 @@ func (a *App) saveAgents(w http.ResponseWriter, r *http.Request) {
 		cfg.GeminiChat.Instruction = ""
 		cfg.GrokChat.Instruction = ""
 		cfg.CopilotChat.Instruction = ""
+		cfg.MuseChat.Instruction = ""
 		if r.Form.Has("claudeSessionMode") {
 			// Anything unrecognised normalises to per-message, so a stale form
 			// post can never leave the bridge in a mode it does not implement.

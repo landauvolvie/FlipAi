@@ -6,12 +6,12 @@ import "strings"
 // their stored internal parser prefixes for backward compatibility, while the
 // UI shows only the fixed public shortcuts users actually text.
 func init() {
-	registerPage("agents", smsRouteAgentsUI(copilotChatDirectUI(exactWebAgentsHTML())))
+	registerPage("agents", smsRouteAgentsUI(museChatDirectUI(copilotChatDirectUI(exactWebAgentsHTML()))))
 }
 
 func smsRouteAgentsUI(body string) string {
 	const oldHeader = `<p>C: selects Codex, A: selects Claude, G: selects ChatGPT Chat, H: selects Claude Chat, M: selects Gemini Chat, X: selects Grok Chat, and P: selects Microsoft Copilot Chat. After a selection, unprefixed follow-up texts stay with that agent until you switch again.</p>`
-	const newHeader = `<p><b>SMS shortcuts:</b> O = ChatGPT Chat · OW = ChatGPT Work · OC = Codex · A = Claude Chat · AW = Claude Cowork · AC = Claude Code Web · AL = Claude Code Local · G = Gemini · M = Microsoft Copilot · X = Grok. Add <b>NEW</b> after any shortcut to start fresh, for example <b>OW NEW: research this</b>.</p>`
+	const newHeader = `<p><b>SMS shortcuts:</b> O = ChatGPT Chat · OW = ChatGPT Work · OC = Codex · A = Claude Chat · AW = Claude Cowork · AC = Claude Code Web · AL = Claude Code Local · G = Gemini · M = Microsoft Copilot · MU = Muse · X = Grok. Add <b>NEW</b> after any shortcut to start fresh, for example <b>OW NEW: research this</b>.</p>`
 	body = strings.Replace(body, oldHeader, newHeader, 1)
 
 	replacements := []struct{ old, new string }{
@@ -22,6 +22,7 @@ func smsRouteAgentsUI(body string) string {
 		{`Answers {{.GeminiChatAccess.Prefix}}: messages`, `Answers G: messages`},
 		{`Answers {{.GrokChatAccess.Prefix}}: messages`, `Answers X: messages`},
 		{`Answers {{.CopilotChatAccess.Prefix}}: messages`, `Answers M: messages`},
+		{`Answers {{.MuseChatAccess.Prefix}}: messages`, `Answers MU: messages`},
 	}
 	for _, r := range replacements {
 		body = strings.ReplaceAll(body, r.old, r.new)
@@ -46,6 +47,7 @@ func smsRouteAgentsUI(body string) string {
     rail('agent-gemini-chat','Answers G: messages');
     rail('agent-grok-chat','Answers X: messages');
     rail('agent-copilot-chat','Answers M: messages');
+    rail('agent-muse-chat','Answers MU: messages');
 
     function renameWithStatus(selector,name){var el=document.querySelector(selector);if(!el)return;for(var i=0;i<el.childNodes.length;i++){if(el.childNodes[i].nodeType===3&&el.childNodes[i].nodeValue.trim()){el.childNodes[i].nodeValue=name+' ';return}}}
     renameWithStatus('.agent-item[for="agent-claude"] b','Claude Code Local');
@@ -60,7 +62,8 @@ func smsRouteAgentsUI(body string) string {
       claudeChatPrefix:{value:'A = Chat · AW = Cowork · AC = Code Web',hint:'Use A: for Claude Chat, AW: for Claude Cowork, or AC: for Claude Code Web. Add '+newWord+' after any shortcut to start fresh.'},
       geminiChatPrefix:{value:'G',hint:'Text G: to use Gemini. Start fresh with G '+newWord+': your task.'},
       grokChatPrefix:{value:'X',hint:'Text X: to use Grok. Start fresh with X '+newWord+': your task.'},
-      copilotChatPrefix:{value:'M',hint:'Text M: to use Microsoft Copilot. Start fresh with M '+newWord+': your task.'}
+      copilotChatPrefix:{value:'M',hint:'Text M: to use Microsoft Copilot. Start fresh with M '+newWord+': your task.'},
+      museChatPrefix:{value:'MU',hint:'Text MU: to use Muse. Start fresh with MU '+newWord+': your task.'}
     };
     Object.keys(fields).forEach(function(id){
       var old=document.getElementById(id);if(!old)return;
