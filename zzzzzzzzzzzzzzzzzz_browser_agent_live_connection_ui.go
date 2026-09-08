@@ -8,11 +8,11 @@ import "strings"
 // Agents page used to merge those two concepts, which made an expired or failed
 // login still show as Connected and hid the Connect button.
 //
-// Apply this after the final Copilot augmentation so every private WebView agent
-// reports the visible connection state from SignedIn only. The saved-profile
-// flag remains untouched for background restore logic.
+// Apply this after the existing final presentation passes so every private
+// WebView agent reports the visible connection state from SignedIn only. The
+// saved-profile flag remains untouched for background restore logic.
 func init() {
-	registerPage("agents", browserAgentLiveConnectionUI(copilotChatDirectUI(exactWebAgentsHTML())))
+	registerPage("agents", browserAgentLiveConnectionUI(smsRouteAgentsUI(copilotChatDirectUI(exactWebAgentsHTML()))))
 }
 
 func browserAgentLiveConnectionUI(body string) string {
