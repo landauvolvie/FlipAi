@@ -1,9 +1,6 @@
 package main
 
-import (
-	"html/template"
-	"strings"
-)
+import "strings"
 
 func updaterUIState(releaseVersion string) string {
 	info := currentUpdateSnapshot()
@@ -27,21 +24,13 @@ func updaterUIPercent(releaseVersion string) int {
 	return info.ProgressPercent()
 }
 
-func init() {
-	// Updates live only beside the version in the sidebar. Keep Settings focused
-	// on startup/calling and remove the old page-wide updater surfaces.
-	settings := cleanSettingsHTML
-	settings = strings.Replace(settings,
-		`<div><h1>Settings</h1><p>Keep FlipAi running and manage app updates and calling.</p></div>`,
-		`<div><h1>Settings</h1><p>Keep FlipAi running and manage calling.</p></div>`, 1)
-	if start := strings.Index(settings, `<section class="card settings-compact-card">`); start >= 0 {
-		if relEnd := strings.Index(settings[start:], `<section class="card settings-startup-card">`); relEnd >= 0 {
-			settings = settings[:start] + settings[start+relEnd:]
-		}
-	}
-	settings = strings.Replace(settings, " Check for updates", "", 1)
-	registerPage("settings", settings)
-
+// updaterShellHTML returns the one shell every page must use. The previous
+// updater implementation reparsed only the pages that happened to exist when
+// its init function ran. Later feature files re-registered Connections and
+// Agents with the original shell, which brought back the old download arrow and
+// page-wide banner. Applying the updater at registerPage time makes the shell
+// deterministic no matter how late a page is registered or replaced.
+func updaterShellHTML() string {
 	updatedShell := shellHTML
 	oldSidebar := `      {{if .Shell.UpdateVersion}}<a class="side-update" href="/settings#updates" title="FlipAi {{.Shell.UpdateVersion}} is available">{{icon "download"}}<span>v{{.Shell.Version}} &rarr; {{.Shell.UpdateVersion}}</span></a>{{else}}<span>v{{.Shell.Version}}</span>{{end}}`
 	newSidebar := `      <div class="side-version-row" id="flipai-version-row">
@@ -75,9 +64,9 @@ func init() {
 </style>`
 	updatedShell = strings.Replace(updatedShell, `</head>`, updaterStyle+`</head>`, 1)
 
-	// The host owns update checks/downloads. This script only reads the local
-	// status endpoint so the small percentage can move smoothly without page
-	// reloads or GitHub requests from the UI.
+	// The host owns update checks, verification and automatic installation. The
+	// script only reflects local progress and keeps a manual Install button as a
+	// fallback when an update is staged but automatic handoff is waiting/failed.
 	const updaterScript = `<script>
 (() => {
   const control = () => document.getElementById('flipai-update-control');
@@ -89,8 +78,8 @@ func init() {
       const response = await fetch('/update/install', {method:'POST', credentials:'same-origin', cache:'no-store'});
       if (!response.ok) throw new Error('install failed');
     } catch (_) {
-      // If Setup has already stopped FlipAi, the request can end while the
-      // local server is disappearing. Leave the installing state in that case.
+      // Setup normally stops FlipAi while this request is in flight. Only put
+      // the fallback button back if the old app is still alive after a delay.
       setTimeout(() => { if (document.body.contains(button)) { button.disabled=false; button.textContent='Install update'; } }, 4000);
     }
   };
@@ -137,11 +126,21 @@ func init() {
 })();
 </script>`
 	updatedShell = strings.Replace(updatedShell, `</body>`, updaterScript+`</body>`, 1)
+	return updatedShell
+}
 
-	for _, page := range uiPages {
-		page.Funcs(template.FuncMap{"updaterState": updaterUIState, "updaterPercent": updaterUIPercent})
-		if _, err := page.Parse(updatedShell); err != nil {
-			panic(err)
+func init() {
+	// Updates live only beside the version in the sidebar. Keep Settings focused
+	// on startup/calling and remove the retired page-wide updater controls.
+	settings := cleanSettingsHTML
+	settings = strings.Replace(settings,
+		`<div><h1>Settings</h1><p>Keep FlipAi running and manage app updates and calling.</p></div>`,
+		`<div><h1>Settings</h1><p>Keep FlipAi running and manage calling.</p></div>`, 1)
+	if start := strings.Index(settings, `<section class="card settings-compact-card">`); start >= 0 {
+		if relEnd := strings.Index(settings[start:], `<section class="card settings-startup-card">`); relEnd >= 0 {
+			settings = settings[:start] + settings[start+relEnd:]
 		}
 	}
+	settings = strings.Replace(settings, " Check for updates", "", 1)
+	registerPage("settings", settings)
 }
