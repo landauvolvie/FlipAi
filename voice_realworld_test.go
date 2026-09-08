@@ -102,9 +102,10 @@ func TestRealGoogleVoiceNotificationRunsCodexAndRepliesWithoutReplyTo(t *testing
 	if !strings.Contains(got, "FLIPAI_CODEX_OK") {
 		t.Fatalf("real Voice message did not make it through Codex: %q", got)
 	}
-	// The ack lands first, before the agent has produced anything.
-	if texts := fm.sentTexts(); len(texts) < 2 || !strings.Contains(texts[0], "working on it") {
-		t.Fatalf("expected an ack text ahead of the result, got %q", texts)
+	// This fixture completes quickly, so the 30-second acknowledgement timer
+	// must be cancelled and only the final answer should be sent.
+	if texts := fm.sentTexts(); len(texts) != 1 || !strings.Contains(texts[0], "FLIPAI_CODEX_OK") {
+		t.Fatalf("fast turn should send only the final result, got %q", texts)
 	}
 	wantTo := "18455550199.18455550142.AbCdEfGhIj@txt.voice.google.com"
 	if gotTo != wantTo {
