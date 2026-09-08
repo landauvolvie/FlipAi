@@ -1,24 +1,27 @@
-# FlipAi v0.46.69
+# FlipAi v0.46.70
 
-This release fixes browser-agent reconnect behavior after restart or sign-in loss.
+This release adds Muse.ai as a first-class browser chat provider alongside ChatGPT, Claude, Gemini, Grok, and Microsoft Copilot.
 
-## Accurate connection status
+## Muse.ai integration
 
-- ChatGPT Chat, Claude Chat, Gemini, Grok, and Microsoft Copilot now show Connected only when the live private browser is actually signed in.
-- If a session expires or fails to restore, FlipAi shows the agent as disconnected and presents Connect immediately; users no longer have to press Disconnect first.
+- Added Muse to the Agents page with Connect, Test, Disconnect, live connection status, SMS shortcut settings, allowed phone numbers, and optional PIN protection.
+- Muse runs inside its own persistent WebView2 profile, isolated from every other FlipAi provider and from the user's normal browser profile.
+- FlipAi explicitly recognizes `auth.muse.ai` and other sign-in states, so Muse is shown as Connected only when its live chat composer is actually available.
+- A saved Muse session is restored in the background after FlipAi restarts.
 
-## Sign-in windows open visibly
+## SMS routing
 
-- Connect now restores and brings each agent sign-in window to the foreground instead of leaving it minimized or hidden behind FlipAi.
+- `MU: your message` routes a turn to Muse.
+- `MU NEW: your message` starts a fresh Muse conversation and sends the message there.
+- Unprefixed follow-up messages continue using Muse through FlipAi's existing sticky-routing behavior until another provider is selected.
+- Attachments and long-turn/progress handling use the same hardened browser-chat plumbing as the other supported web agents.
 
-## Reliable reconnects without Task Manager
+## Reliability and isolation
 
-- FlipAi now closes and releases the WebView2 controller and profile cleanly before restarting a browser agent.
-- This prevents the stale profile lock/race that could leave the next sign-in window blank white.
-- Reconnecting multiple browser agents should no longer require killing FlipAi processes between agents.
+- Muse has its own connection runtime, browser worker, security settings, and conversation state.
+- Connect/Test/Disconnect and status endpoints are registered in the local authenticated FlipAi UI.
+- Regression coverage verifies Muse routing, NEW-conversation behavior, local action routes, isolated background WebView behavior, authentication detection, and central SMS dispatch.
 
-## Regression coverage
-
-- Added coverage that locks visible browser-agent connection status to live sign-in state.
+No Muse API key is required; FlipAi uses the user's signed-in Muse web session.
 
 No Authenticode/code-signing certificate is included in this release.
