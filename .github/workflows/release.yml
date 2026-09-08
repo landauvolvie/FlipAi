@@ -6,6 +6,7 @@ name: release
 # Release-time CycloneDX SBOM generation and upload are intentionally part of this job.
 # Touching this workflow intentionally retries a release after version metadata is synchronized.
 # v0.46.63 long-turn progress/final-reply release metadata synchronized; retry publish.
+# v0.46.69 browser-agent reconnect fixes synchronized; publish.
 on:
   push:
     branches: [main]
