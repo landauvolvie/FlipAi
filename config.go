@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.65"
+const version = "0.46.66"
 
 // defaultReplyStyleHint is the only behavioural framing FlipAi adds to a phone
 // command. It deliberately says nothing about SMS or plain text so providers

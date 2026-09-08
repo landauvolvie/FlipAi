@@ -112,9 +112,11 @@ func TestChatGPTWorkNewSelectsWorkBeforeNativeNewChat(t *testing.T) {
 		t.Fatal("ChatGPT Work NEW must verify Work before clicking New chat")
 	}
 	for _, want := range []string{
-		"FlipAi could not find ChatGPT Work's New chat control",
-		"if mode == browserModeWork {",
-		"return chatGPTTurnResult{OK: true}",
+		"switching out of Work also failed",
+		"if chat := ensureMode(browserModeChat); !chat.OK",
+		"if work := ensureMode(browserModeWork); !work.OK",
+		"mounted controls even when CSS says they are not currently visible",
+		"[data-testid],[href]",
 		"fresh composer did not become ready",
 	} {
 		if !strings.Contains(s, want) {

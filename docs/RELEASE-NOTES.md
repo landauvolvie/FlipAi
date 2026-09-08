@@ -1,24 +1,22 @@
-# FlipAi v0.46.65
+# FlipAi v0.46.66
 
-This release fixes two ChatGPT Work routing regressions reproduced from Google Voice.
+This release fixes the remaining `OW NEW:` failure on ChatGPT Work.
 
-## `OW NEW:` fresh Work sessions
+## `OW NEW:`
 
-- `OW NEW:` now verifies ChatGPT Work first, clicks ChatGPT's native New chat control inside the Work experience, waits for the fresh composer, and verifies Work again before any task is sent.
-- The previous generic `chatgpt.com` root fallback is removed from this path because it could drop the browser back into regular Chat and cause `FlipAi could not verify ChatGPT Work mode`.
-- The existing fail-closed safety remains: if Work cannot be verified, FlipAi does not send the task into the wrong experience.
+- FlipAi now searches ChatGPT's mounted New chat controls even when the Work sidebar is collapsed or off-screen, including data-testid and navigation-link variants.
+- If the current ChatGPT Work UI does not mount a separate New chat control at all, FlipAi no longer fails immediately. It creates a fresh Work session by switching from Work to Chat and back into Work through the same experience selector that already makes `OW:` work.
+- FlipAi still verifies Work before the reset and waits for the fresh composer before sending the user's task.
+- Regular Chat keeps its existing root-navigation fallback.
 
-## Sticky ChatGPT Work follow-ups
+## Existing Work routing fixes retained
 
-- Selecting `OW:` now persists the exact SMS route as `route:OW`, not only the shared ChatGPT engine ID.
-- Unprefixed follow-ups therefore stay in ChatGPT Work instead of silently decoding back to regular ChatGPT Chat.
-- Acknowledgements and heartbeats for those follow-ups now correctly say `ChatGPT Work working on it…` / `ChatGPT Work still working…`.
-- Legacy single-letter sticky values remain readable for existing installs.
+- Unprefixed follow-ups after `OW:` remain sticky to `route:OW`.
+- Work acknowledgements and progress messages continue to say `ChatGPT Work`.
 
 ## Validation
 
-- Added regression coverage proving an unprefixed follow-up after `OW:` keeps Work mode and the Work display label.
-- Added regression coverage proving `OW NEW:` selects Work before New chat, re-verifies Work afterward, and never uses the generic-root fallback.
-- The normal release pipeline still runs the full Linux and Windows test suites, browser checks, vet/race checks, installer smoke tests, Defender scans, SBOM generation, checksums, and provenance attestation before publishing.
+- Added regression coverage for hidden/off-screen New chat controls and the Work -> Chat -> Work fallback.
+- The normal Windows/Linux build, browser, security, installer, SBOM, checksum, and release workflows remain unchanged.
 
 No Authenticode/code-signing certificate is included in this release.
