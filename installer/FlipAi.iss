@@ -93,6 +93,11 @@ begin
   SaveStringToFile(QuitFile, Reason, False);
 end;
 
+{ Stop FlipAi through its own bounded shutdown path. Older installers used
+  taskkill.exe as a second step, which made a normal update look like a hidden
+  forced process-tree termination. Current FlipAi --quit already waits for the
+  host and provider WebViews to close, so Setup no longer needs to invoke a
+  system process-killing utility. }
 procedure StopFlipAiAndWait(const Reason: String);
 var
   Exe: String;
@@ -109,6 +114,8 @@ begin
     Sleep(3000);
 end;
 
+{ An existing install is an update, not a first run. Setup detects it up front
+  so the wizard can skip every question the user already answered. }
 function InitializeSetup(): Boolean;
 begin
   IsUpdate := RegQueryStringValue(HKCU, UninstallKey, 'DisplayVersion', PriorVersion);
@@ -117,6 +124,9 @@ begin
   Result := True;
 end;
 
+{ True only when FlipAi itself launched this installer to update in place.
+  1 = the user pressed Install in the app, so reopen the window too.
+  2 = an automatic background update, so restore the bridge silently. }
 function RestartWithWindow(): Boolean;
 begin
   Result := ExpandConstant('{param:restartapp|0}') = '1';
@@ -127,6 +137,7 @@ begin
   Result := ExpandConstant('{param:restartapp|0}') = '2';
 end;
 
+{ Kept so a Setup EXE built from this script still answers the old name. }
 function RestartRequested(): Boolean;
 begin
   Result := RestartWithWindow() or RestartBridgeOnly();
@@ -149,7 +160,12 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  { Stop the running bridge, whichever build started it, and wait for it. }
   StopFlipAiAndWait('installer upgrade');
+
+  { Remove both the old and new per-user startup values before writing the one
+    this install should have. PriorStartup remembers what was there so an
+    update never silently turns off a startup the user had enabled. }
   RegDeleteValue(HKCU, RunKey, 'AISMSBridge');
   RegDeleteValue(HKCU, RunKey, 'FlipAi');
   Result := '';
@@ -159,6 +175,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    { Setup wrote this flag to stop the old build. Leaving it behind would tell
+      the freshly installed one to stop as soon as it started. }
     DeleteFile(AddBackslash(ExpandConstant('{localappdata}\AISMSBridge')) + 'quit.flag');
     if (PriorStartup <> '') and not WizardIsTaskSelected('startup') then
       RegWriteStringValue(HKCU, RunKey, 'FlipAi',

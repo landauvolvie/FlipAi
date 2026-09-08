@@ -54,7 +54,7 @@ func TestChatGPTWorkNewUsesNativeNewChatAndBroadModeControls(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		"const chatGPTFreshConversationJS",
+		"const chatGPTClickNewChatJS",
 		`button,a,[role="button"]`,
 		"aria-current",
 		"prepareFresh := func(mode string) chatGPTTurnResult",
@@ -85,6 +85,7 @@ func TestChatGPTWebViewDoesNotUseGlobalUIAutomation(t *testing.T) {
 	}
 }
 
+
 func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
 	b, err := os.ReadFile("chatgpt_webview_windows.go")
 	if err != nil {
@@ -99,27 +100,25 @@ func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
 	}
 }
 
-func TestChatGPTWorkNewSelectsWorkBeforeOpeningFreshChat(t *testing.T) {
+func TestChatGPTWorkNewSelectsWorkBeforeNativeNewChat(t *testing.T) {
 	b, err := os.ReadFile("chatgpt_webview_windows.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
-	pre := strings.Index(s, "if before := ensureMode(mode); !before.OK")
-	click := strings.Index(s, "chatGPTEval(dev, chatGPTFreshConversationJS")
+	pre := strings.Index(s, "if mode == browserModeWork {")
+	click := strings.Index(s, "chatGPTEval(dev, chatGPTClickNewChatJS")
 	if pre < 0 || click < 0 || pre > click {
-		t.Fatal("ChatGPT Work NEW must verify/select Work before clicking New chat")
-	}
-	if strings.Contains(s, "location.href='https://chatgpt.com/'") {
-		t.Fatal("ChatGPT Work NEW must not fall back to generic root navigation")
+		t.Fatal("ChatGPT Work NEW must verify Work before clicking New chat")
 	}
 	for _, want := range []string{
-		"if !fresh.Clicked",
-		"if after := ensureMode(mode); !after.OK",
-		"requested experience still verifies before any task is sent",
+		"FlipAi could not find ChatGPT Work's New chat control",
+		"if mode == browserModeWork {",
+		"return chatGPTTurnResult{OK: true}",
+		"fresh composer did not become ready",
 	} {
 		if !strings.Contains(s, want) {
-			t.Fatalf("ChatGPT Work NEW recovery lost %q", want)
+			t.Fatalf("ChatGPT Work NEW lost %q", want)
 		}
 	}
 }

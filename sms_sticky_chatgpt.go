@@ -143,10 +143,10 @@ func (b *Bridge) stickySMSAgent(sender string) string {
 	return b.state.LastAgentBySender[key]
 }
 
-func (b *Bridge) rememberStickySMSRoute(sender, routeID string) error {
-	routeID = strings.ToUpper(strings.TrimSpace(routeID))
-	if _, ok := smsRouteByID(b.cfg, routeID); !ok {
-		return fmt.Errorf("unknown sticky SMS route %q", routeID)
+func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
+	agent = strings.ToUpper(strings.TrimSpace(agent))
+	if agent != "C" && agent != "A" && agent != "G" && agent != "H" && agent != "M" && agent != "X" && agent != "P" {
+		return fmt.Errorf("unknown sticky SMS agent %q", agent)
 	}
 	key := stickySMSKey(sender)
 	if key == "" {
@@ -156,23 +156,42 @@ func (b *Bridge) rememberStickySMSRoute(sender, routeID string) error {
 	if b.state.LastAgentBySender == nil {
 		b.state.LastAgentBySender = map[string]string{}
 	}
-	b.state.LastAgentBySender[key] = "route:" + routeID
+	b.state.LastAgentBySender[key] = agent
 	s := b.state
 	b.mu.Unlock()
 	return saveState(b.statePath, s)
 }
 
-// rememberStickySMSAgent is retained for compatibility with older tests and
-// callers that only know an execution engine. New routing code should persist
-// the exact public route with rememberStickySMSRoute so Work/Cowork/Code modes
-// survive unprefixed follow-ups.
-func (b *Bridge) rememberStickySMSAgent(sender, agent string) error {
-	agent = strings.ToUpper(strings.TrimSpace(agent))
-	routeID := defaultSMSRouteForAgent(agent)
-	if routeID == "" {
-		return fmt.Errorf("unknown sticky SMS agent %q", agent)
+func (b *Bridge) rememberStickySMSRoute(sender string, rc remoteCommand) error {
+	key := stickySMSKey(sender)
+	if key == "" {
+		return errors.New("SMS sender is empty")
 	}
-	return b.rememberStickySMSRoute(sender, routeID)
+	mode, _ := extractBrowserModeCommand(rc.Text)
+	routeID := ""
+	for _, route := range smsRouteSpecs(b.cfg) {
+		if route.Agent != rc.Agent {
+			continue
+		}
+		if route.Mode == mode || (route.Mode == "" && mode == "") {
+			routeID = route.ID
+			break
+		}
+	}
+	if routeID == "" {
+		routeID = defaultSMSRouteForAgent(rc.Agent)
+	}
+	if routeID == "" {
+		return fmt.Errorf("unknown sticky SMS route for agent %q mode %q", rc.Agent, mode)
+	}
+	b.mu.Lock()
+	if b.state.LastAgentBySender == nil {
+		b.state.LastAgentBySender = map[string]string{}
+	}
+	b.state.LastAgentBySender[key] = "route:" + routeID
+	s := b.state
+	b.mu.Unlock()
+	return saveState(b.statePath, s)
 }
 
 type chatGPTSMSReply struct {

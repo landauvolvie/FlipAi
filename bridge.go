@@ -507,7 +507,9 @@ func (b *Bridge) Run(ctx context.Context) {
 					return
 				}
 				if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-					log.Printf("Gmail IDLE: %v", err)
+					log.Printf("Gmail IMAP IDLE: %v", err)
+					b.event("warn", "gmail", "IMAP IDLE connection had a problem; retrying: "+truncate(err.Error(), 220), "", "", "")
+					time.Sleep(time.Second)
 				}
 				select {
 				case wake <- struct{}{}:
@@ -529,9 +531,12 @@ func (b *Bridge) Run(ctx context.Context) {
 		}
 	}
 
+	// Gmail API/OAuth has no local mailbox IDLE channel. Poll quickly; true
+	// Gmail API push would require the user's own Pub/Sub project, which this
+	// bridge intentionally does not require.
 	poll := b.cfg.Gmail.PollSeconds
 	if poll < 1 {
-		poll = 5
+		poll = 1
 	}
 	t := time.NewTicker(time.Duration(poll) * time.Second)
 	defer t.Stop()
@@ -545,56 +550,92 @@ func (b *Bridge) Run(ctx context.Context) {
 	}
 }
 
-func (b *Bridge) poll(ctx context.Context) {
-	b.mu.Lock()
-	paused := b.paused
-	b.mu.Unlock()
-	if paused {
-		b.mu.Lock()
-		b.lastPollAt = time.Now()
-		b.lastPollErr = "paused"
-		b.mu.Unlock()
-		return
-	}
-	b.mu.Lock()
+// processedSetLocked lazily indexes the on-disk checkpoint list. The slice is
+// kept as-is for state.json compatibility; the map exists so the per-message
+// lookup is O(1) instead of scanning up to 2000 entries for every candidate.
+// Callers already hold b.mu.
+func (b *Bridge) processedSetLocked() map[string]struct{} {
 	if b.processedSet == nil {
-		b.processedSet = make(map[string]struct{}, len(b.state.ProcessedMessageIDs))
-		for _, id := range b.state.ProcessedMessageIDs {
-			b.processedSet[id] = struct{}{}
+		b.processedSet = make(map[string]struct{}, len(b.state.ProcessedMessageIDs)+16)
+		for _, x := range b.state.ProcessedMessageIDs {
+			b.processedSet[x] = struct{}{}
 		}
 	}
-	b.mu.Unlock()
+	return b.processedSet
+}
 
-	since := b.state.GmailBaselineUnix
-	if since == 0 {
-		since = time.Now().Unix()
+func (b *Bridge) processed(id string) bool {
+	_, ok := b.processedSetLocked()[id]
+	return ok
+}
+
+func (b *Bridge) markProcessed(id string) {
+	set := b.processedSetLocked()
+	if _, dup := set[id]; !dup {
+		b.state.ProcessedMessageIDs = append(b.state.ProcessedMessageIDs, id)
+		set[id] = struct{}{}
 	}
-	msgs, err := b.gmail.SearchUnreadVoice(ctx, since)
+	if len(b.state.ProcessedMessageIDs) > 2000 {
+		dropped := b.state.ProcessedMessageIDs[:len(b.state.ProcessedMessageIDs)-2000]
+		b.state.ProcessedMessageIDs = b.state.ProcessedMessageIDs[len(b.state.ProcessedMessageIDs)-2000:]
+		for _, x := range dropped {
+			delete(set, x)
+		}
+	}
+	b.state.LastMessageID = id
+}
+func (b *Bridge) poll(ctx context.Context) {
 	b.mu.Lock()
-	b.lastPollAt = time.Now()
-	if err != nil {
-		b.lastPollErr = err.Error()
-	} else {
-		b.lastPollErr = ""
-	}
-	b.mu.Unlock()
-	if err != nil {
-		log.Printf("Gmail search: %v", err)
-		b.event("error", "gmail", "Gmail search failed: "+truncate(err.Error(), 220), "", "", "")
+	if b.paused {
+		b.mu.Unlock()
 		return
 	}
-	for _, m := range msgs {
-		id := m.ID
+	b.mu.Unlock()
+	ids, err := b.gmail.List(ctx)
+	b.mu.Lock()
+	b.lastPollAt = time.Now()
+	b.lastPollErr = ""
+	if err != nil {
+		b.lastPollErr = truncate(err.Error(), 240)
+	}
+	b.mu.Unlock()
+	if err != nil {
+		log.Printf("Gmail poll: %v", err)
+		b.event("error", "gmail", "Mailbox check failed: "+truncate(err.Error(), 240), "", "", "")
+		return
+	}
+	for idx := len(ids) - 1; idx >= 0; idx-- {
+		id := ids[idx]
 		b.mu.Lock()
-		_, seen := b.processedSet[id]
+		done := b.processed(id)
+		baseline := b.state.GmailBaselineUnix
 		b.mu.Unlock()
-		if seen {
+		if done {
+			continue
+		}
+		m, err := b.gmail.Get(ctx, id)
+		if err != nil {
+			log.Printf("Gmail get %s: %v", id, err)
+			b.event("error", "gmail", "Could not read matching Gmail message: "+truncate(err.Error(), 220), "", "", id)
+			continue
+		}
+		if !m.InternalDate.IsZero() && m.InternalDate.Unix() < baseline {
+			b.mu.Lock()
+			b.markProcessed(id)
+			s := b.state
+			b.mu.Unlock()
+			_ = saveState(b.statePath, s)
 			continue
 		}
 		b.event("info", "gmail", "New Google Voice candidate detected in Gmail", "", "", id)
 		raw, sender, ok, reason := parseGoogleVoiceBodyDetailed(m, b.cfg.GoogleVoice.AllowedFrom, b.cfg.GoogleVoice.RequiredSubjectPhrase)
+		b.mu.Lock()
+		b.markProcessed(id)
+		s := b.state
+		b.mu.Unlock()
+		_ = saveState(b.statePath, s)
 		if !ok {
-			b.event("warn", "security", "Google Voice candidate ignored: "+reason, sender, "", id)
+			b.event("warn", "security", "Message ignored: "+reason, sender, "", id)
 			continue
 		}
 		b.event("success", "security", "Google Voice sender verified and allowed", sender, "", id)
@@ -617,14 +658,7 @@ func (b *Bridge) poll(ctx context.Context) {
 		}
 		rc.Sender = sender
 		if !rc.Status && rc.Agent != "" {
-			routeID := explicitSMSRoute(raw, b.cfg)
-			if routeID == "" {
-				routeID = decodeStickySMSRoute(sticky)
-			}
-			if routeID == "" {
-				routeID = defaultSMSRouteForAgent(rc.Agent)
-			}
-			if err := b.rememberStickySMSRoute(sender, routeID); err != nil {
+			if err := b.rememberStickySMSRoute(sender, rc); err != nil {
 				b.event("warn", "routing", "Could not persist the selected SMS route: "+truncate(err.Error(), 180), sender, rc.Agent, id)
 			}
 		}
@@ -674,11 +708,19 @@ func (b *Bridge) statusLine() string {
 // falls back to the shared line.
 func (b *Bridge) composePrompt(agent, command string) string {
 	hint := strings.TrimSpace(b.cfg.replyStyleHintFor(agent))
-	command = strings.TrimSpace(command)
 	if hint == "" {
-		return command
+		hint = defaultReplyStyleHint
 	}
-	return command + "\n\n" + hint
+	return "<sms_command>\n" + strings.TrimSpace(command) + "\n</sms_command>\n\n" + hint
+}
+
+func googleVoiceReplyTarget(m GmailMessage) string {
+	for _, candidate := range []string{m.ReplyTo, m.From} {
+		if addr, err := safeGoogleVoiceReplyAddress(candidate); err == nil {
+			return addr
+		}
+	}
+	return ""
 }
 
 func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteCommand) {
@@ -849,9 +891,6 @@ func (b *Bridge) newCodexThread(ctx context.Context) error {
 	if cwd := b.cfg.codexWorkingDir(); cwd != "" {
 		p["cwd"] = cwd
 	}
-	if err := b.ensureCodex(ctx); err != nil {
-		return err
-	}
 	raw, err := b.codex.Request(ctx, "thread/start", p)
 	if err != nil {
 		return err
@@ -871,291 +910,327 @@ func (b *Bridge) newCodexThread(ctx context.Context) error {
 	return saveState(b.statePath, s)
 }
 
+// Busy reports whether an agent turn is running. The automatic updater asks
+// before restarting FlipAi, because a restart mid-turn loses the turn.
+func (b *Bridge) Busy() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.busy
+}
+
+// claudeSessionLost is prefixed to the reply when the stored conversation had
+// to be abandoned, so a silently emptied context is never mistaken for the
+// agent forgetting what it was told.
 const claudeSessionLost = "Previous Claude conversation was unavailable, so a new one was started. "
 
-func parseClaudeEvent(line string) (string, string) {
-	var e struct {
-		Type    string `json:"type"`
-		Subtype string `json:"subtype"`
-		Result  string `json:"result"`
-		Message struct {
-			Content []struct {
-				Type  string `json:"type"`
-				Text  string `json:"text"`
-				Name  string `json:"name"`
-				Input any    `json:"input"`
-			} `json:"content"`
-		} `json:"message"`
+// SetAgentResultSink installs the health-check recorder. It is separate from
+// the constructor because the recorder belongs to the App, which owns
+// state.json, while the turn that produces the result happens here.
+func (b *Bridge) SetAgentResultSink(fn func(agent string, ok bool, detail string)) {
+	if b == nil {
+		return
 	}
-	if json.Unmarshal([]byte(line), &e) != nil {
-		return "", ""
+	b.mu.Lock()
+	b.onAgentResult = fn
+	b.mu.Unlock()
+}
+
+// recordAgentResult reports a finished turn as that agent's live health.
+func (b *Bridge) recordAgentResult(agent string, ok bool, detail string) {
+	b.mu.Lock()
+	fn := b.onAgentResult
+	b.mu.Unlock()
+	if fn == nil {
+		return
 	}
-	if e.Type == "result" && e.Result != "" {
-		return "final", e.Result
+	switch agent {
+	case "A":
+		fn("claude", ok, detail)
+	case "C":
+		fn("codex", ok, detail)
 	}
-	if e.Type == "assistant" {
-		for _, c := range e.Message.Content {
-			if c.Type == "text" && c.Text != "" {
-				return "final", c.Text
-			}
-			if c.Type == "tool_use" && c.Name != "" {
-				return "progress", "Using " + c.Name
-			}
+}
+
+// SetLiveClaude attaches (or detaches, with nil) the supervised live session.
+// Switching modes in Settings restarts the host, so this is set once at
+// construction rather than swapped under a running turn.
+func (b *Bridge) SetLiveClaude(c *ClaudeLiveClient) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.live = c
+	b.mu.Unlock()
+}
+
+func (b *Bridge) liveClaude() *ClaudeLiveClient {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.live
+}
+
+// rememberClaudeLiveSession persists the live session id so the Agents page can
+// show which session the browser view is looking at.
+func (b *Bridge) rememberClaudeLiveSession(id string) {
+	b.mu.Lock()
+	if b.state.ClaudeLiveSessionID == id {
+		b.mu.Unlock()
+		return
+	}
+	b.state.ClaudeLiveSessionID = id
+	s := b.state
+	b.mu.Unlock()
+	_ = saveState(b.statePath, s)
+}
+
+// runClaudeLive tries the live session and reports whether the caller should
+// fall back. A fallback is never silent: the reason reaches the Activity log,
+// because a user who chose live mode needs to know the text they just sent did
+// not land in the session they are watching in the browser.
+func (b *Bridge) runClaudeLive(ctx context.Context, prompt, sender, name string) (string, bool) {
+	live := b.liveClaude()
+	if live == nil {
+		return "", false
+	}
+	res, err := live.Run(ctx, name, sender, prompt)
+	if err == nil {
+		if id := live.SessionID(); id != "" {
+			b.rememberClaudeLiveSession(id)
 		}
+		b.event("success", "agent", "Claude answered in the live session", sender, "A", "")
+		return res, true
 	}
-	return "", ""
+	if !isClaudeLiveUnavailable(err) {
+		// A real Claude failure. Returning it as a fallback would run the same
+		// failing work twice and bill the user for both.
+		b.event("error", "agent", "Live Claude turn failed: "+truncate(err.Error(), 200), sender, "A", "")
+		return "", false
+	}
+	b.event("warn", "agent", "Live Claude session unavailable, using per-message mode: "+truncate(err.Error(), 200), sender, "A", "")
+	return "", false
 }
 
 func (b *Bridge) runClaude(ctx context.Context, command, sender string) (string, error) {
 	return b.runClaudeWithAttachments(ctx, command, sender, nil)
 }
 
-func claudeSessionArgs(cfg Config, prompt string, resume bool, sessionID string) []string {
-	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
-	mode := strings.TrimSpace(cfg.Claude.PermissionMode)
-	if mode == "" {
-		mode = claudeFullAccess
+func (b *Bridge) runClaudeWithAttachments(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
+	if b.claude == nil {
+		return "", errors.New("Claude Code unavailable")
 	}
-	args = append(args, "--permission-mode", mode)
-	if cfg.Claude.UseChrome {
-		args = append(args, "--chrome")
+	prompt := promptForInboundAttachments(b.composePrompt("A", command), attachments)
+	sid, name := b.claudeSession()
+
+	// Live mode first when it is configured. Anything that stops it short of a
+	// genuine Claude error falls through to the per-message path below, so the
+	// text still gets an answer.
+	if live := b.liveClaude(); live != nil {
+		if res, ok := b.runClaudeLive(ctx, prompt, sender, name); ok {
+			return res, nil
+		}
 	}
-	if resume && sessionID != "" {
-		args = append(args, "--resume", sessionID)
+
+	res, nsid, err := b.claude.Run(ctx, sid, name, prompt)
+
+	// The stored conversation is gone — transcript deleted, corrupted, or aged
+	// out by Claude Code's 30-day transcript cleanup. Without this the saved id
+	// stays poisoned and every later Claude text fails the same way forever.
+	// This mirrors what runCodex already does for a missing Codex rollout.
+	recovered := false
+	if err != nil && sid != "" && claudeSessionIsGone(err) {
+		b.event("warn", "agent", "Stored Claude conversation is gone; starting a new one", sender, "A", "")
+		name = b.resetPrintClaudeSession()
+		recovered = true
+		res, nsid, err = b.claude.Run(ctx, "", name, prompt)
 	}
-	args = append(args, prompt)
-	return args
+	if err != nil {
+		return "", err
+	}
+	if nsid != "" && nsid != sid {
+		b.rememberClaudeSession(nsid, name)
+	}
+	if recovered {
+		return claudeSessionLost + res, nil
+	}
+	return res, nil
 }
 
-func newClaudeSessionName(now time.Time) string {
-	return "Phone " + now.Local().Format("Jan 2 3:04 PM")
-}
-
-func (b *Bridge) prepareClaudeConversation(forceNew bool) (resume bool, sessionID, sessionName string) {
+// claudeSession reads the active conversation, minting a name for a
+// conversation that does not have one yet — either because none has been
+// started or because it predates named sessions.
+func (b *Bridge) claudeSession() (id, name string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if forceNew {
-		b.state.ClaudeSessionID = ""
-		b.state.ClaudeSessionName = newClaudeSessionName(time.Now())
-	}
-	if b.state.ClaudeSessionID != "" {
-		return true, b.state.ClaudeSessionID, b.state.ClaudeSessionName
-	}
-	if b.state.ClaudeSessionName == "" {
-		b.state.ClaudeSessionName = newClaudeSessionName(time.Now())
-	}
-	return false, "", b.state.ClaudeSessionName
-}
-
-func (b *Bridge) updateClaudeSession(id, name string) {
-	id = strings.TrimSpace(id)
-	name = strings.TrimSpace(name)
-	if id == "" {
-		return
-	}
-	b.mu.Lock()
-	b.state.ClaudeSessionID = id
-	if name != "" {
-		b.state.ClaudeSessionName = name
-	}
-	s := b.state
+	id, name = b.state.ClaudeSessionID, b.state.ClaudeSessionName
 	b.mu.Unlock()
-	_ = saveState(b.statePath, s)
+	if strings.TrimSpace(name) == "" {
+		name = newClaudeSessionName(time.Now())
+	}
+	return id, name
 }
 
-func (b *Bridge) startNewClaudeSession() string {
+// resetPrintClaudeSession clears the per-message conversation only, for the case
+// where its transcript vanished. It deliberately leaves a live session running:
+// the two conversations are independent, and a missing per-message transcript
+// says nothing about the session the user may be watching in the browser.
+func (b *Bridge) resetPrintClaudeSession() string {
 	name := newClaudeSessionName(time.Now())
 	b.mu.Lock()
-	live := b.live
 	b.state.ClaudeSessionID = ""
 	b.state.ClaudeSessionName = name
 	s := b.state
 	b.mu.Unlock()
-	if live != nil {
-		live.Stop()
-	}
 	_ = saveState(b.statePath, s)
 	return name
 }
 
-// runClaudeWithAttachments prefers the supervised live conversation when the
-// user enabled it, but falls back to the original per-message CLI if live mode
-// cannot run on this machine. The fallback is deliberate: an SMS command should
-// still work rather than fail just because Remote Control is unavailable.
-func (b *Bridge) runClaudeWithAttachments(ctx context.Context, command, sender string, inbound []InboundAttachment) (string, error) {
-	prompt := b.composePrompt("A", command)
-	if b.claudeLiveEnabled() {
-		if live, err := b.ensureClaudeLive(ctx); err == nil {
-			return live.Turn(ctx, prompt, inbound)
-		} else {
-			b.event("warn", "agent", "Claude live mode unavailable; falling back to per-message mode: "+truncate(err.Error(), 220), sender, "A", "")
-		}
-	}
-	resume, sessionID, name := b.prepareClaudeConversation(false)
-	final, err := b.runClaudeProcess(ctx, claudeSessionArgs(b.cfg, prompt, resume, sessionID), sender, inbound)
-	if err == nil {
-		return final, nil
-	}
-	if resume && isClaudeSessionError(err) {
-		b.event("warn", "agent", "Stored Claude conversation is gone; starting a new one", sender, "A", "")
-		b.startNewClaudeSession()
-		final, retryErr := b.runClaudeProcess(ctx, claudeSessionArgs(b.cfg, prompt, false, ""), sender, inbound)
-		if retryErr == nil {
-			return claudeSessionLost + final, nil
-		}
-		return "", retryErr
-	}
-	return "", err
-}
-
-func (b *Bridge) runClaudeProcess(ctx context.Context, args []string, sender string, inbound []InboundAttachment) (string, error) {
-	if err := b.ensureClaude(ctx); err != nil {
-		return "", err
-	}
-	work := b.cfg.claudeWorkingDir()
-	args = claudeArgsWithInboundAttachments(args, inbound, work)
-	proc, err := b.claude.Start(ctx, args...)
-	if err != nil {
-		return "", err
-	}
-	defer proc.Wait()
-	var final string
-	for {
-		line, err := proc.Next(ctx)
-		if err != nil {
-			if errors.Is(err, ioEOF) {
-				if final == "" {
-					return "", errors.New("Claude Code returned no reply")
-				}
-				return final, nil
-			}
-			return "", err
-		}
-		kind, text := parseClaudeEvent(line)
-		switch kind {
-		case "progress":
-			b.setProgress(text)
-		case "final":
-			final = text
-			b.captureClaudeSession(line, "")
-		}
-	}
-}
-
-func isClaudeSessionError(err error) bool {
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "no conversation found") || strings.Contains(s, "session") && strings.Contains(s, "not found")
-}
-
-func (b *Bridge) captureClaudeSession(line, fallback string) {
-	var e struct {
-		SessionID string `json:"session_id"`
-	}
-	if json.Unmarshal([]byte(line), &e) == nil && e.SessionID != "" {
-		b.mu.Lock()
-		name := b.state.ClaudeSessionName
-		b.mu.Unlock()
-		b.updateClaudeSession(e.SessionID, name)
-		return
-	}
-	if fallback == "" {
-		return
-	}
+// startNewClaudeSession clears the stored conversation and returns the name the
+// next turn should create. Clearing is persisted immediately so a crash between
+// here and the next turn cannot leave the dead id behind.
+func (b *Bridge) startNewClaudeSession() string {
+	name := newClaudeSessionName(time.Now())
 	b.mu.Lock()
-	if b.state.ClaudeSessionID == "" {
-		b.state.ClaudeSessionID = fallback
-		s := b.state
-		b.mu.Unlock()
-		_ = saveState(b.statePath, s)
-		return
-	}
+	b.state.ClaudeSessionID = ""
+	b.state.ClaudeLiveSessionID = ""
+	b.state.ClaudeSessionName = name
+	s := b.state
+	live := b.live
 	b.mu.Unlock()
+	_ = saveState(b.statePath, s)
+	// In live mode the conversation is a running process, so a new conversation
+	// means ending that process. Without this the next text would be delivered
+	// into the old session and the "new conversation" would be a fiction.
+	if live != nil {
+		live.Stop()
+	}
+	return name
 }
 
-func (b *Bridge) newCodexThreadWithSender(ctx context.Context, sender string) error {
-	_ = sender
-	return b.newCodexThread(ctx)
+// rememberClaudeSession persists the conversation every later text resumes.
+func (b *Bridge) rememberClaudeSession(id, name string) {
+	b.mu.Lock()
+	b.state.ClaudeSessionID = id
+	b.state.ClaudeSessionName = name
+	s := b.state
+	b.mu.Unlock()
+	_ = saveState(b.statePath, s)
+}
+
+// codexThreadIsGone reports whether a turn failed because the stored thread's
+// on-disk rollout no longer exists, rather than for a transient reason. Codex
+// answers "no rollout found for thread id …" with JSON-RPC code -32600.
+func codexThreadIsGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if !strings.Contains(s, "resume codex thread") && !strings.Contains(s, "thread") {
+		return false
+	}
+	return strings.Contains(s, "no rollout found") ||
+		strings.Contains(s, "thread not found") ||
+		strings.Contains(s, "-32600")
 }
 
 func (b *Bridge) runCodex(ctx context.Context, command, sender string) (string, error) {
 	return b.runCodexWithAttachments(ctx, command, sender, nil)
 }
 
-func (b *Bridge) runCodexWithAttachments(ctx context.Context, command, sender string, inbound []InboundAttachment) (string, error) {
-	if err := b.initCodexThread(ctx); err != nil {
+func (b *Bridge) runCodexWithAttachments(ctx context.Context, command, sender string, attachments []InboundAttachment) (string, error) {
+	// Set when a dead conversation forced a fresh one, so the reply can say so
+	// instead of silently losing the previous context.
+	recovered := false
+	if err := b.ensureCodex(ctx); err != nil {
 		return "", err
 	}
-	prompt := b.composePrompt("C", command)
-	input := codexTurnInput(prompt, inbound)
-	b.mu.Lock()
-	thread := b.state.CodexThreadID
-	b.mu.Unlock()
-	params := map[string]any{
-		"threadId": thread,
-		"input":    input,
+	acctCtx, acctCancel := context.WithTimeout(ctx, 10*time.Second)
+	rawAcct, acctErr := b.codex.Account(acctCtx)
+	acctCancel()
+	if acctErr != nil || !codexAccountIsChatGPT(rawAcct) {
+		return "", errors.New("Codex is not authenticated with Sign in with ChatGPT")
 	}
-	var final string
-	restarted := false
-	for {
-		raw, err := b.codex.Request(ctx, "turn/start", params)
-		if err != nil {
-			if !restarted && codexThreadMissing(err) {
-				b.event("warn", "agent", "Stored Codex conversation is gone; starting a new one", sender, "C", "")
-				if nerr := b.newCodexThread(ctx); nerr != nil {
-					return "", nerr
-				}
-				b.mu.Lock()
-				params["threadId"] = b.state.CodexThreadID
-				b.mu.Unlock()
-				restarted = true
-				continue
-			}
+	b.mu.Lock()
+	tid := b.state.CodexThreadID
+	b.mu.Unlock()
+	if tid == "" {
+		if err := b.initCodexThread(ctx); err != nil {
 			return "", err
 		}
-		var started struct {
-			Turn struct {
-				ID string `json:"id"`
-			} `json:"turn"`
+		b.mu.Lock()
+		tid = b.state.CodexThreadID
+		b.mu.Unlock()
+	}
+	prompt := promptForInboundAttachments(b.composePrompt("C", command), attachments)
+	params := map[string]any{"threadId": tid, "input": codexInputForInbound(prompt, attachments)}
+	if b.cfg.Codex.ApprovalPolicy != "" {
+		params["approvalPolicy"] = b.cfg.Codex.ApprovalPolicy
+	}
+	raw, err := b.codex.Request(ctx, "turn/start", params)
+	if err != nil && codexThreadIsGone(err) {
+		// The stored conversation's rollout is gone — Codex reinstalled, history
+		// cleared, or a different CODEX_HOME. Without this, the saved thread id
+		// stays poisoned and every future text fails the same way forever.
+		b.event("warn", "agent", "Stored Codex conversation is gone; starting a new one", sender, "C", "")
+		b.mu.Lock()
+		b.state.CodexThreadID = ""
+		s := b.state
+		b.mu.Unlock()
+		_ = saveState(b.statePath, s)
+		if nerr := b.newCodexThread(ctx); nerr != nil {
+			return "", nerr
 		}
-		if json.Unmarshal(raw, &started) != nil || started.Turn.ID == "" {
-			return "", errors.New("turn/start returned no turn id")
-		}
-		turnID := started.Turn.ID
-		for {
-			n, err := b.codex.Next(ctx)
-			if err != nil {
-				return final, errors.New("Codex App Server stopped; it will be restarted on the next SMS")
-			}
-			if n.Method == "item/started" || n.Method == "item/completed" {
+		b.mu.Lock()
+		params["threadId"] = b.state.CodexThreadID
+		b.mu.Unlock()
+		recovered = true
+		raw, err = b.codex.Request(ctx, "turn/start", params)
+	}
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.Turn.ID == "" {
+		return "", errors.New("turn/start returned no turn id")
+	}
+	turnID := r.Turn.ID
+	final := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return final, ctx.Err()
+		case <-b.codex.done:
+			b.mu.Lock()
+			b.codex = nil
+			b.mu.Unlock()
+			return final, errors.New("Codex App Server stopped; it will be restarted on the next SMS")
+		case n := <-b.codex.notifications:
+			switch n.Method {
+			case "item/completed":
 				var p struct {
-					ThreadID string `json:"threadId"`
-					TurnID   string `json:"turnId"`
-					Item     struct {
+					TurnID string `json:"turnId"`
+					Item   struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
 					} `json:"item"`
 				}
-				_ = json.Unmarshal(n.Params, &p)
-				if p.ThreadID != params["threadId"] || p.TurnID != turnID {
-					continue
-				}
-				if n.Method == "item/started" {
-					if p.Item.Type == "reasoning" && p.Item.Text != "" {
-						// A reasoning item is model-authored progress and is safe to show in the
+				if json.Unmarshal(n.Params, &p) == nil && (p.TurnID == "" || p.TurnID == turnID) && p.Item.Text != "" {
+					if p.Item.Type == "agentMessage" {
+						final = p.Item.Text
+					} else {
+						// Any other completed item is a step worth naming in a
 						// progress heartbeat.
 						b.setProgress(p.Item.Text)
 					}
-					continue
 				}
-				if p.Item.Type == "agent_message" && p.Item.Text != "" {
-					final = p.Item.Text
-				}
-				continue
-			}
-			if n.Method == "turn/completed" {
+			case "turn/completed":
 				var p struct {
-					ThreadID string `json:"threadId"`
-					Turn     struct {
+					Turn struct {
 						ID     string `json:"id"`
 						Status string `json:"status"`
 						Error  *struct {
@@ -1163,77 +1238,63 @@ func (b *Bridge) runCodexWithAttachments(ctx context.Context, command, sender st
 						} `json:"error"`
 					} `json:"turn"`
 				}
-				_ = json.Unmarshal(n.Params, &p)
-				if p.ThreadID != params["threadId"] || p.Turn.ID != turnID {
-					continue
-				}
-				if p.Turn.Status == "failed" || p.Turn.Error != nil {
-					if !restarted && p.Turn.Error != nil && codexThreadMissing(errors.New(p.Turn.Error.Message)) {
-						b.event("warn", "agent", "Stored Codex conversation is gone; starting a new one", sender, "C", "")
-						if nerr := b.newCodexThread(ctx); nerr != nil {
-							return "", nerr
-						}
-						b.mu.Lock()
-						params["threadId"] = b.state.CodexThreadID
-						b.mu.Unlock()
-						restarted = true
-						break
-					}
+				if json.Unmarshal(n.Params, &p) == nil && p.Turn.ID == turnID {
 					if p.Turn.Error != nil && p.Turn.Error.Message != "" {
 						return final, errors.New(p.Turn.Error.Message)
 					}
-					return final, errors.New("Codex turn failed")
+					if recovered {
+						final = "(previous Codex conversation was gone — started a new one)\n" + final
+					}
+					return final, nil
 				}
-				if restarted && final != "" {
-					final = "(previous Codex conversation was gone — started a new one)\n" + final
-				}
-				if final == "" {
-					final = "Codex completed the turn."
-				}
-				return final, nil
 			}
 		}
 	}
 }
 
-func codexThreadMissing(err error) bool {
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "thread") && (strings.Contains(s, "not found") || strings.Contains(s, "unknown") || strings.Contains(s, "no such"))
-}
-
-func agentDisplayNameFromMarker(agent string) string { return agentDisplayName(agent) }
-
-func splitReply(text string, max, maxParts int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+// splitReply breaks a long answer into numbered SMS parts instead of cutting it
+// off. Truncating at ReplyMaxChars silently lost the end of any desktop-length
+// answer, which defeats the point of getting the same result by text.
+func splitReply(s string, max, maxParts int) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
 		return nil
 	}
-	if max < 20 {
+	if max <= 0 {
 		max = 300
 	}
 	if maxParts < 1 {
 		maxParts = 1
 	}
-	r := []rune(text)
+	r := []rune(s)
+	if len(r) <= max {
+		return []string{s}
+	}
+	if maxParts == 1 {
+		return []string{truncate(s, max)}
+	}
+	// Leave room for the "12/12 " prefix each part carries.
+	body := max - 7
+	if body < 20 {
+		body = max
+	}
 	var chunks []string
 	for len(r) > 0 && len(chunks) < maxParts {
-		if len(r) <= max {
-			chunks = append(chunks, string(r))
+		if len(r) <= body {
+			chunks = append(chunks, strings.TrimSpace(string(r)))
 			r = nil
 			break
 		}
-		cut := max
-		for i := max; i > max/2; i-- {
-			if unicode.IsSpace(r[i-1]) {
-				cut = i - 1
+		cut := body
+		// Prefer breaking on whitespace so words survive the split.
+		for i := body; i > body/2; i-- {
+			if unicode.IsSpace(r[i]) {
+				cut = i
 				break
 			}
 		}
 		chunks = append(chunks, strings.TrimSpace(string(r[:cut])))
-		r = r[cut:]
-		for len(r) > 0 && unicode.IsSpace(r[0]) {
-			r = r[1:]
-		}
+		r = []rune(strings.TrimLeft(string(r[cut:]), " \t\r\n"))
 	}
 	if len(r) > 0 && len(chunks) > 0 {
 		chunks[len(chunks)-1] += " …"
