@@ -16,6 +16,7 @@ const (
 	smsRouteClaudeCodeLocal = "AL"
 	smsRouteGemini          = "G"
 	smsRouteCopilot         = "M"
+	smsRouteMuse            = "MU"
 	smsRouteGrok            = "X"
 
 	browserModeChat   = "chat"
@@ -36,15 +37,13 @@ type smsRouteSpec struct {
 }
 
 func smsRouteSpecs(_ Config) []smsRouteSpec {
-	// Public shortcuts are intentionally fixed and provider-grouped. Longer
-	// prefixes come first so OW:/OC:/AC:/AW:/AL: can never be swallowed by O:
-	// or A:. Configured legacy prefixes are accepted separately as aliases.
 	return []smsRouteSpec{
 		{ID: smsRouteChatGPTWork, Agent: "G", Mode: browserModeWork, Prefix: "OW", Display: "ChatGPT Work"},
 		{ID: smsRouteCodex, Agent: "C", Prefix: "OC", Display: "Codex"},
 		{ID: smsRouteClaudeCodeWeb, Agent: "H", Mode: browserModeCode, Prefix: "AC", Display: "Claude Code Web"},
 		{ID: smsRouteClaudeCowork, Agent: "H", Mode: browserModeCowork, Prefix: "AW", Display: "Claude Cowork"},
 		{ID: smsRouteClaudeCodeLocal, Agent: "A", Prefix: "AL", Display: "Claude Code Local"},
+		{ID: smsRouteMuse, Agent: "U", Prefix: "MU", Display: "Muse"},
 		{ID: smsRouteChatGPTChat, Agent: "G", Mode: browserModeChat, Prefix: "O", Display: "ChatGPT Chat"},
 		{ID: smsRouteClaudeChat, Agent: "H", Mode: browserModeChat, Prefix: "A", Display: "Claude Chat"},
 		{ID: smsRouteGemini, Agent: "M", Prefix: "G", Display: "Gemini Chat"},
@@ -54,10 +53,6 @@ func smsRouteSpecs(_ Config) []smsRouteSpec {
 }
 
 func configuredSMSRouteAliases(cfg Config) []smsRouteSpec {
-	// Existing installs may have customized the old single-agent prefixes. Keep
-	// those aliases readable, but never let them override a valid new public
-	// shortcut. They are only a fallback when the new destination is not allowed
-	// for the sender.
 	return []smsRouteSpec{
 		{ID: smsRouteCodex, Agent: "C", Prefix: configuredCodexPrefix(cfg)},
 		{ID: smsRouteClaudeCodeLocal, Agent: "A", Prefix: configuredClaudePrefix(cfg)},
@@ -66,6 +61,7 @@ func configuredSMSRouteAliases(cfg Config) []smsRouteSpec {
 		{ID: smsRouteGemini, Agent: "M", Prefix: configuredGeminiChatPrefix(cfg)},
 		{ID: smsRouteGrok, Agent: "X", Prefix: configuredGrokChatPrefix(cfg)},
 		{ID: smsRouteCopilot, Agent: "P", Prefix: configuredCopilotChatPrefix(cfg)},
+		{ID: smsRouteMuse, Agent: "U", Prefix: configuredMuseChatPrefix(cfg)},
 	}
 }
 
@@ -93,6 +89,8 @@ func defaultSMSRouteForAgent(agent string) string {
 		return smsRouteGemini
 	case "P":
 		return smsRouteCopilot
+	case "U":
+		return smsRouteMuse
 	case "X":
 		return smsRouteGrok
 	default:
@@ -119,9 +117,6 @@ func smsCommandCandidates(raw string) []string {
 	return candidates
 }
 
-// stripSMSRouteCommand recognizes both the normal public form (OW: task) and
-// the fresh-session form (OW NEW: task or OW NEW). The word is configurable
-// and comparisons are case-insensitive, so "OW new:" works with the default.
 func stripSMSRouteCommand(candidate, prefix, newWord string) (tail string, fresh bool, ok bool) {
 	candidate = strings.TrimSpace(candidate)
 	prefix = strings.TrimSpace(prefix)
@@ -165,7 +160,7 @@ func explicitSMSRoute(raw string, cfg Config) string {
 			if routeMatchesCommand(candidate, route, newWord) {
 				return route.ID
 			}
-		}
+	}
 	}
 	return ""
 }
@@ -194,8 +189,6 @@ func smsRouteAllowed(sourceAgent string, route smsRouteSpec) bool {
 }
 
 func legacyStickySMSRoute(sticky string) string {
-	// LastAgentBySender historically stored internal engine IDs. Keep reading
-	// those values so upgrades do not point an old ChatGPT sticky G at Gemini.
 	switch strings.ToUpper(strings.TrimSpace(sticky)) {
 	case "C":
 		return smsRouteCodex
@@ -209,6 +202,8 @@ func legacyStickySMSRoute(sticky string) string {
 		return smsRouteGemini
 	case "P":
 		return smsRouteCopilot
+	case "U":
+		return smsRouteMuse
 	case "X":
 		return smsRouteGrok
 	default:
@@ -233,11 +228,6 @@ func selectStickySMSRoute(raw string, cfg Config, sourceAgent, sticky string) (s
 		if smsRouteAllowed(sourceAgent, route) {
 			return route, nil
 		}
-		// A new public shortcut can collide with an old configured prefix (for
-		// example A used to mean local Claude and now means Claude Chat). If the
-		// sender is not authorized for the new destination, preserve the old
-		// configured route as a migration fallback rather than silently widening
-		// permissions. Once the new destination is allowed, the new meaning wins.
 		if legacy, ok := explicitAllowedConfiguredAlias(raw, cfg, sourceAgent); ok {
 			return legacy, nil
 		}
@@ -254,7 +244,7 @@ func selectStickySMSRoute(raw string, cfg Config, sourceAgent, sticky string) (s
 			return route, nil
 		}
 	}
-	return smsRouteSpec{}, errors.New("no SMS agent is selected for this phone yet; use O: ChatGPT, OW: ChatGPT Work, OC: Codex, A: Claude Chat, AC: Claude Code Web, AW: Claude Cowork, AL: Claude Code Local, G: Gemini, M: Copilot, or X: Grok")
+	return smsRouteSpec{}, errors.New("no SMS agent is selected for this phone yet; use O: ChatGPT, OW: ChatGPT Work, OC: Codex, A: Claude Chat, AC: Claude Code Web, AW: Claude Cowork, AL: Claude Code Local, G: Gemini, M: Copilot, MU: Muse, or X: Grok")
 }
 
 func underlyingPrefixForRoute(cfg Config, route smsRouteSpec) string {
@@ -271,6 +261,8 @@ func underlyingPrefixForRoute(cfg Config, route smsRouteSpec) string {
 		return configuredGeminiChatPrefix(cfg)
 	case "P":
 		return configuredCopilotChatPrefix(cfg)
+	case "U":
+		return configuredMuseChatPrefix(cfg)
 	case "X":
 		return configuredGrokChatPrefix(cfg)
 	default:
@@ -278,11 +270,6 @@ func underlyingPrefixForRoute(cfg Config, route smsRouteSpec) string {
 	}
 }
 
-// rewriteSMSRouteCommand converts the selected public/legacy route into the
-// existing internal parser prefix and reports whether NEW was requested. It
-// deliberately strips the inline NEW modifier from a task-bearing command; the
-// fresh flag travels separately on remoteCommand.New, so downstream parsers see
-// the same prompt they have always handled.
 func rewriteSMSRouteCommand(raw string, fromPrefixes []string, to, newWord string) (string, bool) {
 	to = strings.TrimSpace(to)
 	if to == "" {
@@ -325,8 +312,6 @@ func rewriteSMSRouteCommand(raw string, fromPrefixes []string, to, newWord strin
 	return raw, false
 }
 
-// rewriteSMSRoutePrefix keeps the old helper available to tests/callers that
-// only need prefix translation. Fresh-session parsing uses rewriteSMSRouteCommand.
 func rewriteSMSRoutePrefix(raw, from, to string) string {
 	out, _ := rewriteSMSRouteCommand(raw, []string{from}, to, defaultNewSessionCommand)
 	return out
