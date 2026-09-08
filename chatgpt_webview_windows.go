@@ -123,18 +123,21 @@ const chatGPTSelectModeJS = `(async(wanted)=>{
   return {ok:false,detail:'FlipAi could not verify ChatGPT '+(wanted==='work'?'Work':'Chat')+' mode. The task was not sent so it cannot accidentally run in the wrong experience.',href:location.href};
 })(%s)`
 
-// Prefer ChatGPT's own New chat control for explicit NEW requests. Clicking it
-// preserves the currently selected Chat/Work experience more reliably than a
-// blind top-level navigation. If the control is unavailable, Go falls back to
-// navigating to chatgpt.com and then re-verifies the requested experience.
+// Prefer ChatGPT's own New chat control for explicit NEW requests. The Work
+// shell can keep the sidebar collapsed/off-screen, so this intentionally searches
+// mounted controls even when CSS says they are not currently visible. Calling
+// HTMLElement.click() still goes through ChatGPT's own React handler.
 const chatGPTClickNewChatJS = `(()=>{
   const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
-  const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden';
-  const controls=Array.from(document.querySelectorAll('button,a,[role="button"],[role="link"],[aria-label],[title],[data-testid]')).filter(visible);
+  const controls=Array.from(document.querySelectorAll('button,a,[role="button"],[role="link"],[aria-label],[title],[data-testid],[href]'));
   const vals=n=>[n.innerText,n.textContent,n.getAttribute&&n.getAttribute('aria-label'),n.getAttribute&&n.getAttribute('title')].map(norm).filter(Boolean);
+  const testid=n=>norm(n.getAttribute&&n.getAttribute('data-testid'));
+  const href=n=>norm(n.getAttribute&&n.getAttribute('href'));
   let target=controls.find(n=>vals(n).some(v=>v==='new chat'||v==='new conversation'))||null;
+  if(!target)target=controls.find(n=>/(^|[-_])(new|create)([-_].*)?chat($|[-_])/.test(testid(n)))||null;
+  if(!target)target=controls.find(n=>href(n)==='/'&&(n.closest&&n.closest('nav,aside')||testid(n).includes('chat')))||null;
   if(!target){
-    const leaf=Array.from(document.querySelectorAll('span,div,p')).find(n=>visible(n)&&(norm(n.textContent)==='new chat'||norm(n.textContent)==='new conversation'))||null;
+    const leaf=Array.from(document.querySelectorAll('span,div,p')).find(n=>norm(n.textContent)==='new chat'||norm(n.textContent)==='new conversation')||null;
     if(leaf)target=leaf.closest&&leaf.closest('button,a,[role="button"],[role="link"]')||leaf;
   }
   if(!target)return false;
@@ -514,11 +517,23 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		}
 		if !clicked {
 			if mode == browserModeWork {
-				return chatGPTTurnResult{OK: false, Detail: "FlipAi could not find ChatGPT Work's New chat control. The task was not sent."}
-			}
-			var ignored bool
-			if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-				return chatGPTTurnResult{OK: false, Detail: err.Error()}
+				// Some Work builds do not mount a separate New chat button at all.
+				// In that UI the reliable "new Work" action is the same experience
+				// switch the user can do manually: leave Work for Chat, then enter
+				// Work again. OW: already proves those selectors on this account.
+				if chat := ensureMode(browserModeChat); !chat.OK {
+					return chatGPTTurnResult{OK: false, Detail: "FlipAi could not create a fresh ChatGPT Work session: no New chat control was mounted, and switching out of Work also failed. The task was not sent."}
+				}
+				time.Sleep(350 * time.Millisecond)
+				if work := ensureMode(browserModeWork); !work.OK {
+					return chatGPTTurnResult{OK: false, Detail: "FlipAi could not create a fresh ChatGPT Work session after switching back into Work. The task was not sent."}
+				}
+				clicked = true
+			} else {
+				var ignored bool
+				if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
+					return chatGPTTurnResult{OK: false, Detail: err.Error()}
+				}
 			}
 		}
 
