@@ -257,7 +257,13 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 		case w32.WMClose:
 			_, _, _ = w32.User32DestroyWindow.Call(hwnd)
 		case w32.WMDestroy:
-			w.Terminate()
+			// FlipAi reconnects its private browser agents using the same WebView2
+			// profile. Release the controller/environment before ending this UI
+			// thread so the next process cannot race a profile that is still locked.
+			if closer, ok := w.browser.(interface{ Close() }); ok {
+				closer.Close()
+			}
+			_, _, _ = w32.User32PostQuitMessage.Call(0)
 		case w32.WMGetMinMaxInfo:
 			lpmmi := (*w32.MinMaxInfo)(unsafe.Pointer(lp))
 			if w.maxsz.X > 0 && w.maxsz.Y > 0 {
@@ -407,6 +413,15 @@ func (w *webview) Run() {
 }
 
 func (w *webview) Terminate() {
+	// Terminate used to post WM_QUIT directly. That made Run return while the
+	// native window and WebView2 controller were still alive, so FlipAi could
+	// immediately start a new browser on the same profile and get a blank page.
+	// Close the window instead; WM_DESTROY releases WebView2 and then posts quit.
+	if w.hwnd != 0 {
+		if posted, _, _ := w32.User32PostMessageW.Call(w.hwnd, w32.WMClose, 0, 0); posted != 0 {
+			return
+		}
+	}
 	_, _, _ = w32.User32PostQuitMessage.Call(0)
 }
 
