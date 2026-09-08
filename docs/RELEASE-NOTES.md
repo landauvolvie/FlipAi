@@ -1,27 +1,19 @@
-# FlipAi v0.46.70
+# FlipAi v0.46.71
 
-This release adds Muse.ai as a first-class browser chat provider alongside ChatGPT, Claude, Gemini, Grok, and Microsoft Copilot.
+This patch fixes the Muse.ai Agents-page integration shipped in v0.46.70.
 
-## Muse.ai integration
+## Muse visibility fix
 
-- Added Muse to the Agents page with Connect, Test, Disconnect, live connection status, SMS shortcut settings, allowed phone numbers, and optional PIN protection.
-- Muse runs inside its own persistent WebView2 profile, isolated from every other FlipAi provider and from the user's normal browser profile.
-- FlipAi explicitly recognizes `auth.muse.ai` and other sign-in states, so Muse is shown as Connected only when its live chat composer is actually available.
-- A saved Muse session is restored in the background after FlipAi restarts.
+- Muse now appears in the final registered Agents page instead of being removed by a later live-connection UI registration pass.
+- The Agents shortcut legend now consistently includes `MU = Muse` in both server-rendered markup and the client-side header update.
+- Muse keeps its Connect, Test, Disconnect, live status, SMS shortcut, allowed phone numbers, PIN security, and progress settings in the visible Agents workbench.
+- The fix does not change the existing Muse browser runtime, persistent WebView2 profile, SMS routing, or `MU NEW:` conversation behavior introduced in v0.46.70.
 
-## SMS routing
+## Regression coverage
 
-- `MU: your message` routes a turn to Muse.
-- `MU NEW: your message` starts a fresh Muse conversation and sends the message there.
-- Unprefixed follow-up messages continue using Muse through FlipAi's existing sticky-routing behavior until another provider is selected.
-- Attachments and long-turn/progress handling use the same hardened browser-chat plumbing as the other supported web agents.
-
-## Reliability and isolation
-
-- Muse has its own connection runtime, browser worker, security settings, and conversation state.
-- Connect/Test/Disconnect and status endpoints are registered in the local authenticated FlipAi UI.
-- Regression coverage verifies Muse routing, NEW-conversation behavior, local action routes, isolated background WebView behavior, authentication detection, and central SMS dispatch.
-- Release validation keeps the executable version, installer version, and `VERSION` file synchronized at 0.46.70.
+- Added a regression test against the actual final registered Agents template, so CI fails if a later UI pass removes the Muse card or pane again.
+- Updated the unified Agents tests from seven to eight providers and added Muse coverage for shortcut, PIN, progress, shared SMS instruction, and prompt composition.
+- Release validation keeps the executable version, installer version, and `VERSION` file synchronized at 0.46.71.
 
 No Muse API key is required; FlipAi uses the user's signed-in Muse web session.
 
