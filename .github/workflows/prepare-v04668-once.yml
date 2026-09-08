@@ -39,6 +39,6 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add config.go installer/FlipAi.iss sms_fresh_turn.go sms_fresh_turn_test.go .github/workflows/prepare-v04668-once.yml
+          git add -A
           git commit -m 'Validate OW NEW O NEW plus OW flow for v0.46.68'
           git push origin HEAD:fix/ow-new-reuse-o-new-ow-v04668
