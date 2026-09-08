@@ -19,6 +19,32 @@ func remoteCommandHasBrowserMode(rc remoteCommand) bool {
 	return mode != ""
 }
 
+// remoteCommandDisplayName keeps status/receipt text aligned with the public
+// route the sender actually selected. The execution engine alone is not enough
+// to distinguish ChatGPT Chat from ChatGPT Work (or Claude Chat from its web
+// Code/Cowork experiences), because those routes intentionally share an engine.
+func remoteCommandDisplayName(rc remoteCommand) string {
+	mode, _ := extractBrowserModeCommand(rc.Text)
+	switch rc.Agent {
+	case "G":
+		if mode == browserModeWork {
+			return "ChatGPT Work"
+		}
+		return "ChatGPT Chat"
+	case "H":
+		switch mode {
+		case browserModeCowork:
+			return "Claude Cowork"
+		case browserModeCode:
+			return "Claude Code Web"
+		default:
+			return "Claude Chat"
+		}
+	default:
+		return agentDisplayName(rc.Agent)
+	}
+}
+
 // resetAgentConversation resets exactly the destination selected by the public
 // SMS route. For browser agents this preserves Chat vs Work/Cowork/Code rather
 // than silently falling back to the provider's regular chat mode.

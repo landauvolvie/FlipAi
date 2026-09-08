@@ -151,7 +151,7 @@ func (b *Bridge) drainQueue(ctx context.Context) {
 }
 
 func (b *Bridge) sendReceipt(ctx context.Context, m GmailMessage, rc remoteCommand, depth int) {
-	agentName := agentDisplayName(rc.Agent)
+	agentName := remoteCommandDisplayName(rc)
 	line := "✓ " + agentName + " working on it…"
 	if depth > 1 {
 		line = fmt.Sprintf("✓ Queued for %s (%d ahead)…", agentName, depth-1)
@@ -671,7 +671,7 @@ func (b *Bridge) poll(ctx context.Context) {
 			continue
 		}
 
-		agentName := agentDisplayName(rc.Agent)
+		agentName := remoteCommandDisplayName(rc)
 		b.event("success", "routing", "Authenticated SMS routed to "+agentName, sender, rc.Agent, id)
 		doneCh := make(chan struct{})
 		depth := b.enqueue(bridgeJob{msg: m, cmd: rc, done: doneCh})
@@ -868,7 +868,7 @@ func (b *Bridge) heartbeat(ctx context.Context, stop <-chan struct{}, m GmailMes
 	every := b.cfg.progressIntervalFor(rc.Agent)
 	t := time.NewTicker(every)
 	defer t.Stop()
-	agentName := agentDisplayName(rc.Agent)
+	agentName := remoteCommandDisplayName(rc)
 	for {
 		select {
 		case <-ctx.Done():
