@@ -62,3 +62,13 @@ func contains(hay, needle string) bool {
 		return false
 	})()
 }
+
+
+func TestEveryModelDefaultsFirstAcknowledgementToThirtySeconds(t *testing.T) {
+	cfg := defaultConfig(t.TempDir())
+	for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P"} {
+		if got := agentSettings(cfg, agent).ackDelay(); got != 30*time.Second {
+			t.Errorf("%s first acknowledgement delay = %v, want 30s", agent, got)
+		}
+	}
+}
