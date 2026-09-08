@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// remoteCommandHasTurn distinguishes "OW NEW:" (reset only) from
-// "OW NEW: research this" (reset, then run the task). Browser-mode markers are
-// transport metadata and do not count as task text.
 func remoteCommandHasTurn(rc remoteCommand) bool {
 	_, text := extractBrowserModeCommand(rc.Text)
 	return strings.TrimSpace(text) != ""
@@ -19,10 +16,6 @@ func remoteCommandHasBrowserMode(rc remoteCommand) bool {
 	return mode != ""
 }
 
-// remoteCommandDisplayName keeps status/receipt text aligned with the public
-// route the sender actually selected. The execution engine alone is not enough
-// to distinguish ChatGPT Chat from ChatGPT Work (or Claude Chat from its web
-// Code/Cowork experiences), because those routes intentionally share an engine.
 func remoteCommandDisplayName(rc remoteCommand) string {
 	mode, _ := extractBrowserModeCommand(rc.Text)
 	switch rc.Agent {
@@ -45,10 +38,6 @@ func remoteCommandDisplayName(rc remoteCommand) string {
 	}
 }
 
-// chatGPTFreshResetMode deliberately makes Work NEW use the exact reset that is
-// already proven by O NEW on the live account. The subsequent turn still keeps
-// its Work marker, so runChatGPTSMS follows the normal OW path after the reset.
-// In other words: OW NEW = O NEW (without sending the user's prompt) + OW.
 func chatGPTFreshResetMode(requested string) string {
 	requested = strings.ToLower(strings.TrimSpace(requested))
 	if requested == "" || requested == browserModeWork {
@@ -57,9 +46,6 @@ func chatGPTFreshResetMode(requested string) string {
 	return requested
 }
 
-// resetAgentConversation resets exactly the destination selected by the public
-// SMS route. ChatGPT Work is the one intentional exception: its reliable fresh
-// boundary is regular Chat first, then the normal OW route runs the user's turn.
 func (b *Bridge) resetAgentConversation(ctx context.Context, rc remoteCommand) (string, error) {
 	mode, _ := extractBrowserModeCommand(rc.Text)
 	switch rc.Agent {
@@ -95,18 +81,14 @@ func (b *Bridge) resetAgentConversation(ctx context.Context, rc remoteCommand) (
 		return "New Grok Chat conversation started.", b.newGrokChatConversation(ctx)
 	case "P":
 		return "New Microsoft Copilot Chat conversation started.", b.newCopilotChatConversation(ctx)
+	case "U":
+		return "New Muse conversation started.", b.newMuseChatConversation(ctx)
 	default:
 		b.startNewClaudeSession()
 		return "New Claude conversation started.", nil
 	}
 }
 
-// runFreshAgentTurn performs the reset and the user's task as one queued bridge
-// job. That guarantees no later SMS can slip between the reset and the first
-// turn of the new conversation. For OW NEW specifically, resetAgentConversation
-// leaves ChatGPT at the proven O NEW boundary while rc.Text still carries Work;
-// runChatGPTSMS below therefore executes the same normal OW route that already
-// works when the user switches into Work from another route.
 func (b *Bridge) runFreshAgentTurn(ctx context.Context, rc remoteCommand, inbound []InboundAttachment) (string, error) {
 	if _, err := b.resetAgentConversation(ctx, rc); err != nil {
 		return "", err
@@ -128,12 +110,13 @@ func (b *Bridge) runFreshAgentTurn(ctx context.Context, rc remoteCommand, inboun
 		return b.runGrokChatSMS(ctx, rc.Text)
 	case "P":
 		return b.runCopilotChatSMS(ctx, rc.Text)
+	case "U":
+		return b.runMuseChatSMS(ctx, rc.Text)
 	default:
 		return b.runCodexWithAttachments(ctx, rc.Text, rc.Sender, inbound)
 	}
 }
 
-// Kept here as a tiny assertion helper used by tests and future browser routes.
 func freshBrowserDataDir(b *Bridge) string {
 	if b == nil {
 		return ""
