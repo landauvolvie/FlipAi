@@ -1,0 +1,44 @@
+name: prepare-v04668-once
+
+on:
+  push:
+    branches:
+      - fix/ow-new-reuse-o-new-ow-v04668
+    paths:
+      - .github/workflows/prepare-v04668-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ow-new-reuse-o-new-ow-v04668
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Sync version and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < VERSION)" = "0.46.68"
+          sed -i 's/const version = "0\.46\.67"/const version = "0.46.68"/' config.go
+          sed -i 's/#define MyVersion "0\.46\.67"/#define MyVersion "0.46.68"/' installer/FlipAi.iss
+          grep -q 'const version = "0.46.68"' config.go
+          grep -q '#define MyVersion "0.46.68"' installer/FlipAi.iss
+          gofmt -w sms_fresh_turn.go sms_fresh_turn_test.go
+          go test ./...
+          git rm .github/workflows/prepare-v04668-once.yml
+      - name: Commit validated v0.46.68
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add config.go installer/FlipAi.iss sms_fresh_turn.go sms_fresh_turn_test.go .github/workflows/prepare-v04668-once.yml
+          git commit -m 'Validate OW NEW O NEW plus OW flow for v0.46.68'
+          git push origin HEAD:fix/ow-new-reuse-o-new-ow-v04668
