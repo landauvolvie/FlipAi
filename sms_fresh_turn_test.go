@@ -111,3 +111,21 @@ func TestRemoteCommandDisplayNameKeepsBrowserMode(t *testing.T) {
 		}
 	}
 }
+
+func TestChatGPTWorkFreshPlanReusesONewThenOW(t *testing.T) {
+	if got := chatGPTFreshResetMode(browserModeWork); got != browserModeChat {
+		t.Fatalf("OW NEW reset mode=%q want regular Chat so it reuses O NEW", got)
+	}
+	if got := chatGPTFreshResetMode(browserModeChat); got != browserModeChat {
+		t.Fatalf("O NEW reset mode=%q want Chat", got)
+	}
+
+	rc := remoteCommand{Agent: "G", New: true, Text: markBrowserModeCommand("what's the weather?", browserModeWork)}
+	mode, text := extractBrowserModeCommand(rc.Text)
+	if mode != browserModeWork || text != "what's the weather?" {
+		t.Fatalf("OW NEW must preserve Work on the actual turn: mode/text=%q/%q", mode, text)
+	}
+	if chatGPTFreshResetMode(mode) != browserModeChat {
+		t.Fatal("OW NEW must reset through the same regular-Chat boundary as O NEW")
+	}
+}
