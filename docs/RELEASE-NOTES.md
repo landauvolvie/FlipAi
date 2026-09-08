@@ -21,6 +21,7 @@ This release adds Muse.ai as a first-class browser chat provider alongside ChatG
 - Muse has its own connection runtime, browser worker, security settings, and conversation state.
 - Connect/Test/Disconnect and status endpoints are registered in the local authenticated FlipAi UI.
 - Regression coverage verifies Muse routing, NEW-conversation behavior, local action routes, isolated background WebView behavior, authentication detection, and central SMS dispatch.
+- Release validation keeps the executable version, installer version, and `VERSION` file synchronized at 0.46.70.
 
 No Muse API key is required; FlipAi uses the user's signed-in Muse web session.
 
