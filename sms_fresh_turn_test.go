@@ -93,3 +93,21 @@ func TestPublicSMSRouteUsesConfiguredNewWord(t *testing.T) {
 		t.Fatalf("configured fresh word parsed incorrectly: rc=%+v mode=%q text=%q", rc, mode, text)
 	}
 }
+
+func TestRemoteCommandDisplayNameKeepsBrowserMode(t *testing.T) {
+	cases := []struct {
+		rc   remoteCommand
+		want string
+	}{
+		{remoteCommand{Agent: "G", Text: markBrowserModeCommand("weather", browserModeChat)}, "ChatGPT Chat"},
+		{remoteCommand{Agent: "G", Text: markBrowserModeCommand("weather", browserModeWork)}, "ChatGPT Work"},
+		{remoteCommand{Agent: "H", Text: markBrowserModeCommand("task", browserModeChat)}, "Claude Chat"},
+		{remoteCommand{Agent: "H", Text: markBrowserModeCommand("task", browserModeCode)}, "Claude Code Web"},
+		{remoteCommand{Agent: "H", Text: markBrowserModeCommand("task", browserModeCowork)}, "Claude Cowork"},
+	}
+	for _, tc := range cases {
+		if got := remoteCommandDisplayName(tc.rc); got != tc.want {
+			t.Fatalf("remoteCommandDisplayName(%+v)=%q want %q", tc.rc, got, tc.want)
+		}
+	}
+}
