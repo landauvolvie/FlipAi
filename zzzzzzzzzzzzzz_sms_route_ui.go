@@ -37,7 +37,7 @@ func smsRouteAgentsUI(body string) string {
   function ready(fn){if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',fn)}else{fn()}}
   ready(function(){
     var header=document.querySelector('.page-head > div:first-child > p');
-    if(header){header.textContent='SMS shortcuts: O = ChatGPT Chat · OW = ChatGPT Work · OC = Codex · A = Claude Chat · AW = Claude Cowork · AC = Claude Code Web · AL = Claude Code Local · G = Gemini · M = Microsoft Copilot · X = Grok. Add NEW after any shortcut to start fresh, for example OW NEW: research this.'}
+    if(header){header.textContent='SMS shortcuts: O = ChatGPT Chat · OW = ChatGPT Work · OC = Codex · A = Claude Chat · AW = Claude Cowork · AC = Claude Code Web · AL = Claude Code Local · G = Gemini · M = Microsoft Copilot · MU = Muse · X = Grok. Add NEW after any shortcut to start fresh, for example OW NEW: research this.'}
 
     function rail(id,text){var el=document.querySelector('.agent-item[for="'+id+'"] .agent-item-copy > span:last-child');if(el)el.textContent=text}
     rail('agent-codex','Answers OC: messages');
@@ -94,6 +94,7 @@ func smsRouteAgentsUI(body string) string {
     securityHint('#gemini-chat-pane','G');
     securityHint('#grok-chat-pane','X');
     securityHint('#copilot-chat-pane','M');
+    securityHint('#muse-chat-pane','MU');
   });
 })();
 </script>
