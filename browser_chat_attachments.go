@@ -14,9 +14,6 @@ import (
 )
 
 const (
-	// Keep the historical marker spelling so every already-tested provider
-	// worker continues to recognize it. The payload is no longer image-only:
-	// it can carry any inbound media type FlipAi intentionally supports.
 	browserChatAttachmentMarkerStart = "[[FLIPAI_IMAGE_ATTACHMENTS:"
 	browserChatAttachmentMarkerEnd   = "]]"
 )
@@ -31,7 +28,7 @@ var browserChatAttachmentTurnMu sync.Mutex
 
 func isBrowserChatAgent(agent string) bool {
 	switch strings.ToUpper(strings.TrimSpace(agent)) {
-	case "G", "H", "M", "X", "P":
+	case "G", "H", "M", "X", "P", "U":
 		return true
 	default:
 		return false
@@ -81,9 +78,6 @@ func preparedBrowserChatImages(in []InboundAttachment) ([]browserChatAttachment,
 	return out, nil
 }
 
-// The function name is retained because all browser provider workers already
-// call it. Validation now covers the full image/audio/video set that the inbound
-// transport accepts, not images only.
 func validatePreparedBrowserChatImage(a browserChatAttachment) error {
 	if !supportedInboundMediaType(a.MediaType) {
 		return fmt.Errorf("attachment %q has unsupported media type %q", a.Filename, a.MediaType)
@@ -136,9 +130,6 @@ func browserChatAttachmentMarker(in []browserChatAttachment) (string, error) {
 	return browserChatAttachmentMarkerStart + base64.RawURLEncoding.EncodeToString(b) + browserChatAttachmentMarkerEnd, nil
 }
 
-// extractBrowserChatAttachmentMarker runs inside the provider WebView worker.
-// It removes FlipAi's private attachment metadata before the page sees the
-// prompt and returns validated local files for the shared CDP upload.
 func extractBrowserChatAttachmentMarker(expression string) (string, []browserChatAttachment, bool, error) {
 	start := strings.Index(expression, browserChatAttachmentMarkerStart)
 	if start < 0 {
@@ -216,7 +207,6 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 	if len(paths) == 0 {
 		return errors.New("no media attachment was supplied")
 	}
-
 	var objectID string
 	var lastErr error
 	findJS := browserChatFindFileInputJS(attachments)
@@ -236,8 +226,6 @@ func uploadBrowserChatImages(d voiceDevTools, attachments []browserChatAttachmen
 	if err := d.Call("DOM.setFileInputFiles", map[string]any{"files": paths, "objectId": objectID}, nil); err != nil {
 		return fmt.Errorf("could not attach the file to the chat: %w", err)
 	}
-	// The provider's existing turn driver waits for its Send button to become
-	// ready, so only a short handoff delay is needed here.
 	time.Sleep(450 * time.Millisecond)
 	return nil
 }
@@ -260,7 +248,6 @@ func (b *Bridge) runBrowserChatSMSWithAttachments(ctx context.Context, agent, co
 	}
 	browserChatAttachmentTurnMu.Lock()
 	defer browserChatAttachmentTurnMu.Unlock()
-
 	command = strings.TrimSpace(command)
 	if command == "" {
 		command = browserChatImageOnlyPrompt(len(attachments))
@@ -277,6 +264,8 @@ func (b *Bridge) runBrowserChatSMSWithAttachments(ctx context.Context, agent, co
 		return b.runGrokChatSMS(ctx, command)
 	case "P":
 		return b.runCopilotChatSMS(ctx, command)
+	case "U":
+		return b.runMuseChatSMS(ctx, command)
 	default:
 		return "", errors.New("unknown browser chat agent")
 	}

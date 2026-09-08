@@ -319,6 +319,7 @@ func (a *App) handler() http.Handler {
 	m.HandleFunc("/gemini-chat/status.json", a.requireAuth(a.geminiChatStatusJSON))
 	m.HandleFunc("/grok-chat/status.json", a.requireAuth(a.grokChatStatusJSON))
 	m.HandleFunc("/copilot-chat/status.json", a.requireAuth(a.copilotChatStatusJSON))
+	m.HandleFunc("/muse-chat/status.json", a.requireAuth(a.museChatStatusJSON))
 
 	// Actions.
 	for path, action := range map[string]http.HandlerFunc{
@@ -348,6 +349,9 @@ func (a *App) handler() http.Handler {
 		"/copilot-chat/connect":    a.copilotChatConnect,
 		"/copilot-chat/test":       a.copilotChatTest,
 		"/copilot-chat/disconnect": a.copilotChatDisconnect,
+		"/muse-chat/connect":       a.museChatConnect,
+		"/muse-chat/test":          a.museChatTest,
+		"/muse-chat/disconnect":    a.museChatDisconnect,
 		"/agents/numbers/add":      a.addAgentNumber,
 		"/agents/numbers/remove":   a.removeAgentNumber,
 		"/settings/save":           a.saveSettings,

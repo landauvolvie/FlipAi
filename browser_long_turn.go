@@ -37,6 +37,8 @@ func browserLongTurnProvider(v string) string {
 		return "grok"
 	case "P", "COPILOT", "MICROSOFT COPILOT", "MICROSOFT COPILOT CHAT":
 		return "copilot"
+	case "U", "MUSE", "MUSE CHAT":
+		return "muse"
 	default:
 		return ""
 	}
@@ -102,10 +104,6 @@ func browserLongTurnTimeoutDetail(detail string) bool {
 		strings.Contains(s, "did not produce") && strings.Contains(s, "90 seconds")
 }
 
-// sanitizeBrowserProgress only forwards concise, visible status-like text. It
-// deliberately refuses long prose so a provider's detailed reasoning is never
-// relayed as a progress SMS. When no safe visible status is available, the
-// normal generic "still working" heartbeat remains the fallback.
 func sanitizeBrowserProgress(raw string) string {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	candidates := strings.Split(raw, "\n")
@@ -133,10 +131,6 @@ func sanitizeBrowserProgress(raw string) string {
 	return ""
 }
 
-// waitForBrowserLongTurn has intentionally no elapsed-time deadline. The
-// caller's context is cancelled only by a real app/session shutdown. A model
-// that works for twenty minutes therefore stays alive; only an explicit failed
-// state ends the wait as a failure.
 func waitForBrowserLongTurn(ctx context.Context, dataDir, provider string, onProgress func(string)) (string, error) {
 	provider = browserLongTurnProvider(provider)
 	if provider == "" {
