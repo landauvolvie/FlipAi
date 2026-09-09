@@ -299,9 +299,26 @@ func loadUpdateState(statePath string) ReleaseInfo {
 }
 
 func saveUpdateState(statePath string, info ReleaseInfo) {
-	rememberUpdateSnapshot(info)
-	if raw, err := json.MarshalIndent(info, "", "  "); err == nil {
-		_ = os.WriteFile(updateStatePath(statePath), raw, 0o600)
+	raw, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return
+	}
+	// Readers and restart handoffs must see a complete record, even if the app
+	// is stopped while progress is being saved.
+	tmp, err := os.CreateTemp(filepath.Dir(statePath), ".update-*.tmp")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmp.Name())
+	if _, err = tmp.Write(raw); err == nil {
+		err = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if err != nil || closeErr != nil {
+		return
+	}
+	if os.Rename(tmp.Name(), updateStatePath(statePath)) == nil {
+		rememberUpdateSnapshot(info)
 	}
 }
 
@@ -366,8 +383,8 @@ func (a *App) checkForUpdate(ctx context.Context, force bool) ReleaseInfo {
 
 // watchForUpdates performs an early check after startup and then checks exactly
 // every 30 seconds. A newer release is downloaded and verified immediately,
-// but never installed until the user clicks the small install control in the
-// sidebar. Download failures remain silent and are retried on a later check.
+// but only installed when the user clicks the sidebar icon or restarts FlipAi.
+// Download failures remain silent and are retried on a later check.
 func (a *App) watchForUpdates(ctx context.Context) {
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()

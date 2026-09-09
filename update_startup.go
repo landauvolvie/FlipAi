@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,26 +28,35 @@ func clearBrokenStagedUpdate(statePath string, info ReleaseInfo, detail string) 
 
 // maybeInstallStagedUpdateAtStartup is called only at a real app/watchdog
 // startup. Merely reaching 100% while FlipAi is running does not interrupt the
-// user: the sidebar becomes an Install update button. If the app or computer is
+// user: the sidebar icon becomes ready to install. If the app or computer is
 // restarted first, this consumes the already-verified installer automatically.
-func maybeInstallStagedUpdateAtStartup(statePath string) bool {
+func maybeInstallStagedUpdateAtStartup(statePath string, reopenWindow ...bool) bool {
+	reopen := len(reopenWindow) > 0 && reopenWindow[0]
+	started, _ := installStagedUpdate(statePath, reopen, runUpdateInstaller)
+	return started
+}
+
+// Manual installation and restart handoff share checksum verification and the
+// exclusive flag, so repeated clicks or overlapping processes launch Setup once.
+// Use only the staged file: installation works even when the PC is now offline.
+func installStagedUpdate(statePath string, reopenWindow bool, launch func(string, bool) error) (bool, error) {
 	info := loadUpdateState(statePath)
 	flag := updateInstallingFlag(statePath)
 	if !info.Newer() {
 		_ = os.Remove(flag)
-		return false
+		return false, nil
 	}
 	if !info.Ready() {
-		return false
+		return false, nil
 	}
 	if strings.TrimSpace(info.DownloadedSHA256) == "" {
 		clearBrokenStagedUpdate(statePath, info, "staged update checksum is missing; downloading it again")
-		return false
+		return false, nil
 	}
 	sum, err := sha256File(info.DownloadedPath)
 	if err != nil || !strings.EqualFold(sum, info.DownloadedSHA256) {
 		clearBrokenStagedUpdate(statePath, info, "staged update no longer matches its verified checksum; downloading it again")
-		return false
+		return false, nil
 	}
 
 	// A launcher and the Windows sign-in watchdog can overlap. This tiny flag
@@ -62,21 +72,21 @@ func maybeInstallStagedUpdateAtStartup(statePath string) bool {
 		} else {
 			// Another startup already handed off to Setup. Do not start the old
 			// build underneath it.
-			return true
+			return true, nil
 		}
 	}
 	if lockErr != nil {
-		return false
+		return false, fmt.Errorf("lock update installer: %w", lockErr)
 	}
 	_, _ = lock.WriteString(info.Version + "\n")
 	_ = lock.Close()
 
-	if err := runUpdateInstaller(info.DownloadedPath, true); err != nil {
+	if err := launch(info.DownloadedPath, reopenWindow); err != nil {
 		_ = os.Remove(flag)
 		info.Error = truncate("could not start staged update: "+err.Error(), 200)
 		saveUpdateState(statePath, info)
-		return false
+		return false, err
 	}
-	activityLogForStatePath(statePath).Add("info", "host", "Installing staged FlipAi "+info.Version+" after restart", "", "", "")
-	return true
+	activityLogForStatePath(statePath).Add("info", "host", "Installing staged FlipAi "+info.Version, "", "", "")
+	return true, nil
 }

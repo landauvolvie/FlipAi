@@ -180,7 +180,7 @@ func showLauncherError(dataDir string, cfg Config, detail string) {
 
 func runLauncher(dataDir, cfgPath string) {
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
-	if maybeInstallStagedUpdateAtStartup(filepath.Join(dataDir, "state.json")) {
+	if !healthOK(cfg.Listen) && maybeInstallStagedUpdateAtStartup(filepath.Join(dataDir, "state.json"), true) {
 		return
 	}
 	_ = os.Remove(filepath.Join(dataDir, "quit.flag"))

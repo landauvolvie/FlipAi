@@ -184,8 +184,6 @@ var uiFlashes = map[string][2]string{
 	"reset":             {"warn", "FlipAi setup was reset. Reconnect Gmail to start again."},
 	"boot-on":           {"ok", "FlipAi will now start when this PC powers on, before anyone signs in."},
 	"boot-off":          {"ok", "FlipAi will start at sign-in only."},
-	"update-current":    {"ok", "FlipAi is up to date."},
-	"update-found":      {"warn", "A newer FlipAi release is available."},
 }
 
 func (a *App) shell(r *http.Request, nav, title string) shellData {
@@ -344,7 +342,7 @@ const shellHTML = `{{define "shell"}}<!doctype html>
 var uiPages = map[string]*template.Template{}
 
 func registerPage(name, body string) {
-	uiPages[name] = template.Must(template.New(name).Funcs(uiFuncs).Parse(shellHTML + uiPartials + body))
+	uiPages[name] = template.Must(template.New(name).Funcs(uiFuncs).Funcs(template.FuncMap{"updaterState": updaterUIState, "updaterPercent": updaterUIPercent}).Parse(quietUpdaterShell(shellHTML) + uiPartials + body))
 }
 
 func (a *App) render(w http.ResponseWriter, name string, data any) {

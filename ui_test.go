@@ -718,7 +718,7 @@ func TestUpdateCheckStoresPublishedRelease(t *testing.T) {
 
 	// An available release appears only as the compact sidebar download state.
 	body := a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, `title="Downloading FlipAi `+next+`"`) {
+	if !strings.Contains(body, `title="Downloading FlipAi `+next+` (0%)"`) {
 		t.Fatal("the sidebar download indicator is missing from the page")
 	}
 	if strings.Contains(body, `class="banner update"`) || strings.Contains(body, `action="/update/install"`) {
@@ -738,7 +738,7 @@ func TestUpdateCheckOnCurrentVersionSaysSo(t *testing.T) {
 	defer func() { updateAPIURL = old }()
 
 	rr := a.do(t, http.MethodPost, "/update/check", nil)
-	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "update-current") {
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"available":false`) || rr.Header().Get("Location") != "" {
 		t.Fatalf("check returned %d -> %q", rr.Code, rr.Header().Get("Location"))
 	}
 	if strings.Contains(a.do(t, http.MethodGet, "/", nil).Body.String(), "is available") {

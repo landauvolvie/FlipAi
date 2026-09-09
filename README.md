@@ -74,34 +74,21 @@ sending you to a page of its own.
 
 ## Updating
 
-FlipAi checks its own GitHub releases in the background, so a newer version is
-noticed without opening Settings. When one exists, the version in the sidebar
-turns into **v0.13.0 → v0.14.0** on every page.
+FlipAi checks for new releases every 30 seconds and downloads and verifies
+updates quietly in the background. A single small icon beside the version is
+the only update control, on every page. Hover over it for download progress.
 
-**Settings → Updates** has two controls:
+Once the update is ready, click the icon to install it and restart FlipAi. If
+you leave it waiting, the downloaded update installs on the next app start or
+Windows startup. Reopening a window while the bridge is still running does not
+install an update. Windows startup requires your existing startup option to be
+enabled; otherwise it installs when you next open FlipAi.
 
-- **Install updates automatically** (on by default) — FlipAi downloads the
-  release, verifies it against the checksum published beside it, installs it,
-  and comes back on the new version on its own. An installer whose checksum
-  does not match is never run. An update never interrupts an SMS turn: if a
-  turn is running when the update is found, or starts during the download, the
-  install waits for the next check.
-- **Check for updates every** — hourly, 6 hours (default), 12 hours, daily, or
-  weekly.
-
-You can still install on demand with **Settings → Updates → Install**. Either
-way the install runs in place:
-
-- the existing install is detected, so the wizard asks **no setup questions**;
-- your Gmail connection, allowed numbers, security code, agent paths, and
-  startup choice are kept;
-- the bridge stops for a few seconds and comes back on the new version.
-
-An update you started from inside the app **reopens the FlipAi window** when it
-finishes. An automatic background update restores the tray and bridge without
-stealing focus, since you did not ask for it at that moment. Before v0.13.0 an
-in-app update restarted only the background bridge, so the app looked like it
-never came back.
+Installation uses the verified local download, so it also works offline. It
+runs silently, preserves your connections, phone numbers, settings, and startup
+choice, and does not show update banners, dialogs, or extra Settings controls.
+Clicking the icon reopens the window when installation finishes; background
+startup restores the tray and bridge without bringing a window forward.
 
 Downloading a release by hand and running it does the same thing — an installer
 that finds FlipAi already installed goes straight to updating it.

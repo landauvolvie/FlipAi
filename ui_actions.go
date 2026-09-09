@@ -674,54 +674,31 @@ func (a *App) saveBootStartup(w http.ResponseWriter, r *http.Request) {
 // Updates
 // ---------------------------------------------------------------------------
 
+// Older windows may still call this endpoint. Return status without a result
+// page, flash message, banner, or navigation.
 func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	info := a.checkForUpdate(ctx, true)
-	if info.Error != "" {
-		renderResult(w, r, 200, false, "Could not check for updates", info.Error+
-			"\n\nFlipAi keeps working; it only needs a connection to github.com to see whether a newer release exists.")
-		return
-	}
-	if info.Newer() {
-		redirectTo(w, r, "/settings", "update-found")
-		return
-	}
-	redirectTo(w, r, "/settings", "update-current")
+	a.checkForUpdate(ctx, true)
+	a.updateStatusJSON(w, r)
 }
 
-// updateInstall downloads the published installer, verifies it against the
-// checksum published with the release, and runs it in place. The installer
-// recognises the existing install and updates it without asking setup
-// questions again.
 func (a *App) updateInstall(w http.ResponseWriter, r *http.Request) {
-	info := loadUpdateState(a.statePath)
-	if !info.Newer() {
-		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		info = a.checkForUpdate(ctx, true)
-		cancel()
-	}
-	if !info.Newer() {
-		renderResult(w, r, 200, true, "FlipAi is up to date", "No newer release is published right now.")
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
-	defer cancel()
-	path, err := downloadUpdate(ctx, info)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	started, err := installStagedUpdate(a.statePath, true, runUpdateInstaller)
 	if err != nil {
-		activityLogForStatePath(a.statePath).Add("error", "host", "Update download failed: "+truncate(err.Error(), 200), "", "", "")
-		renderResult(w, r, 500, false, "Update could not be downloaded", err.Error())
+		activityLogForStatePath(a.statePath).Add("error", "host", "Update install failed: "+truncate(err.Error(), 200), "", "", "")
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]any{"installing": false})
 		return
 	}
-	// The user pressed Install in the app, so bring the window back with it.
-	if err := runUpdateInstaller(path, true); err != nil {
-		renderResult(w, r, 500, false, "Update could not be started", err.Error()+
-			"\n\nThe verified installer is saved at "+path+" if you want to run it yourself.")
+	if !started {
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, map[string]any{"installing": false})
 		return
 	}
-	activityLogForStatePath(a.statePath).Add("info", "host", "Installing FlipAi "+info.Version, "", "", "")
-	renderResult(w, r, 200, true, "Installing FlipAi "+info.Version,
-		"The verified installer is running now. FlipAi stops for a few seconds and starts again on the new version with your settings intact.")
+	writeJSON(w, map[string]any{"installing": true})
 }
 
 // ---------------------------------------------------------------------------

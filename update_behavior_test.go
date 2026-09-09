@@ -119,7 +119,7 @@ func TestSidebarShowsAnAvailableUpdateNextToTheVersion(t *testing.T) {
 		CheckedAt: time.Now(),
 	})
 	body := a.do(t, http.MethodGet, "/", nil).Body.String()
-	if !strings.Contains(body, `title="Downloading FlipAi 99.0.0"`) {
+	if !strings.Contains(body, `title="Downloading FlipAi 99.0.0 (0%)"`) {
 		t.Error("the sidebar version line should become an update indicator")
 	}
 	if !strings.Contains(body, "99.0.0") {
