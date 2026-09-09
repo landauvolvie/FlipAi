@@ -1,5 +1,5 @@
 #ifndef MyVersion
-  #define MyVersion "0.46.73"
+  #define MyVersion "0.46.74"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist"

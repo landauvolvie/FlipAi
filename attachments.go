@@ -34,7 +34,18 @@ type InboundAttachment struct {
 func normalizeInboundMediaType(v string) string {
 	med, _, err := mime.ParseMediaType(strings.TrimSpace(v))
 	if err == nil && med != "" {
-		return strings.ToLower(med)
+		med = strings.ToLower(med)
+		switch med {
+		case "audio/x-m4a", "audio/m4a":
+			return "audio/mp4"
+		case "audio/x-wav", "audio/wave":
+			return "audio/wav"
+		case "audio/mp3", "audio/x-mp3":
+			return "audio/mpeg"
+		case "application/ogg":
+			return "audio/ogg"
+		}
+		return med
 	}
 	return strings.ToLower(strings.TrimSpace(strings.SplitN(v, ";", 2)[0]))
 }
@@ -44,9 +55,41 @@ func supportedInboundMediaType(v string) bool {
 	return strings.HasPrefix(v, "image/") || strings.HasPrefix(v, "audio/") || v == "video/mp4"
 }
 
+// Use a deterministic map for phone recordings: Windows MIME registrations
+// vary by installed apps, and carriers often label voice notes as binary files.
+var inboundMediaExtensions = map[string]string{
+	".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav",
+	".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg",
+	".aac": "audio/aac", ".amr": "audio/amr", ".flac": "audio/flac",
+	".3gp": "audio/3gpp", ".3gpp": "audio/3gpp", ".3g2": "audio/3gpp2",
+	".mp4": "video/mp4", ".webm": "audio/webm",
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+	".gif": "image/gif", ".webp": "image/webp",
+}
+
+func inboundMediaType(declared, filename string) string {
+	med := normalizeInboundMediaType(declared)
+	if supportedInboundMediaType(med) {
+		return med
+	}
+	// Do not reinterpret HTML error pages or other explicitly typed documents.
+	switch med {
+	case "", "application/octet-stream", "binary/octet-stream", "application/download", "application/x-download":
+		ext := strings.ToLower(filepath.Ext(filename))
+		if known := inboundMediaExtensions[ext]; known != "" {
+			return known
+		}
+		if guessed := normalizeInboundMediaType(mime.TypeByExtension(ext)); supportedInboundMediaType(guessed) {
+			return guessed
+		}
+		return med
+	}
+	return med
+}
+
 func hasSupportedMailAttachments(in []MailAttachment) bool {
 	for _, a := range in {
-		if supportedInboundMediaType(a.MediaType) && len(a.Data) > 0 {
+		if supportedInboundMediaType(inboundMediaType(a.MediaType, a.Filename)) && len(a.Data) > 0 {
 			return true
 		}
 	}
@@ -54,16 +97,7 @@ func hasSupportedMailAttachments(in []MailAttachment) bool {
 }
 
 func mediaTypeForPart(p *multipart.Part) string {
-	med := normalizeInboundMediaType(p.Header.Get("Content-Type"))
-	if supportedInboundMediaType(med) {
-		return med
-	}
-	if name := strings.TrimSpace(p.FileName()); name != "" {
-		if guessed := normalizeInboundMediaType(mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))); supportedInboundMediaType(guessed) {
-			return guessed
-		}
-	}
-	return med
+	return inboundMediaType(p.Header.Get("Content-Type"), p.FileName())
 }
 
 func readBounded(r io.Reader, max int64) ([]byte, error) {
@@ -185,6 +219,18 @@ func attachmentExtension(mediaType string) string {
 		return ".wav"
 	case "audio/ogg":
 		return ".ogg"
+	case "audio/aac":
+		return ".aac"
+	case "audio/amr":
+		return ".amr"
+	case "audio/flac":
+		return ".flac"
+	case "audio/3gpp":
+		return ".3gp"
+	case "audio/3gpp2":
+		return ".3g2"
+	case "audio/webm":
+		return ".webm"
 	case "video/mp4":
 		return ".mp4"
 	}
@@ -211,13 +257,19 @@ func safeAttachmentFilename(name string, index int, mediaType string) string {
 	if clean == "" {
 		clean = fmt.Sprintf("attachment-%d%s", index+1, attachmentExtension(mediaType))
 	}
+	if ext := strings.ToLower(filepath.Ext(clean)); ext == "" || ext == ".bin" {
+		if mediaExt := attachmentExtension(mediaType); mediaExt != ".bin" {
+			clean = strings.TrimSuffix(clean, filepath.Ext(clean)) + mediaExt
+		}
+	}
 	return clean
 }
 
 func prepareInboundAttachments(in []MailAttachment) ([]InboundAttachment, func(), error) {
 	var selected []MailAttachment
 	for _, a := range in {
-		if supportedInboundMediaType(a.MediaType) && len(a.Data) > 0 {
+		if supportedInboundMediaType(inboundMediaType(a.MediaType, a.Filename)) && len(a.Data) > 0 {
+			a.MediaType = inboundMediaType(a.MediaType, a.Filename)
 			selected = append(selected, a)
 		}
 	}

@@ -815,7 +815,7 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		b.event("info", "agent", "Claude command started", rc.Sender, "A", m.ID)
 		final, err = b.runClaudeWithAttachments(ctx, rc.Text, rc.Sender, inbound)
 	} else if isBrowserChatAgent(rc.Agent) && len(inbound) > 0 {
-		b.event("info", "agent", agentDisplayName(rc.Agent)+" image command started", rc.Sender, rc.Agent, m.ID)
+		b.event("info", "agent", agentDisplayName(rc.Agent)+" attachment command started", rc.Sender, rc.Agent, m.ID)
 		final, err = b.runBrowserChatSMSWithAttachments(ctx, rc.Agent, rc.Text, inbound)
 	} else if rc.Agent == "G" {
 		b.event("info", "agent", "ChatGPT Chat command started", rc.Sender, "G", m.ID)

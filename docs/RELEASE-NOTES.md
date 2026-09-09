@@ -1,13 +1,16 @@
-# FlipAi v0.46.73
+# FlipAi v0.46.74
 
-Updates now use a single small icon beside the app version.
+Voice-note attachment forwarding for browser chats.
 
-- New releases download and verify in the background, with checks every 30 seconds. Download progress appears in the icon tooltip.
-- The icon becomes clickable once the update is ready. Clicking it installs silently and reopens FlipAi.
-- A downloaded update installs automatically on the next app start or Windows startup. Background startup stays in the background.
-- Reopening the window while FlipAi is already running does not trigger installation.
-- Installation uses the verified local download and works offline. Repeated clicks and overlapping startups share one installer handoff.
-- Removed legacy update result pages and flash notices. No update banners, dialogs, or extra Settings controls.
-- Update state is saved by file replacement so a restart cannot read a half-written progress record.
+- Recognizes common phone recordings (M4A, MP3, WAV, AMR, 3GP, AAC, Ogg/Opus, and FLAC), including generic binary MIME attachments.
+- Keeps recording bytes intact and supplies usable audio filenames and extensions.
+- Captures Google Voice audio download links and hidden audio players with visible controls.
+- Selects a compatible file input instead of falling back to an image-only picker. Shared by ChatGPT Chat, Claude Chat, Grok, Gemini, Microsoft Copilot Chat, and Muse.
+- Waits for an audio upload receipt and for upload progress to finish before submitting the prompt. Reports rejected or unconfirmed uploads instead of silently sending without the voice note.
+- Voice-note-only messages ask the selected model to respond to the spoken request.
 
-Validation includes updater lifecycle and browser interaction regression tests, plus the normal Linux/Windows tests, vet, race checks, installer checks, checksums, and release provenance pipeline.
+The destination website must support the recording's format and audio-file uploads. This change does not add audio understanding to providers that do not offer it, transcribe recordings through another service, or disguise audio as another file type.
+
+Validation: MIME and routing regression tests, browser tests for compatible file pickers, delayed uploads, rejections, Google Voice download links, and hidden audio players, plus the normal Linux/Windows release checks.
+
+The quiet update icon and install-on-restart behavior from v0.46.73 are retained.
