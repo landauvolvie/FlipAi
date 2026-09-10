@@ -135,10 +135,31 @@ func TestChatGPTRichCardRenderErrorsAreNotTextedAsReplies(t *testing.T) {
 	for _, want := range []string{
 		"Unable to display this message due to an error",
 		"Reload the page to try again",
-		"const text=n=>clean(",
+		"const text=n=>{",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("ChatGPT reply cleanup lost %q", want)
 		}
+	}
+}
+
+func TestChatGPTRichWidgetsAreExcludedFromSMSReplyText(t *testing.T) {
+	b, err := os.ReadFile("chatgpt_webview_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		`n.querySelector&&n.querySelector('.markdown')`,
+		`clone.querySelectorAll('button,canvas,svg,iframe`,
+		`[data-testid*="widget" i]`,
+		`[data-testid*="weather" i]`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("ChatGPT rich-widget SMS filtering lost %q", want)
+		}
+	}
+	if strings.Contains(s, `const text=n=>clean(n&&n.innerText||n&&n.textContent||'');`) {
+		t.Fatal("ChatGPT must not scrape the entire assistant wrapper into SMS replies")
 	}
 }
