@@ -48,6 +48,10 @@ func TestBrowserDriversRequireFreshAcceptedTurn(t *testing.T) {
 			"const beforeLast=beforeCount?text(before[beforeCount-1]):''",
 			"if(!now||sameText(now,input))return null",
 			"Grok did not accept the Send action",
+			`all('[data-testid*="response" i]')`,
+			".filter(assistantCandidate)",
+			"n.querySelector&&n.querySelector(userBubbleSelector)",
+			"Grok accepted the prompt but no assistant response appeared.",
 		},
 		"gemini_chat_webview_windows.go": {
 			"const sameText=",
@@ -74,8 +78,9 @@ func TestBrowserDriversRequireFreshAcceptedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(grok), `[data-testid*="response" i]`) {
-		t.Fatal("Grok must not classify every generic response-testid node as assistant output")
+	grokSource := string(grok)
+	if strings.Contains(grokSource, `const userish=n=>!!(n&&n.closest&&n.closest('[data-message-author-role="user"],[data-testid*="user" i]`) {
+		t.Fatal("Grok must not use the over-broad *user* ancestor filter that can hide valid response containers")
 	}
 	gemini, err := os.ReadFile("gemini_chat_webview_windows.go")
 	if err != nil {
