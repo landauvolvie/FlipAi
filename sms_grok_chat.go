@@ -47,12 +47,54 @@ func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 	if !loadGrokChatRuntime(dataDir).Connected { return "", errors.New("Grok Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Grok Chat, then try again") }
 	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second); s, err := ensureGrokChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Grok Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Grok Chat, then try again: %w", err) }
+
+	// Bind this turn to the exact WebView worker that accepted it. Previously a
+	// disconnect/reconnect could destroy that worker while the old HTTP request
+	// remained blocked forever. execute() therefore never returned and its SMS
+	// heartbeat kept texting "Grok Chat still working…" indefinitely. A changed
+	// control port/token or Connected=false now cancels the stale turn at once.
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	defer turnCancel()
+	sessionChanged := make(chan struct{})
+	go func(port int, token string) {
+		t := time.NewTicker(250 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-turnCtx.Done():
+				return
+			case <-t.C:
+				now := loadGrokChatRuntime(dataDir)
+				if !now.Connected || now.ControlPort != port || now.ControlToken != token {
+					close(sessionChanged)
+					turnCancel()
+					return
+				}
+			}
+		}
+	}(s.ControlPort, s.ControlToken)
+	changedError := func(err error) error {
+		select {
+		case <-sessionChanged:
+			return errors.New("Grok Chat was disconnected or restarted while this message was running. Retry the message; the old turn has been stopped")
+		default:
+			return err
+		}
+	}
+
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second); body, code, err := grokChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { return "", err }
+	requestCtx, requestCancel := context.WithTimeout(turnCtx, 100*time.Second)
+	body, code, err := grokChatControlRequest(requestCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
+	requestCancel()
+	if err != nil { return "", changedError(err) }
 	var out grokChatSMSReply; _ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
-		if browserLongTurnTimeoutDetail(out.Detail) { return waitForBrowserLongTurn(ctx, dataDir, "X", nil) }
+		if browserLongTurnTimeoutDetail(out.Detail) {
+			reply, waitErr := waitForBrowserLongTurn(turnCtx, dataDir, "X", nil)
+			if waitErr != nil { return reply, changedError(waitErr) }
+			return reply, nil
+		}
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" { return "", errors.New("Grok Chat returned an empty reply") }
