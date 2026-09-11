@@ -114,13 +114,20 @@ func geminiChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt stri
 		}
 		if browserLongTurnTimeoutDetail(out.Detail) {
 			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "M", nil)
-			return cleanGeminiChatReply(reply), waitErr
+			cleaned := cleanGeminiChatReply(reply)
+			if waitErr == nil && browserReplyEchoesPrompt(cleaned, prompt) {
+				return "", errors.New("Gemini Chat did not produce a fresh assistant reply; FlipAi received the submitted prompt back instead. Reconnect Gemini Chat and try again")
+			}
+			return cleaned, waitErr
 		}
 		return "", errors.New(out.Detail)
 	}
 	cleaned := cleanGeminiChatReply(out.Reply)
 	if cleaned == "" {
 		return "", errors.New("Gemini Chat returned an empty reply")
+	}
+	if browserReplyEchoesPrompt(cleaned, prompt) {
+		return "", errors.New("Gemini Chat did not produce a fresh assistant reply; FlipAi received the submitted prompt back instead. Reconnect Gemini Chat and try again")
 	}
 	return cleaned, nil
 }
