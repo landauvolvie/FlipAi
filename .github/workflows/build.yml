@@ -229,7 +229,7 @@ jobs:
           $hash=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  FlipAi-Setup-v$version.exe" | Set-Content .\installer-output\SHA256SUMS.txt -Encoding ascii
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: FlipAi-windows
           path: |
