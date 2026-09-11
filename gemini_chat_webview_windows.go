@@ -59,12 +59,12 @@ const geminiChatTurnJS = `(async(input)=>{
     return out;
   };
   const composer=()=>document.querySelector('rich-textarea .ql-editor[contenteditable="true"],rich-textarea [contenteditable="true"],div.ql-editor[contenteditable="true"],[contenteditable="true"][role="textbox"],[contenteditable="true"][aria-label*="prompt" i],textarea[aria-label*="prompt" i],textarea');
+  const composerText=n=>String(n&&('value' in n?n.value:(n.innerText||n.textContent))||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
   const actionScope=b=>{
     let n=b;
     for(let i=0;i<7&&n;i++,n=n.parentElement){const t=text(n);if(/edit in gmail/i.test(t)&&/\bcancel\b/i.test(t)&&/\bsend\b/i.test(t))return n}
     return null;
   };
-  const pendingGmailSend=()=>all('button,[role="button"]').find(b=>visible(b)&&!b.disabled&&/^send$/i.test(text(b))&&actionScope(b))||null;
   const send=()=>{
     const candidates=unique([...all('button[aria-label*="Send" i]'),...all('button[mattooltip*="Send" i]'),...all('button[data-test-id*="send" i]'),...all('button[data-testid*="send" i]'),...all('button.send-button')]);
     return candidates.find(b=>!b.disabled&&visible(b)&&!actionScope(b))||candidates.find(b=>!b.disabled&&!actionScope(b))||null;
@@ -77,25 +77,6 @@ const geminiChatTurnJS = `(async(input)=>{
     const buttons=unique([...Array.from(root.querySelectorAll('button')),...Array.from(scope.querySelectorAll('button'))]);
     return buttons.some(b=>/good response|bad response|regenerate|copy response|more options|share/i.test(((b.getAttribute('aria-label')||'')+' '+(b.getAttribute('mattooltip')||'')+' '+(b.innerText||'')).trim()));
   };
-  // A typed SMS confirmation cannot click Gemini's Gmail confirmation card by
-  // itself. If the user clearly confirms and an actual pending Gmail Send
-  // control is visible, perform that exact action instead of posting "Yes" as
-  // another chat message. Never click a generic/composer Send button here.
-  const confirm=String(input||'').trim().toLowerCase().replace(/[.!]+$/,'');
-  if(/^(yes|yes please|yes send it|send it|confirm|go ahead|do it)$/.test(confirm)){
-    const action=pendingGmailSend();
-    if(action){
-      action.click();
-      await sleep(500);
-      for(let i=0;i<40;i++){
-        const scope=actionScope(action);
-        const page=text(document.body);
-        if(!document.contains(action)||action.disabled||!scope||/email (?:was )?sent|message sent|sent successfully/i.test(page))return {ok:true,reply:'Gemini submitted the pending email Send action.',href:location.href};
-        await sleep(250);
-      }
-      return {ok:false,detail:'Gemini did not confirm that the pending email Send action completed. Open Gemini Chat in FlipAi and check the pending action.',href:location.href};
-    }
-  }
   let c=null;
   for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Gemini is loaded but FlipAi could not find the prompt box. The Gemini site layout may have changed.',href:location.href};
@@ -112,6 +93,17 @@ const geminiChatTurnJS = `(async(input)=>{
   for(let i=0;i<60&&!b;i++){b=send();if(!b)await sleep(100);}
   if(!b)return {ok:false,detail:'FlipAi filled the Gemini prompt box but the Send button never became ready.',href:location.href};
   b.click();
+  // Do not assume a click means Gemini accepted the message. A stale/half-dead
+  // page can expose a Send control that receives the click but never submits.
+  // Verify that the composer cleared, generation started, or a new response
+  // appeared before reporting this turn as active.
+  let accepted=false;
+  for(let i=0;i<28;i++){
+    await sleep(150);
+    const live=composer();
+    if(!live||composerText(live)===''||stop()||responseForTurn()){accepted=true;break}
+  }
+  if(!accepted)return {ok:false,detail:'FlipAi filled the Gemini prompt box, but Gemini did not accept the Send action. Reconnect Gemini Chat in FlipAi and try again.',href:location.href};
   let last='',stable=0,started=false;
   const deadline=Date.now()+90000;
   while(Date.now()<deadline){
@@ -195,7 +187,10 @@ func startGeminiChatControlEndpoint(dataDir string,w webview2.WebView,dev voiceD
 		cid:=geminiChatConversationID(got.Href);mutateGeminiChatRuntime(dataDir,func(s *GeminiChatWebRuntime){s.Connected=true;s.SignedIn=true;s.LastURL=got.Href;s.ConversationID=cid;if got.OK{s.LastEvent="turn-complete";s.LastError=""}else{s.LastEvent="turn-failed";s.LastError=got.Detail}});status:=http.StatusOK;if !got.OK{status=http.StatusBadGateway};rw.WriteHeader(status);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":got.OK,"reply":got.Reply,"detail":got.Detail,"conversationId":cid})
 	}
 	mux.HandleFunc("/new",func(rw http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.Error(rw,"POST required",http.StatusMethodNotAllowed);return};if !authorized(r){http.Error(rw,"FlipAi token required",http.StatusForbidden);return};var ignored bool;if err:=geminiChatEval(dev,`(()=>{location.href='https://gemini.google.com';return true})()`,false,&ignored);err!=nil{rw.WriteHeader(http.StatusBadGateway);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":false,"detail":err.Error()});return};if !waitForGeminiChatPageSignedIn(dev,45*time.Second){rw.WriteHeader(http.StatusUnauthorized);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":false,"detail":"Gemini did not restore the saved sign-in after opening a new chat"});return};mutateGeminiChatRuntime(dataDir,func(s *GeminiChatWebRuntime){s.Connected=true;s.SignedIn=true;s.ConversationID="";s.LastEvent="new-chat-ready";s.LastError=""});_ = json.NewEncoder(rw).Encode(map[string]any{"ok":true})})
-	mux.HandleFunc("/test",func(rw http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.Error(rw,"POST required",http.StatusMethodNotAllowed);return};turn(rw,r,"Reply with exactly: FLIPAI_OK",true)})
+	// Connection tests must never create a real chat message. The previous test
+	// posted "Reply with exactly: FLIPAI_OK", polluting the user's conversation
+	// and sometimes leaving the single SMS queue stuck behind the test turn.
+	mux.HandleFunc("/test",func(rw http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.Error(rw,"POST required",http.StatusMethodNotAllowed);return};if !authorized(r){http.Error(rw,"FlipAi token required",http.StatusForbidden);return};if !geminiChatPageIsSignedIn(dev){rw.WriteHeader(http.StatusUnauthorized);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":false,"detail":"Gemini Chat is not signed in inside FlipAi."});return};_ = json.NewEncoder(rw).Encode(map[string]any{"ok":true,"reply":"Gemini Chat is ready."})})
 	mux.HandleFunc("/chat",func(rw http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.Error(rw,"POST required",http.StatusMethodNotAllowed);return};var body struct{Prompt string `json:"prompt"`;New bool `json:"new"`};if err:=json.NewDecoder(http.MaxBytesReader(rw,r.Body,64<<10)).Decode(&body);err!=nil{http.Error(rw,err.Error(),http.StatusBadRequest);return};body.Prompt=strings.TrimSpace(body.Prompt);if body.Prompt==""{http.Error(rw,"prompt required",http.StatusBadRequest);return};turn(rw,r,body.Prompt,body.New)})
 	mux.HandleFunc("/stop",func(rw http.ResponseWriter,r *http.Request){if !authorized(r){http.Error(rw,"FlipAi token required",http.StatusForbidden);return};_ = json.NewEncoder(rw).Encode(map[string]bool{"ok":true});go func(){time.Sleep(80*time.Millisecond);w.Terminate()}()})
 	server:=&http.Server{Handler:mux,ReadHeaderTimeout:4*time.Second,WriteTimeout:115*time.Second};go func(){_ = server.Serve(ln)}();return port,server
