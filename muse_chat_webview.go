@@ -40,7 +40,9 @@ type MuseChatWebRuntime struct {
 var museChatRuntimeMu sync.Mutex
 
 func museChatRuntimePath(dataDir string) string { return filepath.Join(dataDir, museChatRuntimeFile) }
-func museChatProfilePath(dataDir string) string { return filepath.Join(dataDir, museChatProfileDirName) }
+func museChatProfilePath(dataDir string) string {
+	return filepath.Join(dataDir, museChatProfileDirName)
+}
 
 func migrateMuseChatRuntime(s *MuseChatWebRuntime) {
 	if s.SignedIn && !s.Connected {
@@ -132,7 +134,9 @@ func waitForMuseChatReady(ctx context.Context, dataDir string) (MuseChatWebRunti
 			b, code, err := museChatControlRequest(probeCtx, s, http.MethodGet, "/health", nil)
 			cancel()
 			if err == nil && code == http.StatusOK {
-				var health struct{ SignedIn bool `json:"signedIn"` }
+				var health struct {
+					SignedIn bool `json:"signedIn"`
+				}
 				if json.Unmarshal(b, &health) == nil && health.SignedIn {
 					mutateMuseChatRuntime(dataDir, func(v *MuseChatWebRuntime) {
 						v.Connected, v.SignedIn, v.Starting = true, true, false
@@ -270,8 +274,8 @@ func (a *App) museChatTest(w http.ResponseWriter, r *http.Request) {
 		renderResult(w, r, 500, false, "Muse test failed", out.Detail)
 		return
 	}
-	museChatActivity(a.dataDir, "info", "muse-chat-test", "Muse completed a real browser turn successfully.", time.Since(started))
-	message := "Muse returned a real response through FlipAi's dedicated browser session."
+	museChatActivity(a.dataDir, "info", "muse-chat-test", "Muse signed-in browser session verified without sending a prompt.", time.Since(started))
+	message := "Muse's saved signed-in browser session is ready. No test prompt was sent."
 	if out.ConversationID != "" {
 		message += "\nConversation: " + out.ConversationID
 	}

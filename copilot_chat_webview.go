@@ -279,8 +279,8 @@ func (a *App) copilotChatTest(w http.ResponseWriter, r *http.Request) {
 		renderResult(w, r, 500, false, "Microsoft Copilot Chat test failed", out.Detail)
 		return
 	}
-	copilotChatActivity(a.dataDir, "info", "copilot-chat-test", "Microsoft Copilot Chat completed a real browser turn successfully.", time.Since(started))
-	message := "Copilot returned a real response through FlipAi's dedicated browser session."
+	copilotChatActivity(a.dataDir, "info", "copilot-chat-test", "Microsoft Copilot Chat signed-in browser session verified without sending a prompt.", time.Since(started))
+	message := "Copilot's saved signed-in browser session is ready. No test prompt was sent."
 	if out.ConversationID != "" {
 		message += "\nConversation: " + out.ConversationID
 	}

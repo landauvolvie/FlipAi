@@ -223,20 +223,33 @@ func runMuseChatWebView(dataDir string, visible bool) error {
 			if signedIn {
 				s.Connected = true
 				s.LastError = ""
-				if changed || strings.Contains(s.LastEvent, "starting") { s.LastEvent = "session-ready" }
+				if changed || strings.Contains(s.LastEvent, "starting") {
+					s.LastEvent = "session-ready"
+				}
 			} else if changed || strings.Contains(s.LastEvent, "starting") {
-				if s.Connected { s.LastEvent = "session-restoring" } else { s.LastEvent = "waiting-for-sign-in" }
+				if s.Connected {
+					s.LastEvent = "session-restoring"
+				} else {
+					s.LastEvent = "waiting-for-sign-in"
+				}
 			}
 		})
 		if signedIn && !wasSignedIn {
-			if hadConnected { museChatActivity(dataDir, "info", "muse-chat-session", "Saved Muse sign-in was restored.", 0) } else { museChatActivity(dataDir, "info", "muse-chat-session", "Muse sign-in was verified and saved in FlipAi's dedicated profile.", 0); hadConnected = true }
+			if hadConnected {
+				museChatActivity(dataDir, "info", "muse-chat-session", "Saved Muse sign-in was restored.", 0)
+			} else {
+				museChatActivity(dataDir, "info", "muse-chat-session", "Muse sign-in was verified and saved in FlipAi's dedicated profile.", 0)
+				hadConnected = true
+			}
 		}
 		wasSignedIn = signedIn
 	})
 	w.Init(museChatPageMonitorJS)
 	dev := newWebViewDevTools(w)
 	port, closer := startMuseChatControlEndpoint(dataDir, w, dev)
-	if closer != nil { defer closer.Close() }
+	if closer != nil {
+		defer closer.Close()
+	}
 	mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) {
 		s.Running, s.Starting, s.Visible, s.LoginActive, s.SignedIn = true, false, visible, visible, false
 		s.ControlPort = port
@@ -247,75 +260,166 @@ func runMuseChatWebView(dataDir string, visible bool) error {
 	mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) {
 		s.Running, s.Starting, s.Visible, s.LoginActive, s.SignedIn = false, false, false, false, false
 		s.ControlPort, s.ControlToken = 0, ""
-		if s.Connected { s.LastEvent = "background-restart-pending" } else { s.LastEvent = "browser-closed" }
+		if s.Connected {
+			s.LastEvent = "background-restart-pending"
+		} else {
+			s.LastEvent = "browser-closed"
+		}
 	})
 	return nil
 }
 
 func startMuseChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceDevTools) (int, io.Closer) {
-	if dev == nil { return 0, nil }
+	if dev == nil {
+		return 0, nil
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { return 0, nil }
+	if err != nil {
+		return 0, nil
+	}
 	token, err := secureRandomToken(24)
-	if err != nil { _ = ln.Close(); return 0, nil }
+	if err != nil {
+		_ = ln.Close()
+		return 0, nil
+	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) { s.ControlToken, s.ControlPort = token, port })
 	authorized := func(r *http.Request) bool { return token != "" && r.Header.Get("X-FlipAi-Token") == token }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(rw http.ResponseWriter, r *http.Request) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "signedIn": museChatPageIsSignedIn(dev)})
 	})
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		if newChat {
 			var ignored bool
-			if err := museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored); err != nil { rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()}); return }
+			if err := museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored); err != nil {
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+				return
+			}
 		}
-		if !waitForMuseChatPageSignedIn(dev, 25*time.Second) { rw.WriteHeader(http.StatusUnauthorized); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Muse is not ready inside FlipAi. Press Connect and complete sign-in first."}); return }
+		if !waitForMuseChatPageSignedIn(dev, 25*time.Second) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Muse is not ready inside FlipAi. Press Connect and complete sign-in first."})
+			return
+		}
 		cleanPrompt, attachments, marked, markerErr := extractBrowserChatAttachmentMarker(prompt)
 		if marked {
-			if markerErr != nil { rw.WriteHeader(http.StatusBadRequest); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": markerErr.Error()}); return }
-			if err := uploadBrowserChatImages(dev, attachments); err != nil { rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()}); return }
+			if markerErr != nil {
+				rw.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": markerErr.Error()})
+				return
+			}
+			if err := uploadBrowserChatImages(dev, attachments); err != nil {
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+				return
+			}
 			prompt = strings.TrimSpace(cleanPrompt)
-			if prompt == "" { prompt = browserChatImageOnlyPrompt(len(attachments)) }
+			if prompt == "" {
+				prompt = browserChatImageOnlyPrompt(len(attachments))
+			}
 		}
 		expr := fmt.Sprintf(museChatTurnJS, museChatJSString(prompt))
 		var got museChatTurnResult
-		if err := museChatEval(dev, expr, true, &got); err != nil { rw.WriteHeader(http.StatusInternalServerError); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the Muse page driver: " + err.Error()}); return }
+		if err := museChatEval(dev, expr, true, &got); err != nil {
+			rw.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the Muse page driver: " + err.Error()})
+			return
+		}
 		cid := museChatConversationID(got.Href)
 		mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) {
 			s.Connected, s.SignedIn, s.LastURL, s.ConversationID = true, true, got.Href, cid
-			if got.OK { s.LastEvent, s.LastError = "turn-complete", "" } else { s.LastEvent, s.LastError = "turn-failed", got.Detail }
+			if got.OK {
+				s.LastEvent, s.LastError = "turn-complete", ""
+			} else {
+				s.LastEvent, s.LastError = "turn-failed", got.Detail
+			}
 		})
 		status := http.StatusOK
-		if !got.OK { status = http.StatusBadGateway }
+		if !got.OK {
+			status = http.StatusBadGateway
+		}
 		rw.WriteHeader(status)
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
 	}
 	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		var ignored bool
-		if err := museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored); err != nil { rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()}); return }
-		if !waitForMuseChatPageSignedIn(dev, 45*time.Second) { rw.WriteHeader(http.StatusUnauthorized); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Muse did not restore the saved session after opening a new chat"}); return }
-		mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) { s.Connected, s.SignedIn, s.ConversationID, s.LastEvent, s.LastError = true, true, "", "new-chat-ready", "" })
+		if err := museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored); err != nil {
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		if !waitForMuseChatPageSignedIn(dev, 45*time.Second) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Muse did not restore the saved session after opening a new chat"})
+			return
+		}
+		mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) {
+			s.Connected, s.SignedIn, s.ConversationID, s.LastEvent, s.LastError = true, true, "", "new-chat-ready", ""
+		})
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/test", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		turn(rw, r, "Reply with exactly: FLIPAI_OK", true)
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		if !museChatPageIsSignedIn(dev) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Muse is not signed in inside FlipAi."})
+			return
+		}
+		mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) {
+			s.Connected, s.SignedIn, s.LastEvent, s.LastError = true, true, "health-check-ok", ""
+		})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "detail": "signed-in browser session ready"})
 	})
 	mux.HandleFunc("/chat", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		var body struct { Prompt string `json:"prompt"`; New bool `json:"new"` }
-		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&body); err != nil { http.Error(rw, err.Error(), http.StatusBadRequest); return }
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Prompt string `json:"prompt"`
+			New    bool   `json:"new"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&body); err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
 		body.Prompt = strings.TrimSpace(body.Prompt)
-		if body.Prompt == "" { http.Error(rw, "prompt required", http.StatusBadRequest); return }
+		if body.Prompt == "" {
+			http.Error(rw, "prompt required", http.StatusBadRequest)
+			return
+		}
 		turn(rw, r, body.Prompt, body.New)
 	})
 	mux.HandleFunc("/stop", func(rw http.ResponseWriter, r *http.Request) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		_ = json.NewEncoder(rw).Encode(map[string]bool{"ok": true})
 		go func() { time.Sleep(80 * time.Millisecond); w.Terminate() }()
 	})
@@ -325,7 +429,9 @@ func startMuseChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 }
 
 func recordMuseChatWorkerError(dataDir string, err error) {
-	if err == nil { return }
+	if err == nil {
+		return
+	}
 	mutateMuseChatRuntime(dataDir, func(s *MuseChatWebRuntime) {
 		s.Running, s.Starting, s.Visible, s.LoginActive, s.SignedIn = false, false, false, false, false
 		s.LastEvent, s.LastError = "browser-error", err.Error()
@@ -334,5 +440,7 @@ func recordMuseChatWorkerError(dataDir string, err error) {
 }
 
 func museChatWorkerMain(dataDir string, visible bool) {
-	if err := runMuseChatWebView(dataDir, visible); err != nil { recordMuseChatWorkerError(dataDir, err) }
+	if err := runMuseChatWebView(dataDir, visible); err != nil {
+		recordMuseChatWorkerError(dataDir, err)
+	}
 }

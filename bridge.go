@@ -40,10 +40,16 @@ type Bridge struct {
 
 	activity *ActivityLog
 	mu       sync.Mutex
-	runMu    sync.Mutex
-	state    State
-	busy     bool
-	runCtx   context.Context
+	// Browser/model turns are isolated by provider. agentTail preserves FIFO
+	// ordering within one provider while allowing unrelated providers to run
+	// concurrently; agentRunMu is a defensive same-provider execution lock.
+	agentTail      map[string]chan struct{}
+	agentRunMu     map[string]*sync.Mutex
+	pendingByAgent map[string]int
+	activeTurns    int
+	state          State
+	busy           bool
+	runCtx         context.Context
 
 	// queue decouples reading the mailbox from running an agent turn. Turns can
 	// last many minutes, and previously the single poll loop sat blocked inside
@@ -74,9 +80,12 @@ func NewBridge(cfg Config, statePath string, state State, g MailClient, c *Codex
 	return &Bridge{
 		cfg: cfg, statePath: statePath, state: state,
 		gmail: g, codex: c, claude: a,
-		activity: activityLogForStatePath(statePath),
-		queueSig: make(chan struct{}, 1),
-		paused:   cfg.Paused,
+		activity:       activityLogForStatePath(statePath),
+		queueSig:       make(chan struct{}, 1),
+		agentTail:      make(map[string]chan struct{}),
+		agentRunMu:     make(map[string]*sync.Mutex),
+		pendingByAgent: make(map[string]int),
+		paused:         cfg.Paused,
 	}
 }
 
@@ -112,16 +121,55 @@ func (b *Bridge) pollStatus() (time.Time, string) {
 }
 
 // enqueue adds a job and signals the worker without ever blocking the caller.
+func bridgeAgentKey(agent string) string {
+	key := strings.ToUpper(strings.TrimSpace(agent))
+	if key == "" {
+		return "C"
+	}
+	return key
+}
+
 func (b *Bridge) enqueue(j bridgeJob) int {
 	b.mu.Lock()
 	b.queue = append(b.queue, j)
-	depth := len(b.queue)
+	if b.pendingByAgent == nil {
+		b.pendingByAgent = make(map[string]int)
+	}
+	key := bridgeAgentKey(j.cmd.Agent)
+	b.pendingByAgent[key]++
+	depth := b.pendingByAgent[key]
 	b.mu.Unlock()
 	select {
 	case b.queueSig <- struct{}{}:
 	default:
 	}
 	return depth
+}
+
+func (b *Bridge) finishQueuedAgent(agent string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	key := bridgeAgentKey(agent)
+	if b.pendingByAgent[key] <= 1 {
+		delete(b.pendingByAgent, key)
+		return
+	}
+	b.pendingByAgent[key]--
+}
+
+func (b *Bridge) agentMutex(agent string) *sync.Mutex {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.agentRunMu == nil {
+		b.agentRunMu = make(map[string]*sync.Mutex)
+	}
+	key := bridgeAgentKey(agent)
+	m := b.agentRunMu[key]
+	if m == nil {
+		m = &sync.Mutex{}
+		b.agentRunMu[key] = m
+	}
+	return m
 }
 
 func (b *Bridge) dequeue() (bridgeJob, bool) {
@@ -144,9 +192,61 @@ func (b *Bridge) drainQueue(ctx context.Context) {
 			return
 		}
 		b.execute(ctx, j.msg, j.cmd)
+		b.finishQueuedAgent(j.cmd.Agent)
 		if j.done != nil {
 			close(j.done)
 		}
+	}
+}
+
+// dispatchQueuedJob chains jobs for the same provider in FIFO order without
+// making a stalled provider block unrelated models. Different providers have
+// independent predecessor gates and therefore run concurrently.
+func (b *Bridge) dispatchQueuedJob(ctx context.Context, j bridgeJob) {
+	key := bridgeAgentKey(j.cmd.Agent)
+	gate := make(chan struct{})
+	b.mu.Lock()
+	if b.agentTail == nil {
+		b.agentTail = make(map[string]chan struct{})
+	}
+	prev := b.agentTail[key]
+	b.agentTail[key] = gate
+	b.mu.Unlock()
+
+	go func() {
+		defer func() {
+			b.finishQueuedAgent(j.cmd.Agent)
+			if j.done != nil {
+				close(j.done)
+			}
+			close(gate)
+			b.mu.Lock()
+			if b.agentTail[key] == gate {
+				delete(b.agentTail, key)
+			}
+			b.mu.Unlock()
+		}()
+		if prev != nil {
+			select {
+			case <-prev:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		b.execute(ctx, j.msg, j.cmd)
+	}()
+}
+
+func (b *Bridge) dispatchQueue(ctx context.Context) {
+	for ctx.Err() == nil {
+		j, ok := b.dequeue()
+		if !ok {
+			return
+		}
+		b.dispatchQueuedJob(ctx, j)
 	}
 }
 
@@ -477,7 +577,7 @@ func (b *Bridge) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-b.queueSig:
-				b.drainQueue(ctx)
+				b.dispatchQueue(ctx)
 			}
 		}
 	}()
@@ -687,9 +787,6 @@ func (b *Bridge) statusLine() string {
 	if n := len(b.queue); n > 0 {
 		line += fmt.Sprintf(" Queued: %d.", n)
 	}
-	if step := b.progress; step != "" {
-		line += " Now: " + truncate(step, 120)
-	}
 	return line
 }
 
@@ -724,13 +821,14 @@ func googleVoiceReplyTarget(m GmailMessage) string {
 }
 
 func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteCommand) {
-	// One agent turn at a time, enforced structurally. The old busy flag
-	// returned early instead of waiting, which would now silently discard a
-	// queued job rather than merely delaying it.
-	b.runMu.Lock()
-	defer b.runMu.Unlock()
+	// Same-provider turns remain serialized even if a caller bypasses the live
+	// queue. Unrelated providers use different mutexes and cannot block each other.
+	runMu := b.agentMutex(rc.Agent)
+	runMu.Lock()
+	defer runMu.Unlock()
 	startedAt := time.Now()
 	b.mu.Lock()
+	b.activeTurns++
 	b.busy = true
 	b.progress = ""
 	b.state.LastRunAt = time.Now()
@@ -738,7 +836,15 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 	s := b.state
 	b.mu.Unlock()
 	_ = saveState(b.statePath, s)
-	defer func() { b.mu.Lock(); b.busy = false; b.progress = ""; b.mu.Unlock() }()
+	defer func() {
+		b.mu.Lock()
+		if b.activeTurns > 0 {
+			b.activeTurns--
+		}
+		b.busy = b.activeTurns > 0
+		b.progress = ""
+		b.mu.Unlock()
+	}()
 	// Agent/model turns have no elapsed-time deadline. Long browser work, Codex,
 	// Claude Code, research, and image generation may legitimately run for many
 	// minutes. The turn ends only when the provider completes/fails or when the
@@ -882,10 +988,8 @@ func (b *Bridge) heartbeat(ctx context.Context, stop <-chan struct{}, m GmailMes
 		case <-stop:
 			return
 		case <-t.C:
+			// Never forward thought/tool/intermediate UI text to the phone.
 			line := agentName + " still working…"
-			if step := b.currentProgress(); step != "" {
-				line += " " + truncate(step, 120)
-			}
 			b.notify(ctx, m, line)
 			b.event("info", "reply", "Progress update texted to the sender", rc.Sender, rc.Agent, m.ID)
 		}
@@ -1228,10 +1332,6 @@ func (b *Bridge) runCodexWithAttachments(ctx context.Context, command, sender st
 				if json.Unmarshal(n.Params, &p) == nil && (p.TurnID == "" || p.TurnID == turnID) && p.Item.Text != "" {
 					if p.Item.Type == "agentMessage" {
 						final = p.Item.Text
-					} else {
-						// Any other completed item is a step worth naming in a
-						// progress heartbeat.
-						b.setProgress(p.Item.Text)
 					}
 				}
 			case "turn/completed":
