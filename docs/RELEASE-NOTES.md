@@ -1,16 +1,15 @@
-# FlipAi v0.46.74
+# FlipAi v0.46.75
 
-Voice-note attachment forwarding for browser chats.
+Browser-agent reliability, clean SMS replies, and instruction-default fixes.
 
-- Recognizes common phone recordings (M4A, MP3, WAV, AMR, 3GP, AAC, Ogg/Opus, and FLAC), including generic binary MIME attachments.
-- Keeps recording bytes intact and supplies usable audio filenames and extensions.
-- Captures Google Voice audio download links and hidden audio players with visible controls.
-- Selects a compatible file input instead of falling back to an image-only picker. Shared by ChatGPT Chat, Claude Chat, Grok, Gemini, Microsoft Copilot Chat, and Muse.
-- Waits for an audio upload receipt and for upload progress to finish before submitting the prompt. Reports rejected or unconfirmed uploads instead of silently sending without the voice note.
-- Voice-note-only messages ask the selected model to respond to the spoken request.
+- Browser models now start with no FlipAi-added instructions by default. Users can still add their own custom instruction.
+- ChatGPT SMS extraction uses the authored response text instead of dumping rich weather cards, charts, feedback controls, and other widget UI into SMS.
+- Gemini SMS extraction excludes Gmail/action-card chrome such as To/Cc/Bcc/Edit/Cancel/Send, and normal replies such as `Yes` are submitted through Gemini's normal composer.
+- Browser-agent connection tests are read-only and no longer send `Reply with exactly: FLIPAI_OK` or create test conversations in ChatGPT, Claude, Gemini, Grok, Copilot, or Muse.
+- Browser thought/status/progress DOM text is no longer forwarded as user-visible progress. Long-running turns use generic progress heartbeats only.
+- Previously connected browser models are restored at startup and live readiness is checked before work is accepted. Unavailable sessions fail with a reconnect message instead of pretending to be working.
+- SMS execution is isolated per provider, so a stuck Grok turn cannot block ChatGPT, Gemini, Claude, Copilot, Muse, or Codex. Messages to the same provider remain ordered.
+- Stalled browser turns are bounded instead of sending `still working...` indefinitely.
+- Grok disconnect/profile cleanup retries while WebView2 releases its profile lock, addressing the EBWebView lockfile disconnect error.
 
-The destination website must support the recording's format and audio-file uploads. This change does not add audio understanding to providers that do not offer it, transcribe recordings through another service, or disguise audio as another file type.
-
-Validation: MIME and routing regression tests, browser tests for compatible file pickers, delayed uploads, rejections, Google Voice download links, and hidden audio players, plus the normal Linux/Windows release checks.
-
-The quiet update icon and install-on-restart behavior from v0.46.73 are retained.
+Validation: full Linux test suite, real-browser call-flow tests, Windows tests/build, security scan, and SBOM checks passed before merge.
