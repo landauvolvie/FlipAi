@@ -35,15 +35,18 @@ const grokChatSignedInJS = `(()=>{const c=document.querySelector('div.ProseMirro
 
 const grokChatTurnJS = `(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  const text=n=>(n&&n.innerText||n&&n.textContent||'').trim();
+  const text=n=>String(n&&n.innerText||n&&n.textContent||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
+  const sameText=(a,b)=>String(a||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim()===String(b||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
   const all=q=>Array.from(document.querySelectorAll(q));
   const unique=xs=>Array.from(new Set(xs));
+  const userish=n=>!!(n&&n.closest&&n.closest('[data-message-author-role="user"],[data-testid*="user" i],form,[contenteditable="true"]'));
   const assistants=()=>{
-    const primary=unique([...all('[data-testid="grokResponse"]'),...all('[data-testid*="response" i]'),...all('[data-message-author-role="assistant"]')]).filter(n=>text(n));
+    const primary=unique([...all('[data-testid="grokResponse"]'),...all('[data-message-author-role="assistant"]'),...all('[data-testid="assistant-message"]'),...all('[data-testid*="assistant" i]')]).filter(n=>text(n)&&!userish(n));
     if(primary.length)return primary;
-    return unique([...all('.markdown'),...all('[class*="markdown"]'),...all('.prose')]).filter(n=>text(n) && !n.closest('form'));
+    return unique([...all('.markdown'),...all('[class*="markdown"]'),...all('.prose')]).filter(n=>text(n)&&!userish(n));
   };
   const composer=()=>document.querySelector('div.ProseMirror[contenteditable="true"][role="textbox"],div.tiptap.ProseMirror[contenteditable="true"],[data-testid="grokInput"][contenteditable="true"],[data-testid="grokInput"],[contenteditable="true"][role="textbox"],textarea[placeholder],textarea');
+  const composerText=n=>String(n&&('value' in n?n.value:(n.innerText||n.textContent))||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
   const send=()=>{
     const candidates=unique([...all('button[data-testid="chat-submit"]'),...all('button[data-testid="grokSend"]'),...all('button[aria-label*="send" i]'),...all('button[type="submit"]')]);
     return candidates.find(b=>!b.disabled && b.offsetParent!==null)||candidates.find(b=>!b.disabled)||null;
@@ -55,7 +58,14 @@ const grokChatTurnJS = `(async(input)=>{
   const before=assistants();
   const beforeCount=before.length;
   const beforeLast=beforeCount?text(before[beforeCount-1]):'';
-  const responseForTurn=()=>{const current=assistants();if(!current.length)return null;const last=current[current.length-1];if(current.length>beforeCount)return last;return text(last)&&text(last)!==beforeLast?last:null};
+  const responseForTurn=()=>{
+    const current=assistants();
+    if(!current.length)return null;
+    const last=current[current.length-1],now=text(last);
+    if(!now||sameText(now,input))return null;
+    if(current.length>beforeCount)return last;
+    return now!==beforeLast?last:null;
+  };
   c.focus();
   try{
     if(c instanceof HTMLTextAreaElement || c instanceof HTMLInputElement){
@@ -77,12 +87,29 @@ const grokChatTurnJS = `(async(input)=>{
   for(let i=0;i<60&&!b;i++){b=send();if(!b)await sleep(100);}
   if(!b)return {ok:false,detail:'FlipAi filled the Grok prompt box but the Send button never became ready.',href:location.href};
   b.click();
+  // A clickable button is not proof that Grok accepted the prompt. Confirm the
+  // composer cleared, generation started, or genuinely new assistant output
+  // appeared. In particular, never mistake the just-added user bubble for a
+  // response; that produced prompt-echo SMS replies in v0.46.75.
+  let accepted=false;
+  for(let i=0;i<28;i++){
+    await sleep(150);
+    const live=composer(),candidate=responseForTurn();
+    if(!live||composerText(live)===''||stop()||candidate){accepted=true;break}
+  }
+  if(!accepted)return {ok:false,detail:'FlipAi filled the Grok prompt box, but Grok did not accept the Send action. Reconnect Grok Chat in FlipAi and try again.',href:location.href};
   let last='',stable=0,started=false;
   const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);
     const node=responseForTurn();
-    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:now||'Grok completed the turn.',href:location.href}}
+    if(node){
+      const now=text(node);
+      if(!now||sameText(now,input))continue;
+      started=true;
+      if(now===last)stable++;else{last=now;stable=0}
+      if(!stop()&&stable>=5)return {ok:true,reply:now,href:location.href}
+    }
   }
   return {ok:false,detail:started?'Grok started answering but did not finish within 90 seconds.':'Grok did not produce a new response within 90 seconds.',href:location.href};
 })(%s)`

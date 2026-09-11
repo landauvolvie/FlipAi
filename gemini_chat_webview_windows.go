@@ -34,6 +34,7 @@ const geminiChatSignedInJS = `(()=>{const c=document.querySelector('rich-textare
 const geminiChatTurnJS = `(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const text=n=>String(n&&n.innerText||n&&n.textContent||'').replace(/\s+/g,' ').trim();
+  const sameText=(a,b)=>String(a||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim()===String(b||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
   const all=q=>Array.from(document.querySelectorAll(q));
   const unique=xs=>Array.from(new Set(xs));
   const visible=n=>!!n&&n.offsetParent!==null;
@@ -80,9 +81,19 @@ const geminiChatTurnJS = `(async(input)=>{
   let c=null;
   for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Gemini is loaded but FlipAi could not find the prompt box. The Gemini site layout may have changed.',href:location.href};
+  // Compare the last response by stable content rather than DOM object identity.
+  // Gemini can re-render old response nodes without accepting a new prompt; the
+  // old Set-of-elements check treated that re-render as a brand-new answer.
   const before=assistants();
-  const beforeSet=new Set(before);
-  const responseForTurn=()=>{const current=assistants();for(let i=current.length-1;i>=0;i--){if(!beforeSet.has(current[i]))return current[i]}return null};
+  const beforeCount=before.length;
+  const beforeLast=beforeCount?replyText(before[beforeCount-1]):'';
+  const responseForTurn=()=>{
+    const current=assistants();if(!current.length)return null;
+    const last=current[current.length-1],now=replyText(last);
+    if(!now||sameText(now,input))return null;
+    if(current.length>beforeCount)return last;
+    return now!==beforeLast?last:null;
+  };
   c.focus();
   try{
     if(c instanceof HTMLTextAreaElement||c instanceof HTMLInputElement){const proto=c instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;const setter=Object.getOwnPropertyDescriptor(proto,'value').set;setter.call(c,input);c.dispatchEvent(new Event('input',{bubbles:true}));c.dispatchEvent(new Event('change',{bubbles:true}))}
@@ -95,13 +106,11 @@ const geminiChatTurnJS = `(async(input)=>{
   b.click();
   // Do not assume a click means Gemini accepted the message. A stale/half-dead
   // page can expose a Send control that receives the click but never submits.
-  // Verify that the composer cleared, generation started, or a new response
-  // appeared before reporting this turn as active.
   let accepted=false;
   for(let i=0;i<28;i++){
     await sleep(150);
-    const live=composer();
-    if(!live||composerText(live)===''||stop()||responseForTurn()){accepted=true;break}
+    const live=composer(),candidate=responseForTurn();
+    if(!live||composerText(live)===''||stop()||candidate){accepted=true;break}
   }
   if(!accepted)return {ok:false,detail:'FlipAi filled the Gemini prompt box, but Gemini did not accept the Send action. Reconnect Gemini Chat in FlipAi and try again.',href:location.href};
   let last='',stable=0,started=false;
@@ -110,12 +119,13 @@ const geminiChatTurnJS = `(async(input)=>{
     await sleep(250);
     const node=responseForTurn();
     if(node){
-      started=true;
       const raw=text(node),now=replyText(node);
+      if(!now||sameText(now,input))continue;
+      started=true;
       if(raw===last)stable++;else{last=raw;stable=0}
-      if(now&&responseFinishedChrome(node)&&stable>=2)return {ok:true,reply:now,href:location.href};
-      if(now&&!stop()&&stable>=5)return {ok:true,reply:now,href:location.href};
-      if(now&&stable>=16)return {ok:true,reply:now,href:location.href};
+      if(responseFinishedChrome(node)&&stable>=2)return {ok:true,reply:now,href:location.href};
+      if(!stop()&&stable>=5)return {ok:true,reply:now,href:location.href};
+      if(stable>=16)return {ok:true,reply:now,href:location.href};
     }
   }
   return {ok:false,detail:started?'Gemini started answering but did not finish within 90 seconds.':'Gemini did not produce a new response within 90 seconds.',href:location.href};
