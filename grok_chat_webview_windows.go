@@ -39,11 +39,21 @@ const grokChatTurnJS = `(async(input)=>{
   const sameText=(a,b)=>String(a||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim()===String(b||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
   const all=q=>Array.from(document.querySelectorAll(q));
   const unique=xs=>Array.from(new Set(xs));
-  const userish=n=>!!(n&&n.closest&&n.closest('[data-message-author-role="user"],[data-testid*="user" i],form,[contenteditable="true"]'));
+  const userBubbleSelector='[data-message-author-role="user"],[data-testid="user-message"],[data-testid="userMessage"],[data-testid*="user-message" i]';
+  // Grok's current site uses several response testids depending on the active
+  // model/layout. v0.46.76 removed the generic response-testid fallback to stop
+  // prompt echoes, but that also made legitimate replies invisible on layouts
+  // that do not expose grokResponse/assistant-message. Keep the fallback, but
+  // reject user bubbles, containers that contain a user bubble, the composer,
+  // forms, and exact prompt echoes before anything can be treated as a reply.
+  const userish=n=>!!(n&&((n.closest&&n.closest(userBubbleSelector+',form,[contenteditable="true"]'))||(n.querySelector&&n.querySelector(userBubbleSelector))));
+  const assistantCandidate=n=>{const t=text(n);return !!t&&!sameText(t,input)&&!userish(n)};
   const assistants=()=>{
-    const primary=unique([...all('[data-testid="grokResponse"]'),...all('[data-message-author-role="assistant"]'),...all('[data-testid="assistant-message"]'),...all('[data-testid*="assistant" i]')]).filter(n=>text(n)&&!userish(n));
+    const primary=unique([...all('[data-testid="grokResponse"]'),...all('[data-message-author-role="assistant"]'),...all('[data-testid="assistant-message"]'),...all('[data-testid*="assistant" i]')]).filter(assistantCandidate);
     if(primary.length)return primary;
-    return unique([...all('.markdown'),...all('[class*="markdown"]'),...all('.prose')]).filter(n=>text(n)&&!userish(n));
+    const generic=unique([...all('[data-testid*="response" i]')]).filter(assistantCandidate);
+    if(generic.length)return generic;
+    return unique([...all('.markdown'),...all('[class*="markdown"]'),...all('.prose')]).filter(assistantCandidate);
   };
   const composer=()=>document.querySelector('div.ProseMirror[contenteditable="true"][role="textbox"],div.tiptap.ProseMirror[contenteditable="true"],[data-testid="grokInput"][contenteditable="true"],[data-testid="grokInput"],[contenteditable="true"][role="textbox"],textarea[placeholder],textarea');
   const composerText=n=>String(n&&('value' in n?n.value:(n.innerText||n.textContent))||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
@@ -98,17 +108,28 @@ const grokChatTurnJS = `(async(input)=>{
     if(!live||composerText(live)===''||stop()||candidate){accepted=true;break}
   }
   if(!accepted)return {ok:false,detail:'FlipAi filled the Grok prompt box, but Grok did not accept the Send action. Reconnect Grok Chat in FlipAi and try again.',href:location.href};
-  let last='',stable=0,started=false;
+  // Wait for the authored response to settle instead of a few 250 ms samples.
+  // If Grok accepted a message but exposes neither a working control nor any
+  // assistant output for 30 seconds, fail that turn explicitly instead of
+  // entering the multi-minute long-turn heartbeat path for a dead/no-output UI.
+  let last='',started=false,startedAt=0,lastChangedAt=0,noOutputIdleSince=Date.now();
   const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);
+    const working=!!stop();
     const node=responseForTurn();
     if(node){
       const now=text(node);
       if(!now||sameText(now,input))continue;
-      started=true;
-      if(now===last)stable++;else{last=now;stable=0}
-      if(!stop()&&stable>=5)return {ok:true,reply:now,href:location.href}
+      const at=Date.now();
+      if(!started){started=true;startedAt=at;lastChangedAt=at}
+      if(now!==last){last=now;lastChangedAt=at}
+      const quietFor=at-lastChangedAt;
+      if(!working&&at-startedAt>=1250&&quietFor>=2500)return {ok:true,reply:now,href:location.href};
+      if(quietFor>=7000)return {ok:true,reply:now,href:location.href};
+    }else if(!started){
+      if(working)noOutputIdleSince=Date.now();
+      else if(Date.now()-noOutputIdleSince>=30000)return {ok:false,detail:'Grok accepted the prompt but no assistant response appeared. Open Grok Chat in FlipAi, reconnect if needed, and try again.',href:location.href};
     }
   }
   return {ok:false,detail:started?'Grok started answering but did not finish within 90 seconds.':'Grok did not produce a new response within 90 seconds.',href:location.href};
