@@ -1,15 +1,13 @@
-# FlipAi v0.46.75
+# FlipAi v0.46.76
 
-Browser-agent reliability, clean SMS replies, and instruction-default fixes.
+Sticky SMS routing and browser-turn submission reliability fixes.
 
-- Browser models now start with no FlipAi-added instructions by default. Users can still add their own custom instruction.
-- ChatGPT SMS extraction uses the authored response text instead of dumping rich weather cards, charts, feedback controls, and other widget UI into SMS.
-- Gemini SMS extraction excludes Gmail/action-card chrome such as To/Cc/Bcc/Edit/Cancel/Send, and normal replies such as `Yes` are submitted through Gemini's normal composer.
-- Browser-agent connection tests are read-only and no longer send `Reply with exactly: FLIPAI_OK` or create test conversations in ChatGPT, Claude, Gemini, Grok, Copilot, or Muse.
-- Browser thought/status/progress DOM text is no longer forwarded as user-visible progress. Long-running turns use generic progress heartbeats only.
-- Previously connected browser models are restored at startup and live readiness is checked before work is accepted. Unavailable sessions fail with a reconnect message instead of pretending to be working.
-- SMS execution is isolated per provider, so a stuck Grok turn cannot block ChatGPT, Gemini, Claude, Copilot, Muse, or Codex. Messages to the same provider remain ordered.
-- Stalled browser turns are bounded instead of sending `still working...` indefinitely.
-- Grok disconnect/profile cleanup retries while WebView2 releases its profile lock, addressing the EBWebView lockfile disconnect error.
+- SMS routing now preserves the selected model until the user explicitly switches with another model prefix. For example, after `X:` all unprefixed follow-ups stay on Grok; after `G:` they stay on Gemini; after `O:` they stay on ChatGPT.
+- Grok now verifies that the prompt was actually accepted by the page before FlipAi waits for or returns a reply.
+- Grok no longer mistakes the user's own prompt bubble or generic response UI for the assistant's answer.
+- Gemini now compares response count/content instead of DOM-node identity, so a stale Angular re-render cannot masquerade as the answer to a new SMS turn.
+- Gemini now verifies that the prompt was actually accepted before treating the turn as active.
+- Grok and Gemini both reject prompt echoes at the transport boundary instead of texting the submitted question back as if it were the model's answer.
+- Regression coverage verifies X -> Grok, G -> Gemini, and O -> ChatGPT remain sticky across unprefixed follow-ups until an explicit switch.
 
-Validation: full Linux test suite, real-browser call-flow tests, Windows tests/build, security scan, and SBOM checks passed before merge.
+Validation: full Linux test suite, real-browser call-flow tests, Windows tests, vet, race tests, Windows build, desktop/background lifecycle, Google Voice integration, installer install/uninstall smoke tests, Microsoft Defender checks, security scan, and SBOM checks passed before release.
