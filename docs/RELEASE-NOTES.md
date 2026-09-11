@@ -1,13 +1,11 @@
-# FlipAi v0.46.77
+# FlipAi v0.46.78
 
-Gemini/Grok reply reliability and long Google Voice reply delivery fixes.
+Grok stale-turn cancellation and complete long Google Voice reply delivery fixes.
 
-- Gemini now waits for streaming output to settle before treating a browser reply as complete, preventing partial SMS answers.
-- Gemini collects the complete authored response across sibling prose blocks instead of stopping at an early fragment.
-- Grok restores its response fallback with strict user-bubble, composer, form, and prompt-echo guards so real replies are found without texting the user's prompt back.
-- Grok turns that accepted a prompt but never expose generation activity or assistant output now fail after a bounded interval instead of sending extended working heartbeats.
-- Direct Google Voice text delivery now splits replies into sequential messages of at most 1,500 Unicode characters. For example, a 2,000-character reply is sent as 1,500 characters followed by 500 characters.
-- Long Google Voice replies keep their original text with no `1/2` or `2/2` labels, preserve Unicode safely, stay in order, and stop if a chunk fails instead of skipping ahead.
-- Regression coverage includes Gemini streaming completion, Grok reply fallback, Google Voice chunk boundaries, Unicode preservation, ordering, and failure handling.
+- Grok SMS turns are now bound to the exact browser worker that accepted them. If Grok disconnects or its WebView restarts mid-turn, FlipAi cancels the stale request instead of continuing to send `Grok Chat still working…` indefinitely.
+- Direct Google Voice delivery no longer passes through the older bridge-level numbered-part cap before the 1,500-character transport splitter, so the full model answer reaches the phone even when it needs more than four SMS chunks.
+- Consecutive Google Voice chunks are paced by one second after each confirmed send to avoid later chunks disappearing when the page accepts rapid back-to-back sends too quickly.
+- Existing Gmail/IMAP reply behavior remains unchanged.
+- Regression coverage verifies stale Grok worker cancellation and full direct-Google-Voice delivery without legacy truncation.
 
 Validation: publication is gated by the release workflow's full Linux test suite, real-browser call-flow tests, Windows tests, vet, race tests, Windows build, Google Voice integration, installer install/uninstall smoke tests, Microsoft Defender checks, provenance, checksum, and CycloneDX SBOM generation.
