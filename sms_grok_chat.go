@@ -32,6 +32,16 @@ func parseGrokChatSMSCommand(raw string, cfg Config) (remoteCommand, error) {
 
 type grokChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"` }
 
+// browserReplyEchoesPrompt is a final transport-level safety check. Even if a
+// provider changes its DOM in a way the page driver does not recognize, FlipAi
+// must never send the user's own prompt back as though it were the assistant's
+// answer.
+func browserReplyEchoesPrompt(reply, prompt string) bool {
+	canon := func(s string) string { return strings.Join(strings.Fields(strings.TrimSpace(s)), " ") }
+	r, p := canon(reply), canon(prompt)
+	return r != "" && p != "" && r == p
+}
+
 func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadGrokChatRuntime(dataDir).Connected { return "", errors.New("Grok Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Grok Chat, then try again") }
@@ -46,6 +56,7 @@ func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" { return "", errors.New("Grok Chat returned an empty reply") }
+	if browserReplyEchoesPrompt(out.Reply, prompt) { return "", errors.New("Grok Chat did not produce a fresh assistant reply; FlipAi received the submitted prompt back instead. Reconnect Grok Chat and try again") }
 	return strings.TrimSpace(out.Reply), nil
 }
 
