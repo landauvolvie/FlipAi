@@ -31,6 +31,7 @@ func init() {
 	prepareMuseChatRuntimeForTray(dataDir)
 
 	ctx := context.Background()
+	go runBrowserProfileCleanupSupervisor(ctx, dataDir)
 	go runChatGPTBackgroundSupervisor(ctx, dataDir)
 	go runClaudeChatBackgroundSupervisor(ctx, dataDir)
 	go runGeminiChatBackgroundSupervisor(ctx, dataDir)
