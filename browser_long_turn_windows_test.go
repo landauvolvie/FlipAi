@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +36,19 @@ func TestBrowserTurnValueFromDevToolsRecognizesNinetySecondCheckpoint(t *testing
 	}
 	if value.OK || !browserLongTurnTimeoutDetail(value.Detail) {
 		t.Fatalf("decoded value = %#v, want timeout checkpoint", value)
+	}
+}
+
+func TestBrowserLongTurnSnapshotDoesNotScrapeThoughtOrProgressUI(t *testing.T) {
+	for _, forbidden := range []string{
+		`[role="status"]`,
+		`[aria-live="polite"]`,
+		`[data-testid*="status" i]`,
+		`[class*="progress" i]`,
+		`progressNodes`,
+	} {
+		if strings.Contains(browserLongTurnSnapshotJS, forbidden) {
+			t.Fatalf("long-turn snapshot still scrapes progress UI via %q", forbidden)
+		}
 	}
 }
