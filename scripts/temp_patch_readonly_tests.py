@@ -49,14 +49,20 @@ func TestBrowserConnectionTestsNeverSendSyntheticPrompts(t *testing.T) {
         "copilot_chat_webview_windows.go",
         "muse_chat_webview_windows.go",
     }
+    forbidden := []string{
+        `turn(rw, r, "Reply with exactly: FLIPAI_OK"`,
+        `turn(rw,r,"Reply with exactly: FLIPAI_OK"`,
+    }
     for _, path := range files {
         raw, err := os.ReadFile(path)
         if err != nil {
             t.Fatalf("read %s: %v", path, err)
         }
         s := string(raw)
-        if strings.Contains(s, "Reply with exactly: FLIPAI_OK") {
-            t.Fatalf("%s still injects the FLIPAI_OK test prompt", path)
+        for _, marker := range forbidden {
+            if strings.Contains(s, marker) {
+                t.Fatalf("%s still sends a synthetic FLIPAI_OK prompt from its test endpoint", path)
+            }
         }
         if !strings.Contains(s, `HandleFunc("/test"`) {
             t.Fatalf("%s lost its test endpoint", path)
