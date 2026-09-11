@@ -22,24 +22,20 @@ func TestBrowserLongTurnTimeoutDetail(t *testing.T) {
 	}
 }
 
-func TestSanitizeBrowserProgressOnlyForwardsShortVisibleStatus(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want string
-	}{
-		{"Thinking…", "Thinking…"},
-		{"Some chrome\nGenerating your image", "Generating your image"},
-		{"Finishing up the report", "Finishing up the report"},
-		{"Here is a normal answer with no status language.", ""},
-		{strings.Repeat("Thinking through every private intermediate detail. ", 20), ""},
+func TestBrowserProgressIsNeverForwarded(t *testing.T) {
+	for _, in := range []string{
+		"Thinking…",
+		"Some chrome\nGenerating your image",
+		"Finishing up the report",
+		strings.Repeat("Thinking through every private intermediate detail. ", 20),
 	} {
-		if got := sanitizeBrowserProgress(tc.in); got != tc.want {
-			t.Fatalf("sanitizeBrowserProgress(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := sanitizeBrowserProgress(in); got != "" {
+			t.Fatalf("sanitizeBrowserProgress(%q) = %q, want empty", in, got)
 		}
 	}
 }
 
-func TestWaitForBrowserLongTurnReturnsFinalAndReportsProgress(t *testing.T) {
+func TestWaitForBrowserLongTurnReturnsFinalWithoutProgressCallbacks(t *testing.T) {
 	dataDir := t.TempDir()
 	provider := "G"
 	if err := saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnPending, Progress: "Thinking…"}); err != nil {
@@ -62,8 +58,15 @@ func TestWaitForBrowserLongTurnReturnsFinalAndReportsProgress(t *testing.T) {
 	if reply != "Finished result" {
 		t.Fatalf("reply = %q, want Finished result", reply)
 	}
-	if len(progress) == 0 || progress[0] != "Thinking…" {
-		t.Fatalf("progress updates = %#v, want initial Thinking status", progress)
+	if len(progress) != 0 {
+		t.Fatalf("progress callbacks = %#v, want none", progress)
+	}
+	state, err := loadBrowserLongTurnState(dataDir, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Progress != "" {
+		t.Fatalf("persisted progress = %q, want empty", state.Progress)
 	}
 }
 
