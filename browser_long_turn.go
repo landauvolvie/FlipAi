@@ -14,6 +14,12 @@ const (
 	browserLongTurnPending = "pending"
 	browserLongTurnDone    = "done"
 	browserLongTurnFailed  = "failed"
+
+	// Browser page drivers already wait 90 seconds before handing a turn to the
+	// long-turn tracker. Keep genuinely long work alive, but never let a dead
+	// browser turn pin SMS delivery forever. This is intentionally browser-only;
+	// CLI agents keep their own lifecycle semantics.
+	browserLongTurnMaxWait = 5 * time.Minute
 )
 
 type browserLongTurnState struct {
@@ -123,6 +129,8 @@ func waitForBrowserLongTurn(ctx context.Context, dataDir, provider string, onPro
 	}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	deadline := time.NewTimer(browserLongTurnMaxWait)
+	defer deadline.Stop()
 	for {
 		if state, err := loadBrowserLongTurnState(dataDir, provider); err == nil {
 			switch strings.ToLower(strings.TrimSpace(state.Status)) {
@@ -139,6 +147,10 @@ func waitForBrowserLongTurn(ctx context.Context, dataDir, provider string, onPro
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
+		case <-deadline.C:
+			detail := "the browser model stopped making a verifiable response and did not finish after the extended wait; reconnect this model in FlipAi and try again"
+			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnFailed, Detail: detail})
+			return "", errors.New(detail)
 		case <-ticker.C:
 		}
 	}
