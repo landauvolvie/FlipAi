@@ -254,7 +254,9 @@ func (g *GoogleVoiceSMSClient) SendText(ctx context.Context, to, body string) er
 	if phone == "" {
 		return errors.New("could not determine the Google Voice SMS recipient")
 	}
-	return requestGoogleVoiceText(ctx, g.dataDir, phone, body)
+	return sendGoogleVoiceTextChunks(body, func(chunk string) error {
+		return requestGoogleVoiceText(ctx, g.dataDir, phone, chunk)
+	})
 }
 
 // directReplyIdentity binds a reply to both identities captured from the inbound
@@ -320,7 +322,9 @@ func (g *GoogleVoiceSMSClient) SendReply(ctx context.Context, original GmailMess
 			}
 		}
 	}
-	return requestGoogleVoiceTextThread(ctx, g.dataDir, phone, thread, body)
+	return sendGoogleVoiceTextChunks(body, func(chunk string) error {
+		return requestGoogleVoiceTextThread(ctx, g.dataDir, phone, thread, chunk)
+	})
 }
 
 func directGoogleVoiceSMSID(sender, body string, at time.Time) string {
