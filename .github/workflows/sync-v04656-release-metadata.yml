@@ -11,7 +11,7 @@ jobs:
     if: github.event.head_commit.message != 'Fix explicit new ChatGPT Work sessions and release v0.46.59'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
