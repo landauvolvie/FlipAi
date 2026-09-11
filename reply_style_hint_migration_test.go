@@ -6,8 +6,14 @@ func TestDefaultReplyStyleHintIsEmpty(t *testing.T) {
 	if defaultReplyStyleHint != "" {
 		t.Fatalf("default reply style hint = %q, want empty", defaultReplyStyleHint)
 	}
-	if got := defaultConfig(t.TempDir()).GoogleVoice.ReplyStyleHint; got != "" {
+	cfg := defaultConfig(t.TempDir())
+	if got := cfg.GoogleVoice.ReplyStyleHint; got != "" {
 		t.Fatalf("fresh config reply style hint = %q, want empty", got)
+	}
+	for _, agent := range []string{"C", "A", "G", "H", "M", "X", "P", "U"} {
+		if got := cfg.replyStyleHintFor(agent); got != "" {
+			t.Fatalf("agent %s default instruction = %q, want empty", agent, got)
+		}
 	}
 }
 
