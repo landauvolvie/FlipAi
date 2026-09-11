@@ -121,8 +121,10 @@ func readBrowserLongTurnSnapshot(d voiceDevTools) (browserLongTurnSnapshot, erro
 }
 
 // continueBrowserLongTurn is started only after the provider's legacy 90-second
-// page checkpoint fires. It never has an elapsed-time deadline. The WebView is
-// sampled until the provider visibly finishes or visibly fails. Only final
+// page checkpoint fires. It has no elapsed-time deadline while the provider is
+// visibly working or its final response is still changing. If the page has no
+// working control and makes no response progress for 15 seconds, the turn is
+// failed instead of leaving FlipAi to text "still working" forever. Only final
 // assistant output is retained; intermediate/thought/status text is ignored.
 func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 	provider = browserLongTurnProvider(provider)
@@ -137,6 +139,7 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 	lastReply := ""
 	stable := 0
 	consecutiveControlErrors := 0
+	var idleSince time.Time
 	if snap, err := readBrowserLongTurnSnapshot(d); err == nil && !started {
 		baseline = strings.TrimSpace(snap.Reply)
 	}
@@ -163,12 +166,14 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 		if !seenResponse && reply != "" && reply != baseline {
 			seenResponse = true
 		}
+		replyChanged := false
 		if seenResponse && reply != "" {
 			if reply == lastReply {
 				stable++
 			} else {
 				lastReply = reply
 				stable = 0
+				replyChanged = true
 			}
 		} else {
 			stable = 0
@@ -179,6 +184,24 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 		pendingImage := browserChatReplySuggestsPendingImage(reply)
 		if seenResponse && reply != "" && !snap.Working && !pendingImage && stable >= 2 {
 			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnDone, Reply: reply})
+			return
+		}
+
+		if snap.Working || replyChanged {
+			idleSince = time.Time{}
+			continue
+		}
+		if idleSince.IsZero() {
+			idleSince = time.Now()
+			continue
+		}
+		if time.Since(idleSince) >= 15*time.Second {
+			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{
+				Provider: provider,
+				Status:   browserLongTurnFailed,
+				Reply:    reply,
+				Detail:   "The browser model stopped without producing a final response. Open the model in FlipAi, reconnect if needed, and try again.",
+			})
 			return
 		}
 	}
