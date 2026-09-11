@@ -29,11 +29,14 @@ func TestBrowserProvidersRemainIndependentWhenOneSiteIsFiltered(t *testing.T) {
 			t.Fatalf("read %s: %v", p.file, err)
 		}
 		s := string(raw)
+		compact := strings.ReplaceAll(s, " ", "")
+		if !strings.Contains(compact, `net.Listen("tcp","127.0.0.1:0")`) {
+			t.Fatalf("%s lost provider-isolation loopback binding", p.file)
+		}
 		for _, want := range []string{
 			p.profile,
 			p.worker,
 			p.mutate,
-			`net.Listen("tcp", "127.0.0.1:0")`,
 			`X-FlipAi-Token`,
 		} {
 			if !strings.Contains(s, want) {
