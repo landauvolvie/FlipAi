@@ -158,7 +158,22 @@ const chatGPTTurnJS = `(async(input)=>{
     .replace(/Unable to display this message due to an error\.?\s*Reload the page to try again\.?/gi,' ')
     .replace(/Unable to display this message due to an error\.?/gi,' ')
     .replace(/\s+/g,' ').trim();
-  const text=n=>clean(n&&n.innerText||n&&n.textContent||'');
+  const text=n=>{
+    if(!n)return '';
+    // ChatGPT renders the normal written answer in a Markdown subtree and rich
+    // cards/widgets as sibling UI. SMS must carry the written answer, not the
+    // widget's accessibility/visual text (weather grids, charts, controls, etc.).
+    const prose=n.querySelector&&n.querySelector('.markdown');
+    if(prose)return clean(prose.innerText||prose.textContent||'');
+    // Keep a defensive fallback for alternate layouts, but strip common rich UI
+    // containers and interactive controls before reading the assistant wrapper.
+    const clone=n.cloneNode&&n.cloneNode(true);
+    if(clone&&clone.querySelectorAll){
+      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i]').forEach(el=>el.remove());
+      return clean(clone.innerText||clone.textContent||'');
+    }
+    return clean(n.innerText||n.textContent||'');
+  };
   const users=()=>Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
   const assistants=()=>Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
   const composer=()=>document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"]');
