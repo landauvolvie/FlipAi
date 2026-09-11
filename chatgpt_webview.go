@@ -290,48 +290,20 @@ func (a *App) chatGPTConnect(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) chatGPTTest(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	chatGPTActivity(a.dataDir, "info", "chatgpt-test", "Starting an end-to-end ChatGPT test turn in the dedicated browser session.", 0)
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
-	s, err := ensureChatGPTReady(ctx, a.dataDir)
+	// A connection test must be read-only. Older builds created a real
+	// conversation containing "Reply with exactly: FLIPAI_OK", which polluted
+	// the user's history and could occupy the SMS queue. Readiness is already
+	// proven by the authenticated /health probe in ensureChatGPTReady.
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	_, err := ensureChatGPTReady(ctx, a.dataDir)
 	cancel()
 	if err != nil {
 		chatGPTActivity(a.dataDir, "error", "chatgpt-test", "ChatGPT background session did not become signed in and ready: "+err.Error(), time.Since(started))
 		renderResult(w, r, 500, false, "ChatGPT background session is not ready", err.Error())
 		return
 	}
-	chatGPTActivity(a.dataDir, "info", "chatgpt-session", "ChatGPT background session is signed in and ready for the test turn.", time.Since(started))
-	ctx, cancel = context.WithTimeout(r.Context(), 100*time.Second)
-	b, code, err := chatGPTControlRequest(ctx, s, http.MethodPost, "/test", strings.NewReader(`{}`))
-	cancel()
-	if err != nil {
-		chatGPTActivity(a.dataDir, "error", "chatgpt-test", "ChatGPT test transport failed: "+err.Error(), time.Since(started))
-		renderResult(w, r, 500, false, "ChatGPT test failed", err.Error())
-		return
-	}
-	var out struct {
-		OK             bool   `json:"ok"`
-		Reply          string `json:"reply"`
-		ConversationID string `json:"conversationId"`
-		Detail         string `json:"detail"`
-	}
-	_ = json.Unmarshal(b, &out)
-	if code != http.StatusOK || !out.OK {
-		if out.Detail == "" {
-			out.Detail = strings.TrimSpace(string(b))
-		}
-		chatGPTActivity(a.dataDir, "error", "chatgpt-test", "ChatGPT rejected or could not complete the test turn: "+truncate(out.Detail, 300), time.Since(started))
-		renderResult(w, r, 500, false, "ChatGPT test failed", out.Detail)
-		return
-	}
-	chatGPTActivity(a.dataDir, "info", "chatgpt-test", "ChatGPT completed a real test turn successfully; conversation id was captured.", time.Since(started))
-	message := "ChatGPT returned a real response through FlipAi's dedicated browser session."
-	if out.ConversationID != "" {
-		message += "\nConversation: " + out.ConversationID
-	}
-	if strings.TrimSpace(out.Reply) != "" {
-		message += "\nReply: " + strings.TrimSpace(out.Reply)
-	}
-	renderResult(w, r, 200, true, "ChatGPT is working", message)
+	chatGPTActivity(a.dataDir, "info", "chatgpt-test", "ChatGPT connection test verified a live signed-in browser without sending a message.", time.Since(started))
+	renderResult(w, r, 200, true, "ChatGPT is working", "FlipAi verified that the dedicated ChatGPT browser is live, signed in, and ready. No test message was sent to ChatGPT.")
 }
 
 func (a *App) chatGPTChat(w http.ResponseWriter, r *http.Request) {

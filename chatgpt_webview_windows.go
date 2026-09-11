@@ -688,7 +688,19 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
 			return
 		}
-		turn(rw, r, "Reply with exactly: FLIPAI_OK", true, browserModeChat)
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		if !chatGPTPageIsSignedIn(dev) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT is not signed in inside FlipAi."})
+			return
+		}
+		mutateChatGPTRuntime(dataDir, func(s *ChatGPTWebRuntime) {
+			s.Connected, s.SignedIn, s.LastEvent, s.LastError = true, true, "health-check-ok", ""
+		})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "detail": "signed-in browser session ready"})
 	})
 	mux.HandleFunc("/chat", func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

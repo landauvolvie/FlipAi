@@ -155,14 +155,26 @@ type claudeChatTurnResult struct {
 }
 
 func claudeChatEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
-	if d == nil { return errors.New("the Claude Chat WebView has no in-process control channel") }
+	if d == nil {
+		return errors.New("the Claude Chat WebView has no in-process control channel")
+	}
 	var got voiceDevToolsEval
 	params := map[string]any{"expression": expression, "returnByValue": true, "awaitPromise": awaitPromise}
-	if err := d.Call("Runtime.evaluate", params, &got); err != nil { return fmt.Errorf("the Claude Chat WebView did not answer Runtime.evaluate: %w", err) }
-	if len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" { return errors.New("the Claude page script failed") }
-	if out == nil { return nil }
-	if len(got.Result.Value) == 0 { return errors.New("the Claude page returned no value") }
-	if err := json.Unmarshal(got.Result.Value, out); err != nil { return fmt.Errorf("the Claude page returned an unreadable value: %w", err) }
+	if err := d.Call("Runtime.evaluate", params, &got); err != nil {
+		return fmt.Errorf("the Claude Chat WebView did not answer Runtime.evaluate: %w", err)
+	}
+	if len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
+		return errors.New("the Claude page script failed")
+	}
+	if out == nil {
+		return nil
+	}
+	if len(got.Result.Value) == 0 {
+		return errors.New("the Claude page returned no value")
+	}
+	if err := json.Unmarshal(got.Result.Value, out); err != nil {
+		return fmt.Errorf("the Claude page returned an unreadable value: %w", err)
+	}
 	return nil
 }
 
@@ -174,7 +186,9 @@ func claudeChatPageIsSignedIn(d voiceDevTools) bool {
 func waitForClaudeChatPageSignedIn(d voiceDevTools, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if claudeChatPageIsSignedIn(d) { return true }
+		if claudeChatPageIsSignedIn(d) {
+			return true
+		}
 		time.Sleep(250 * time.Millisecond)
 	}
 	return false
@@ -184,10 +198,18 @@ func platformStartClaudeChatLogin(dataDir string) error {
 	_ = platformStopClaudeChatWorker(dataDir)
 	waitForClaudeChatStopped(dataDir, 4*time.Second)
 	mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
-		s.LoginActive = true; s.Starting = true; s.Running = false; s.Visible = false; s.SignedIn = false; s.LastEvent = "sign-in-window-starting"; s.LastError = ""
+		s.LoginActive = true
+		s.Starting = true
+		s.Running = false
+		s.Visible = false
+		s.SignedIn = false
+		s.LastEvent = "sign-in-window-starting"
+		s.LastError = ""
 	})
 	exe, err := os.Executable()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(exe, "--claude-chat-login")
 	if err := cmd.Start(); err != nil {
 		mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) { s.LoginActive = false; s.Starting = false; s.LastError = err.Error() })
@@ -199,18 +221,36 @@ func platformStartClaudeChatLogin(dataDir string) error {
 
 func platformEnsureClaudeChatWorker(dataDir string) error {
 	s := loadClaudeChatRuntime(dataDir)
-	if s.LoginActive && (s.Running || s.Starting) { return nil }
-	if s.Running && s.ControlPort > 0 && s.ControlToken != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond); defer cancel()
-		if _, code, err := claudeChatControlRequest(ctx, s, http.MethodGet, "/health", nil); err == nil && code == http.StatusOK { return nil }
+	if s.LoginActive && (s.Running || s.Starting) {
+		return nil
 	}
-	if s.Starting && time.Since(s.UpdatedAt) < 10*time.Second { return nil }
+	if s.Running && s.ControlPort > 0 && s.ControlToken != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+		defer cancel()
+		if _, code, err := claudeChatControlRequest(ctx, s, http.MethodGet, "/health", nil); err == nil && code == http.StatusOK {
+			return nil
+		}
+	}
+	if s.Starting && time.Since(s.UpdatedAt) < 10*time.Second {
+		return nil
+	}
 	mutateClaudeChatRuntime(dataDir, func(v *ClaudeChatWebRuntime) {
-		v.Starting = true; v.LoginActive = false; v.Running = false; v.Visible = false; v.SignedIn = false; v.ControlPort = 0; v.ControlToken = ""; v.LastEvent = "background-starting"; v.LastError = ""
+		v.Starting = true
+		v.LoginActive = false
+		v.Running = false
+		v.Visible = false
+		v.SignedIn = false
+		v.ControlPort = 0
+		v.ControlToken = ""
+		v.LastEvent = "background-starting"
+		v.LastError = ""
 	})
 	exe, err := os.Executable()
-	if err != nil { return err }
-	cmd := exec.Command(exe, "--claude-chat-worker"); hideWindow(cmd)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, "--claude-chat-worker")
+	hideWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		mutateClaudeChatRuntime(dataDir, func(v *ClaudeChatWebRuntime) { v.Starting = false; v.LastError = err.Error() })
 		return err
@@ -221,60 +261,154 @@ func platformEnsureClaudeChatWorker(dataDir string) error {
 
 func platformStopClaudeChatWorker(dataDir string) error {
 	s := loadClaudeChatRuntime(dataDir)
-	for i := 0; i < 20 && s.ControlPort < 1 && s.Starting; i++ { time.Sleep(100 * time.Millisecond); s = loadClaudeChatRuntime(dataDir) }
+	for i := 0; i < 20 && s.ControlPort < 1 && s.Starting; i++ {
+		time.Sleep(100 * time.Millisecond)
+		s = loadClaudeChatRuntime(dataDir)
+	}
 	if s.ControlPort < 1 || s.ControlToken == "" {
-		mutateClaudeChatRuntime(dataDir, func(v *ClaudeChatWebRuntime) { v.Running = false; v.Starting = false; v.Visible = false; v.LoginActive = false; v.SignedIn = false; v.ControlPort = 0; v.ControlToken = "" })
+		mutateClaudeChatRuntime(dataDir, func(v *ClaudeChatWebRuntime) {
+			v.Running = false
+			v.Starting = false
+			v.Visible = false
+			v.LoginActive = false
+			v.SignedIn = false
+			v.ControlPort = 0
+			v.ControlToken = ""
+		})
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second); defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	_, _, err := claudeChatControlRequest(ctx, s, http.MethodPost, "/stop", strings.NewReader(`{}`))
-	if err != nil { mutateClaudeChatRuntime(dataDir, func(v *ClaudeChatWebRuntime) { v.Running = false; v.Starting = false; v.Visible = false; v.LoginActive = false; v.SignedIn = false; v.ControlPort = 0; v.ControlToken = "" }) }
+	if err != nil {
+		mutateClaudeChatRuntime(dataDir, func(v *ClaudeChatWebRuntime) {
+			v.Running = false
+			v.Starting = false
+			v.Visible = false
+			v.LoginActive = false
+			v.SignedIn = false
+			v.ControlPort = 0
+			v.ControlToken = ""
+		})
+	}
 	return err
 }
 
 func runClaudeChatWebView(dataDir string, visible bool) error {
-	runtime.LockOSThread(); defer runtime.UnlockOSThread()
-	if err := os.MkdirAll(claudeChatProfilePath(dataDir), 0700); err != nil { return err }
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := os.MkdirAll(claudeChatProfilePath(dataDir), 0700); err != nil {
+		return err
+	}
 	opts := webview2.WebViewOptions{Debug: false, AutoFocus: visible, DataPath: claudeChatProfilePath(dataDir), WindowOptions: webview2.WindowOptions{Title: "Connect Claude to FlipAi", Width: 1120, Height: 820, Center: visible}}
 	if !visible {
-		opts.WindowOptions.Center = false; opts.WindowOptions.Position = true; opts.WindowOptions.X = -30000; opts.WindowOptions.Y = -30000; opts.WindowOptions.ExStyle = wsExToolWin | wsExNoActivate; opts.WindowOptions.NoActivate = true
+		opts.WindowOptions.Center = false
+		opts.WindowOptions.Position = true
+		opts.WindowOptions.X = -30000
+		opts.WindowOptions.Y = -30000
+		opts.WindowOptions.ExStyle = wsExToolWin | wsExNoActivate
+		opts.WindowOptions.NoActivate = true
 	}
 	w := webview2.NewWithOptions(opts)
-	if w == nil { return errors.New("Microsoft Edge WebView2 Runtime could not create the Claude browser") }
-	defer w.Destroy(); applyFlipAiWindowIcon(uintptr(w.Window())); w.SetSize(800, 600, webview2.HintMin)
-	initial := loadClaudeChatRuntime(dataDir); wasSignedIn := false; hadConnected := initial.Connected
+	if w == nil {
+		return errors.New("Microsoft Edge WebView2 Runtime could not create the Claude browser")
+	}
+	defer w.Destroy()
+	applyFlipAiWindowIcon(uintptr(w.Window()))
+	w.SetSize(800, 600, webview2.HintMin)
+	initial := loadClaudeChatRuntime(dataDir)
+	wasSignedIn := false
+	hadConnected := initial.Connected
 	_ = w.Bind("flipClaudeChatStatus", func(signedIn bool, href string) {
 		changed := signedIn != wasSignedIn
 		mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
-			s.Running = true; s.Starting = false; s.Visible = visible; s.LoginActive = visible; s.SignedIn = signedIn; s.LastURL = href
-			if signedIn { s.Connected = true; s.LastError = ""; if changed || strings.Contains(s.LastEvent, "starting") { s.LastEvent = "session-ready" } } else if changed || strings.Contains(s.LastEvent, "starting") { if s.Connected { s.LastEvent = "session-restoring" } else { s.LastEvent = "waiting-for-sign-in" } }
+			s.Running = true
+			s.Starting = false
+			s.Visible = visible
+			s.LoginActive = visible
+			s.SignedIn = signedIn
+			s.LastURL = href
+			if signedIn {
+				s.Connected = true
+				s.LastError = ""
+				if changed || strings.Contains(s.LastEvent, "starting") {
+					s.LastEvent = "session-ready"
+				}
+			} else if changed || strings.Contains(s.LastEvent, "starting") {
+				if s.Connected {
+					s.LastEvent = "session-restoring"
+				} else {
+					s.LastEvent = "waiting-for-sign-in"
+				}
+			}
 		})
 		if signedIn && !wasSignedIn {
-			if hadConnected { claudeChatActivity(dataDir, "info", "claude-chat-session", "Saved Claude sign-in was restored.", 0) } else { claudeChatActivity(dataDir, "info", "claude-chat-session", "Claude sign-in was verified and saved in FlipAi's dedicated profile.", 0); hadConnected = true }
+			if hadConnected {
+				claudeChatActivity(dataDir, "info", "claude-chat-session", "Saved Claude sign-in was restored.", 0)
+			} else {
+				claudeChatActivity(dataDir, "info", "claude-chat-session", "Claude sign-in was verified and saved in FlipAi's dedicated profile.", 0)
+				hadConnected = true
+			}
 		}
 		wasSignedIn = signedIn
 	})
 	w.Init(claudeChatPageMonitorJS)
-	dev := newWebViewDevTools(w); port, closer := startClaudeChatControlEndpoint(dataDir, w, dev); if closer != nil { defer closer.Close() }
-	mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) { s.Running = true; s.Starting = false; s.Visible = visible; s.LoginActive = visible; s.ControlPort = port; s.SignedIn = false; s.LastEvent = "browser-starting"; s.LastError = "" })
-	w.Navigate(claudeChatWebURL); w.Run()
+	dev := newWebViewDevTools(w)
+	port, closer := startClaudeChatControlEndpoint(dataDir, w, dev)
+	if closer != nil {
+		defer closer.Close()
+	}
 	mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
-		s.Running = false; s.Starting = false; s.Visible = false; s.LoginActive = false; s.SignedIn = false; s.ControlPort = 0; s.ControlToken = ""
-		if s.Connected { s.LastEvent = "background-restart-pending" } else { s.LastEvent = "browser-closed" }
+		s.Running = true
+		s.Starting = false
+		s.Visible = visible
+		s.LoginActive = visible
+		s.ControlPort = port
+		s.SignedIn = false
+		s.LastEvent = "browser-starting"
+		s.LastError = ""
+	})
+	w.Navigate(claudeChatWebURL)
+	w.Run()
+	mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
+		s.Running = false
+		s.Starting = false
+		s.Visible = false
+		s.LoginActive = false
+		s.SignedIn = false
+		s.ControlPort = 0
+		s.ControlToken = ""
+		if s.Connected {
+			s.LastEvent = "background-restart-pending"
+		} else {
+			s.LastEvent = "browser-closed"
+		}
 	})
 	return nil
 }
 
 func startClaudeChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceDevTools) (int, io.Closer) {
-	if dev == nil { return 0, nil }
-	ln, err := net.Listen("tcp", "127.0.0.1:0"); if err != nil { return 0, nil }
-	token, err := secureRandomToken(24); if err != nil { _ = ln.Close(); return 0, nil }
+	if dev == nil {
+		return 0, nil
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, nil
+	}
+	token, err := secureRandomToken(24)
+	if err != nil {
+		_ = ln.Close()
+		return 0, nil
+	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) { s.ControlToken = token; s.ControlPort = port })
 	authorized := func(r *http.Request) bool { return token != "" && r.Header.Get("X-FlipAi-Token") == token }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(rw http.ResponseWriter, r *http.Request) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "signedIn": claudeChatPageIsSignedIn(dev)})
 	})
 
@@ -283,79 +417,210 @@ func startClaudeChatControlEndpoint(dataDir string, w webview2.WebView, dev voic
 		return claudeChatEval(dev, fmt.Sprintf(`(()=>{location.href=%s;return true})()`, claudeChatJSString(url)), false, &ignored)
 	}
 	prepareMode := func(mode string) claudeChatTurnResult {
-		mode = strings.ToLower(strings.TrimSpace(mode)); if mode == "" { mode = browserModeChat }
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if mode == "" {
+			mode = browserModeChat
+		}
 		if mode == browserModeCode {
-			if err := navigate("https://claude.ai/code"); err != nil { return claudeChatTurnResult{OK: false, Detail: "FlipAi could not open Claude Code web: " + err.Error()} }
-			if !waitForClaudeChatPageSignedIn(dev, 35*time.Second) { return claudeChatTurnResult{OK: false, Detail: "Claude Code web did not become ready. Confirm that Claude is signed in and that Claude Code web is available for this account."} }
+			if err := navigate("https://claude.ai/code"); err != nil {
+				return claudeChatTurnResult{OK: false, Detail: "FlipAi could not open Claude Code web: " + err.Error()}
+			}
+			if !waitForClaudeChatPageSignedIn(dev, 35*time.Second) {
+				return claudeChatTurnResult{OK: false, Detail: "Claude Code web did not become ready. Confirm that Claude is signed in and that Claude Code web is available for this account."}
+			}
 			return claudeChatTurnResult{OK: true}
 		}
-		if mode != browserModeChat && mode != browserModeCowork { return claudeChatTurnResult{OK: false, Detail: "unsupported Claude browser mode: " + mode} }
+		if mode != browserModeChat && mode != browserModeCowork {
+			return claudeChatTurnResult{OK: false, Detail: "unsupported Claude browser mode: " + mode}
+		}
 		var path string
 		_ = claudeChatEval(dev, `location.pathname`, false, &path)
 		if mode == browserModeCowork || strings.HasPrefix(strings.ToLower(path), "/code") || strings.Contains(strings.ToLower(path), "cowork") && mode == browserModeChat {
-			if err := navigate("https://claude.ai/new"); err != nil { return claudeChatTurnResult{OK: false, Detail: err.Error()} }
-			if !waitForClaudeChatPageSignedIn(dev, 30*time.Second) { return claudeChatTurnResult{OK: false, Detail: "Claude home did not become ready while selecting " + mode + " mode."} }
+			if err := navigate("https://claude.ai/new"); err != nil {
+				return claudeChatTurnResult{OK: false, Detail: err.Error()}
+			}
+			if !waitForClaudeChatPageSignedIn(dev, 30*time.Second) {
+				return claudeChatTurnResult{OK: false, Detail: "Claude home did not become ready while selecting " + mode + " mode."}
+			}
 		}
-		expr := fmt.Sprintf(claudeSelectHomeModeJS, claudeChatJSString(mode)); var got claudeChatTurnResult
-		if err := claudeChatEval(dev, expr, true, &got); err != nil { return claudeChatTurnResult{OK: false, Detail: "FlipAi could not switch the Claude experience: " + err.Error()} }
+		expr := fmt.Sprintf(claudeSelectHomeModeJS, claudeChatJSString(mode))
+		var got claudeChatTurnResult
+		if err := claudeChatEval(dev, expr, true, &got); err != nil {
+			return claudeChatTurnResult{OK: false, Detail: "FlipAi could not switch the Claude experience: " + err.Error()}
+		}
 		return got
 	}
 
 	turn := func(rw http.ResponseWriter, r *http.Request, prompt string, newChat bool, mode string) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
-		if newChat { if err := navigate("https://claude.ai/new"); err != nil { rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()}); return } }
-		if !waitForClaudeChatPageSignedIn(dev, 25*time.Second) { rw.WriteHeader(http.StatusUnauthorized); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Claude is not signed in inside FlipAi. Press Connect and complete sign-in first."}); return }
-		mode = strings.ToLower(strings.TrimSpace(mode)); if mode == "" { mode = browserModeChat }
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		if newChat {
+			if err := navigate("https://claude.ai/new"); err != nil {
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+				return
+			}
+		}
+		if !waitForClaudeChatPageSignedIn(dev, 25*time.Second) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Claude is not signed in inside FlipAi. Press Connect and complete sign-in first."})
+			return
+		}
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if mode == "" {
+			mode = browserModeChat
+		}
 		prepared := prepareMode(mode)
-		if !prepared.OK { rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": prepared.Detail}); return }
+		if !prepared.OK {
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": prepared.Detail})
+			return
+		}
 		var got claudeChatTurnResult
 		var expr string
-		if mode == browserModeCode { expr = fmt.Sprintf(claudeCodeStartJS, claudeChatJSString(prompt)) } else { expr = fmt.Sprintf(claudeChatTurnJS, claudeChatJSString(prompt)) }
-		if err := claudeChatEval(dev, expr, true, &got); err != nil { rw.WriteHeader(http.StatusInternalServerError); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the Claude page driver: " + err.Error()}); return }
+		if mode == browserModeCode {
+			expr = fmt.Sprintf(claudeCodeStartJS, claudeChatJSString(prompt))
+		} else {
+			expr = fmt.Sprintf(claudeChatTurnJS, claudeChatJSString(prompt))
+		}
+		if err := claudeChatEval(dev, expr, true, &got); err != nil {
+			rw.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the Claude page driver: " + err.Error()})
+			return
+		}
 		cid := claudeChatConversationID(got.Href)
 		mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
-			s.Connected = true; s.SignedIn = true; s.LastURL = got.Href; s.ConversationID = cid
-			if got.OK { s.LastEvent = "turn-complete"; s.LastError = "" } else { s.LastEvent = "turn-failed"; s.LastError = got.Detail }
+			s.Connected = true
+			s.SignedIn = true
+			s.LastURL = got.Href
+			s.ConversationID = cid
+			if got.OK {
+				s.LastEvent = "turn-complete"
+				s.LastError = ""
+			} else {
+				s.LastEvent = "turn-failed"
+				s.LastError = got.Detail
+			}
 		})
-		status := http.StatusOK; if !got.OK { status = http.StatusBadGateway }
-		rw.WriteHeader(status); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
+		status := http.StatusOK
+		if !got.OK {
+			status = http.StatusBadGateway
+		}
+		rw.WriteHeader(status)
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
 	}
 
 	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
-		var body struct{ Mode string `json:"mode"` }; _ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&body)
-		if err := navigate("https://claude.ai/new"); err != nil { rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()}); return }
-		if !waitForClaudeChatPageSignedIn(dev, 45*time.Second) { rw.WriteHeader(http.StatusUnauthorized); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Claude did not restore the saved sign-in after opening a new chat"}); return }
-		prepared := prepareMode(body.Mode); if !prepared.OK { rw.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": prepared.Detail}); return }
-		mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) { s.Connected = true; s.SignedIn = true; s.ConversationID = ""; s.LastEvent = "new-chat-ready"; s.LastError = "" })
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&body)
+		if err := navigate("https://claude.ai/new"); err != nil {
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		if !waitForClaudeChatPageSignedIn(dev, 45*time.Second) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Claude did not restore the saved sign-in after opening a new chat"})
+			return
+		}
+		prepared := prepareMode(body.Mode)
+		if !prepared.OK {
+			rw.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": prepared.Detail})
+			return
+		}
+		mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
+			s.Connected = true
+			s.SignedIn = true
+			s.ConversationID = ""
+			s.LastEvent = "new-chat-ready"
+			s.LastError = ""
+		})
 		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/test", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		turn(rw, r, "Reply with exactly: FLIPAI_OK", true, browserModeChat)
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		if !claudeChatPageIsSignedIn(dev) {
+			rw.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Claude Chat is not signed in inside FlipAi."})
+			return
+		}
+		mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
+			s.Connected, s.SignedIn, s.LastEvent, s.LastError = true, true, "health-check-ok", ""
+		})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "detail": "signed-in browser session ready"})
 	})
 	mux.HandleFunc("/chat", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { http.Error(rw, "POST required", http.StatusMethodNotAllowed); return }
-		var body struct { Prompt string `json:"prompt"`; New bool `json:"new"`; Mode string `json:"mode"` }
-		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&body); err != nil { http.Error(rw, err.Error(), http.StatusBadRequest); return }
-		body.Prompt = strings.TrimSpace(body.Prompt); if body.Prompt == "" { http.Error(rw, "prompt required", http.StatusBadRequest); return }
+		if r.Method != http.MethodPost {
+			http.Error(rw, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Prompt string `json:"prompt"`
+			New    bool   `json:"new"`
+			Mode   string `json:"mode"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&body); err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+		body.Prompt = strings.TrimSpace(body.Prompt)
+		if body.Prompt == "" {
+			http.Error(rw, "prompt required", http.StatusBadRequest)
+			return
+		}
 		turn(rw, r, body.Prompt, body.New, body.Mode)
 	})
 	mux.HandleFunc("/stop", func(rw http.ResponseWriter, r *http.Request) {
-		if !authorized(r) { http.Error(rw, "FlipAi token required", http.StatusForbidden); return }
-		_ = json.NewEncoder(rw).Encode(map[string]bool{"ok": true}); go func() { time.Sleep(80 * time.Millisecond); w.Terminate() }()
+		if !authorized(r) {
+			http.Error(rw, "FlipAi token required", http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(rw).Encode(map[string]bool{"ok": true})
+		go func() { time.Sleep(80 * time.Millisecond); w.Terminate() }()
 	})
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 4 * time.Second, WriteTimeout: 115 * time.Second}; go func() { _ = server.Serve(ln) }()
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 4 * time.Second, WriteTimeout: 115 * time.Second}
+	go func() { _ = server.Serve(ln) }()
 	return port, server
 }
 
 func recordClaudeChatWorkerError(dataDir string, err error) {
-	if err == nil { return }
-	mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) { s.Running = false; s.Starting = false; s.Visible = false; s.LoginActive = false; s.SignedIn = false; s.LastEvent = "browser-error"; s.LastError = err.Error() })
+	if err == nil {
+		return
+	}
+	mutateClaudeChatRuntime(dataDir, func(s *ClaudeChatWebRuntime) {
+		s.Running = false
+		s.Starting = false
+		s.Visible = false
+		s.LoginActive = false
+		s.SignedIn = false
+		s.LastEvent = "browser-error"
+		s.LastError = err.Error()
+	})
 	claudeChatActivity(dataDir, "error", "claude-chat-session", "Claude browser stopped with an error: "+err.Error(), 0)
 }
 
 func claudeChatWorkerMain(dataDir string, visible bool) {
-	if err := runClaudeChatWebView(dataDir, visible); err != nil { recordClaudeChatWorkerError(dataDir, err) }
+	if err := runClaudeChatWebView(dataDir, visible); err != nil {
+		recordClaudeChatWorkerError(dataDir, err)
+	}
 }

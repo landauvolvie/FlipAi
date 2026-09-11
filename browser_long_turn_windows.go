@@ -57,7 +57,7 @@ type browserTurnResultValue struct {
 
 // browserTurnValueFromDevTools unwraps Runtime.evaluate's protocol envelope and
 // then the page script's JSON value. This is deliberately provider-neutral: all
-// five browser drivers return the same ok/reply/detail/href shape.
+// browser drivers return the same ok/reply/detail/href shape.
 func browserTurnValueFromDevTools(raw string) (browserTurnResultValue, bool) {
 	var envelope struct {
 		Result struct {
@@ -74,6 +74,10 @@ func browserTurnValueFromDevTools(raw string) (browserTurnResultValue, bool) {
 	return value, true
 }
 
+// This snapshot deliberately reads only final assistant output and provider
+// failure/busy state. It must never inspect aria-live/status/progress UI because
+// those nodes routinely contain model thinking, tool status, confirmation-card
+// controls, and other transient text that must not be forwarded to the phone.
 const browserLongTurnSnapshotJS = `/*` + browserLongTurnSnapshotMarker + `*/(()=>{
   const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};
   const visible=n=>{if(!n)return false;const r=n.getBoundingClientRect?.();if(r&&r.width<=0&&r.height<=0)return false;const s=getComputedStyle(n);return s.display!=='none'&&s.visibility!=='hidden'};
@@ -91,21 +95,18 @@ const browserLongTurnSnapshotJS = `/*` + browserLongTurnSnapshotMarker + `*/(()=
   const controls=all('button,[role="button"]');
   const ctl=n=>((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+text(n)).toLowerCase();
   const working=controls.some(n=>/\b(stop|cancel generation|cancel response|cancel task)\b/.test(ctl(n)));
-  const progressNodes=[...all('[role="status"]'),...all('[aria-live="polite"]'),...all('[data-testid*="status" i]'),...all('[data-test-id*="status" i]'),...all('[class*="progress" i]')];
-  let progress='';for(let i=progressNodes.length-1;i>=0;i--){const t=text(progressNodes[i]);if(t&&t.length<=500){progress=t;break}}
   const errorNodes=[...all('[role="alert"]'),...all('[aria-live="assertive"]'),...all('[data-testid*="error" i]'),...all('[data-test-id*="error" i]'),...all('[class*="error-message" i]')];
   let failure='';
   const failureRE=/(something went wrong|network error|connection (?:was )?(?:lost|failed)|failed to (?:respond|generate|complete|send)|response failed|generation failed|task failed|server error|service unavailable|try again)/i;
   for(let i=errorNodes.length-1;i>=0;i--){const t=text(errorNodes[i]);if(t&&t.length<=500&&failureRE.test(t)){failure=t;break}}
-  return {reply,progress,working,failure,href:String(location.href||'')};
+  return {reply,working,failure,href:String(location.href||'')};
 })()`
 
 type browserLongTurnSnapshot struct {
-	Reply    string `json:"reply"`
-	Progress string `json:"progress"`
-	Working  bool   `json:"working"`
-	Failure  string `json:"failure"`
-	Href     string `json:"href"`
+	Reply   string `json:"reply"`
+	Working bool   `json:"working"`
+	Failure string `json:"failure"`
+	Href    string `json:"href"`
 }
 
 func readBrowserLongTurnSnapshot(d voiceDevTools) (browserLongTurnSnapshot, error) {
@@ -120,10 +121,11 @@ func readBrowserLongTurnSnapshot(d voiceDevTools) (browserLongTurnSnapshot, erro
 }
 
 // continueBrowserLongTurn is started only after the provider's legacy 90-second
-// page checkpoint fires. It never has an elapsed-time deadline. The WebView is
-// sampled until the provider visibly finishes or visibly fails. This lets Work,
-// deep research, image creation and other long tasks run for as long as the
-// provider itself keeps them alive.
+// page checkpoint fires. It has no elapsed-time deadline while the provider is
+// visibly working or its final response is still changing. If the page has no
+// working control and makes no response progress for 15 seconds, the turn is
+// failed instead of leaving FlipAi to text "still working" forever. Only final
+// assistant output is retained; intermediate/thought/status text is ignored.
 func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 	provider = browserLongTurnProvider(provider)
 	dataDir := browserLongTurnDataDir()
@@ -137,13 +139,9 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 	lastReply := ""
 	stable := 0
 	consecutiveControlErrors := 0
-	if snap, err := readBrowserLongTurnSnapshot(d); err == nil {
-		if !started {
-			baseline = strings.TrimSpace(snap.Reply)
-		}
-		if p := sanitizeBrowserProgress(snap.Progress); p != "" {
-			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnPending, Progress: p})
-		}
+	var idleSince time.Time
+	if snap, err := readBrowserLongTurnSnapshot(d); err == nil && !started {
+		baseline = strings.TrimSpace(snap.Reply)
 	}
 
 	ticker := time.NewTicker(time.Second)
@@ -165,19 +163,17 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 		}
 
 		reply := strings.TrimSpace(snap.Reply)
-		progress := sanitizeBrowserProgress(snap.Progress)
-		if progress != "" {
-			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnPending, Reply: reply, Progress: progress})
-		}
 		if !seenResponse && reply != "" && reply != baseline {
 			seenResponse = true
 		}
+		replyChanged := false
 		if seenResponse && reply != "" {
 			if reply == lastReply {
 				stable++
 			} else {
 				lastReply = reply
 				stable = 0
+				replyChanged = true
 			}
 		} else {
 			stable = 0
@@ -187,7 +183,25 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 		// control temporarily disappears while the image tool swaps UI states.
 		pendingImage := browserChatReplySuggestsPendingImage(reply)
 		if seenResponse && reply != "" && !snap.Working && !pendingImage && stable >= 2 {
-			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnDone, Reply: reply, Progress: progress})
+			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnDone, Reply: reply})
+			return
+		}
+
+		if snap.Working || replyChanged {
+			idleSince = time.Time{}
+			continue
+		}
+		if idleSince.IsZero() {
+			idleSince = time.Now()
+			continue
+		}
+		if time.Since(idleSince) >= 15*time.Second {
+			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{
+				Provider: provider,
+				Status:   browserLongTurnFailed,
+				Reply:    reply,
+				Detail:   "The browser model stopped without producing a final response. Open the model in FlipAi, reconnect if needed, and try again.",
+			})
 			return
 		}
 	}

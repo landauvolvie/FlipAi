@@ -20,8 +20,13 @@ func TestBrowserControlEndpointsStayPrivate(t *testing.T) {
 				t.Fatal(err)
 			}
 			text := string(raw)
+			// Formatting is irrelevant to this invariant. Normalizing spaces keeps
+			// the security regression test focused on the actual loopback bind.
+			compact := strings.ReplaceAll(text, " ", "")
+			if !strings.Contains(compact, `net.Listen("tcp","127.0.0.1:0")`) {
+				t.Fatalf("%s lost browser-control loopback binding", path)
+			}
 			for _, want := range []string{
-				`net.Listen("tcp", "127.0.0.1:0")`,
 				`secureRandomToken(24)`,
 				`Header.Get("X-FlipAi-Token")`,
 				`http.MaxBytesReader`,

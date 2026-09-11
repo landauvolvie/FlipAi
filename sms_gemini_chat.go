@@ -59,8 +59,7 @@ type geminiChatSMSReply struct {
 // cleanGeminiChatReply removes Gemini's accessibility-only speaker label from
 // the extracted DOM text. Gemini visually renders only the answer, but its
 // response container can expose text such as "Gemini said Hello" to assistive
-// technology. That label is page chrome, not part of the model's reply, so it
-// must not be forwarded to SMS.
+// technology. That label is page chrome, not part of the model's reply.
 func cleanGeminiChatReply(reply string) string {
 	s := strings.TrimSpace(reply)
 	lower := strings.ToLower(s)
@@ -75,9 +74,6 @@ func cleanGeminiChatReply(reply string) string {
 	if rest == "" {
 		return s
 	}
-	// Only strip when the label is followed by the delimiter Gemini actually
-	// exposes: whitespace or punctuation. This avoids changing genuine text
-	// that merely starts with a longer word sharing the same bytes.
 	first := rest[0]
 	if first != ':' && first != '-' && first != '\n' && first != '\r' && first != '\t' && first != ' ' {
 		return s
@@ -90,27 +86,34 @@ func cleanGeminiChatReply(reply string) string {
 }
 
 func geminiChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
-	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	_ = onProgress // model thought/intermediate UI is intentionally never forwarded
+	if !loadGeminiChatRuntime(dataDir).Connected {
+		return "", errors.New("Gemini Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Gemini Chat, then try again")
+	}
+	// Browser models must prove a live signed-in session before FlipAi sends a
+	// delayed "working on it" receipt. A dead/expired session therefore fails
+	// clearly instead of producing endless progress texts.
+	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	s, err := ensureGeminiChatReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("Gemini Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Gemini Chat, then try again: %w", err)
 	}
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
 	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
-	b, code, err := geminiChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
+	body, code, err := geminiChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
 		return "", err
 	}
 	var out geminiChatSMSReply
-	_ = json.Unmarshal(b, &out)
+	_ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" {
-			out.Detail = strings.TrimSpace(string(b))
+			out.Detail = strings.TrimSpace(string(body))
 		}
 		if browserLongTurnTimeoutDetail(out.Detail) {
-			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "M", onProgress)
+			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "M", nil)
 			return cleanGeminiChatReply(reply), waitErr
 		}
 		return "", errors.New(out.Detail)
@@ -127,21 +130,21 @@ func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string,
 }
 
 func geminiChatBrowserNewConversation(ctx context.Context, dataDir string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	s, err := ensureGeminiChatReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
 		return err
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	b, code, err := geminiChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`))
+	body, code, err := geminiChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`))
 	cancel()
 	if err != nil {
 		return err
 	}
 	if code != http.StatusOK {
 		var out geminiChatSMSReply
-		_ = json.Unmarshal(b, &out)
+		_ = json.Unmarshal(body, &out)
 		if out.Detail != "" {
 			return errors.New(out.Detail)
 		}
@@ -164,7 +167,7 @@ func (b *Bridge) composeGeminiChatSMSPrompt(command string) string {
 
 func (b *Bridge) runGeminiChatSMS(ctx context.Context, command string) (string, error) {
 	dataDir := filepath.Dir(b.statePath)
-	reply, err := geminiChatBrowserSendWithProgress(ctx, dataDir, b.composeGeminiChatSMSPrompt(command), b.setProgress)
+	reply, err := geminiChatBrowserSendWithProgress(ctx, dataDir, b.composeGeminiChatSMSPrompt(command), nil)
 	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 

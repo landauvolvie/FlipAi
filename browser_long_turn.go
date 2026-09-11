@@ -14,6 +14,12 @@ const (
 	browserLongTurnPending = "pending"
 	browserLongTurnDone    = "done"
 	browserLongTurnFailed  = "failed"
+
+	// Browser page drivers already wait 90 seconds before handing a turn to the
+	// long-turn tracker. Keep genuinely long work alive, but never let a dead
+	// browser turn pin SMS delivery forever. This is intentionally browser-only;
+	// CLI agents keep their own lifecycle semantics.
+	browserLongTurnMaxWait = 5 * time.Minute
 )
 
 type browserLongTurnState struct {
@@ -21,6 +27,8 @@ type browserLongTurnState struct {
 	Status   string    `json:"status"`
 	Reply    string    `json:"reply,omitempty"`
 	Detail   string    `json:"detail,omitempty"`
+	// Progress is retained only so older state files still decode. FlipAi no
+	// longer scrapes or forwards model thinking/intermediate UI text.
 	Progress string    `json:"progress,omitempty"`
 	Updated  time.Time `json:"updated"`
 }
@@ -68,7 +76,9 @@ func saveBrowserLongTurnState(dataDir string, state browserLongTurnState) error 
 	state.Status = strings.ToLower(strings.TrimSpace(state.Status))
 	state.Reply = strings.TrimSpace(state.Reply)
 	state.Detail = strings.TrimSpace(state.Detail)
-	state.Progress = sanitizeBrowserProgress(state.Progress)
+	// Never persist model thought/progress text. Long turns are tracked only by
+	// pending/done/failed state and their final reply/error.
+	state.Progress = ""
 	state.Updated = time.Now()
 	b, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -94,6 +104,8 @@ func loadBrowserLongTurnState(dataDir, provider string) (browserLongTurnState, e
 	if err := json.Unmarshal(b, &state); err != nil {
 		return browserLongTurnState{}, err
 	}
+	// Ignore progress left by an older FlipAi build.
+	state.Progress = ""
 	return state, nil
 }
 
@@ -104,49 +116,23 @@ func browserLongTurnTimeoutDetail(detail string) bool {
 		strings.Contains(s, "did not produce") && strings.Contains(s, "90 seconds")
 }
 
-func sanitizeBrowserProgress(raw string) string {
-	raw = strings.ReplaceAll(raw, "\r\n", "\n")
-	candidates := strings.Split(raw, "\n")
-	if len(candidates) == 1 {
-		candidates = []string{raw}
-	}
-	keywords := []string{
-		"thinking", "working", "searching", "researching", "browsing", "reading",
-		"analyzing", "analysing", "checking", "generating", "creating", "rendering",
-		"preparing", "writing", "coding", "running", "uploading", "downloading",
-		"finishing", "finalizing", "finalising", "almost done", "processing",
-	}
-	for i := len(candidates) - 1; i >= 0; i-- {
-		line := strings.Join(strings.Fields(candidates[i]), " ")
-		if line == "" || len([]rune(line)) > 160 {
-			continue
-		}
-		lower := strings.ToLower(line)
-		for _, keyword := range keywords {
-			if strings.Contains(lower, keyword) {
-				return line
-			}
-		}
-	}
-	return ""
-}
+// sanitizeBrowserProgress is intentionally retired. It remains as a compatibility
+// helper for older callers/tests, but FlipAi must never scrape or forward a
+// model's thought process or transient status text.
+func sanitizeBrowserProgress(string) string { return "" }
 
 func waitForBrowserLongTurn(ctx context.Context, dataDir, provider string, onProgress func(string)) (string, error) {
+	_ = onProgress // deliberately unused: only final output is deliverable
 	provider = browserLongTurnProvider(provider)
 	if provider == "" {
 		return "", errors.New("unknown browser long-turn provider")
 	}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	lastProgress := ""
+	deadline := time.NewTimer(browserLongTurnMaxWait)
+	defer deadline.Stop()
 	for {
 		if state, err := loadBrowserLongTurnState(dataDir, provider); err == nil {
-			if progress := sanitizeBrowserProgress(state.Progress); progress != "" && progress != lastProgress {
-				lastProgress = progress
-				if onProgress != nil {
-					onProgress(progress)
-				}
-			}
 			switch strings.ToLower(strings.TrimSpace(state.Status)) {
 			case browserLongTurnDone:
 				return strings.TrimSpace(state.Reply), nil
@@ -161,6 +147,10 @@ func waitForBrowserLongTurn(ctx context.Context, dataDir, provider string, onPro
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
+		case <-deadline.C:
+			detail := "the browser model stopped making a verifiable response and did not finish after the extended wait; reconnect this model in FlipAi and try again"
+			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnFailed, Detail: detail})
+			return "", errors.New(detail)
 		case <-ticker.C:
 		}
 	}
