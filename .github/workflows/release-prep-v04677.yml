@@ -1,0 +1,36 @@
+name: release-prep-v04677
+
+on:
+  push:
+    branches: [release/v0.46.77]
+
+permissions:
+  contents: write
+
+jobs:
+  sync-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v0.46.77
+      - name: Sync compiled app version and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('config.go')
+          s = p.read_text()
+          old = 'const version = "0.46.76"'
+          new = 'const version = "0.46.77"'
+          if old not in s:
+              raise SystemExit('expected old compiled version not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          rm .github/workflows/release-prep-v04677.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add config.go .github/workflows/release-prep-v04677.yml
+          git commit -m "Release v0.46.77: sync compiled app version"
+          git push origin HEAD:release/v0.46.77
