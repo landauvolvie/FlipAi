@@ -274,20 +274,13 @@ func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string
 	return nil
 }
 
-const chatGPTSMSRichUIPlainTextHint = "If your answer would normally be shown as cards, widgets, email previews, calendar items, files, or other rich UI, include the important contents in plain text too so they can be delivered by SMS."
-
 func (b *Bridge) composeChatGPTSMSPrompt(command string) string {
 	command = strings.TrimSpace(command)
 	hint := strings.TrimSpace(b.cfg.replyStyleHintFor("G"))
 	if hint == "" {
-		hint = defaultReplyStyleHint
+		return command
 	}
-	parts := []string{command}
-	if hint != "" {
-		parts = append(parts, hint)
-	}
-	parts = append(parts, chatGPTSMSRichUIPlainTextHint)
-	return strings.Join(parts, "\n\n")
+	return command + "\n\n" + hint
 }
 
 func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, error) {

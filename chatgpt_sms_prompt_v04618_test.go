@@ -1,22 +1,23 @@
 package main
 
-import (
-    "strings"
-    "testing"
-)
+import "testing"
 
-func TestChatGPTSMSPromptIsPlainAndShort(t *testing.T) {
-    cfg := defaultConfig(t.TempDir())
-    b := &Bridge{cfg: cfg}
-    got := b.composeChatGPTSMSPrompt("Generate me an image of a nice waterfall")
-    want := "Generate me an image of a nice waterfall\n\n" + defaultReplyStyleHint + "\n\n" + chatGPTSMSRichUIPlainTextHint
-    if got != want {
-        t.Fatalf("unexpected ChatGPT SMS prompt:\n%q\nwant:\n%q", got, want)
-    }
-    if !strings.Contains(got, "email previews") || !strings.Contains(got, "plain text") {
-        t.Fatalf("ChatGPT SMS prompt must force rich cards/widgets to include SMS-readable text: %q", got)
-    }
-    if strings.Contains(got, "<sms_command>") || strings.Contains(got, "</sms_command>") {
-        t.Fatalf("internal SMS wrapper leaked into ChatGPT: %q", got)
-    }
+func TestChatGPTSMSPromptHasNoDefaultInstruction(t *testing.T) {
+	cfg := defaultConfig(t.TempDir())
+	b := &Bridge{cfg: cfg}
+	const command = "Generate me an image of a nice waterfall"
+	if got := b.composeChatGPTSMSPrompt(command); got != command {
+		t.Fatalf("default ChatGPT SMS prompt = %q, want exact user command %q", got, command)
+	}
+}
+
+func TestChatGPTSMSPromptAppendsUserInstructionWhenConfigured(t *testing.T) {
+	cfg := defaultConfig(t.TempDir())
+	cfg.GoogleVoice.ReplyStyleHint = "Answer in Yiddish."
+	b := &Bridge{cfg: cfg}
+	const command = "Write a greeting"
+	const want = "Write a greeting\n\nAnswer in Yiddish."
+	if got := b.composeChatGPTSMSPrompt(command); got != want {
+		t.Fatalf("custom ChatGPT SMS prompt = %q, want %q", got, want)
+	}
 }

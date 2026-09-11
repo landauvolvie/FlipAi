@@ -17,14 +17,14 @@ import (
 
 const version = "0.46.74"
 
-// defaultReplyStyleHint is the only behavioural framing FlipAi adds to a phone
-// command. It deliberately says nothing about SMS or plain text so providers
-// remain free to use their normal tools, including image/file generation.
-const defaultReplyStyleHint = "Please keep your reply short and to the point."
+// FlipAi is a transport, so fresh installs add no behavioral instruction to a
+// user's command. A user can still enter a custom instruction in the Agents UI.
+const defaultReplyStyleHint = ""
 
 const (
-	legacyReplyStyleHintSMSV1 = "Reply for SMS. Keep it brief and plain text."
-	legacyReplyStyleHintSMSV0 = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."
+	retiredConciseReplyStyleHint = "Please keep your reply short and to the point."
+	legacyReplyStyleHintSMSV1    = "Reply for SMS. Keep it brief and plain text."
+	legacyReplyStyleHintSMSV0    = "Your answer is delivered to the user as an SMS text message, so keep it brief and in plain text."
 )
 
 // replyStyleHintMaxChars caps a hand-written instruction. FlipAi is a transport
@@ -110,9 +110,8 @@ type GoogleVoiceConfig struct {
 	ReplyTo               string          `json:"replyTo"`
 	ReplyMaxChars         int             `json:"replyMaxChars"`
 
-	// ReplyStyleHint is the single line of framing FlipAi appends to the SMS
-	// command before handing it to the agent. Everything else the agent sees is
-	// the user's own text, so texting behaves like sitting at the desktop app.
+	// ReplyStyleHint is the optional instruction FlipAi appends to the SMS
+	// command before handing it to the agent. It is empty by default.
 	ReplyStyleHint string `json:"replyStyleHint"`
 
 	// MaxReplyParts caps how many numbered SMS parts a long answer is split
@@ -404,7 +403,7 @@ func normalizeReplyStyleHint(v string) string {
 func migrateLegacyReplyStyleHint(v string) string {
 	v = normalizeReplyStyleHint(v)
 	switch v {
-	case "", legacyReplyStyleHintSMSV1, legacyReplyStyleHintSMSV0:
+	case "", retiredConciseReplyStyleHint, legacyReplyStyleHintSMSV1, legacyReplyStyleHintSMSV0:
 		return defaultReplyStyleHint
 	default:
 		return v
