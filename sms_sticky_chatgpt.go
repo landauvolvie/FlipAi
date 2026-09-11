@@ -16,8 +16,6 @@ const (
 	chatGPTSMSPrefix = "O"
 )
 
-// explicitSMSAgent is retained for callers/tests that care about the internal
-// execution engine. Public SMS shortcuts are resolved through explicitSMSRoute.
 func explicitSMSAgent(raw string, cfg Config) string {
 	id := explicitSMSRoute(raw, cfg)
 	if route, ok := smsRouteByID(cfg, id); ok {
@@ -120,8 +118,6 @@ func parseRemoteCommandForMessageSticky(raw string, cfg Config, sourceAgent, sti
 	if fresh {
 		rc.New = true
 	}
-	// Keep the requested browser mode even on NEW commands. That lets execution
-	// distinguish O NEW: from OW NEW:, and A NEW: from AW/AC NEW:.
 	if route.Mode != "" {
 		rc.Text = markBrowserModeCommand(rc.Text, route.Mode)
 	}
@@ -204,27 +200,31 @@ type chatGPTSMSReply struct {
 }
 
 func chatGPTBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mode string, onProgress func(string)) (string, error) {
-	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	_ = onProgress
+	if !loadChatGPTRuntime(dataDir).Connected {
+		return "", errors.New("ChatGPT Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for ChatGPT Chat, then try again")
+	}
+	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("ChatGPT Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect ChatGPT Chat, then try again: %w", err)
 	}
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
 	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
-	b, code, err := chatGPTControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
+	body, code, err := chatGPTControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
 		return "", err
 	}
 	var out chatGPTSMSReply
-	_ = json.Unmarshal(b, &out)
+	_ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" {
-			out.Detail = strings.TrimSpace(string(b))
+			out.Detail = strings.TrimSpace(string(body))
 		}
 		if browserLongTurnTimeoutDetail(out.Detail) {
-			return waitForBrowserLongTurn(ctx, dataDir, "G", onProgress)
+			return waitForBrowserLongTurn(ctx, dataDir, "G", nil)
 		}
 		return "", errors.New(out.Detail)
 	}
@@ -247,7 +247,7 @@ func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
 }
 
 func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
@@ -258,14 +258,14 @@ func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string
 	}
 	payload, _ := json.Marshal(map[string]any{"mode": mode})
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	b, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(string(payload)))
+	body, code, err := chatGPTControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
 		return err
 	}
 	if code != http.StatusOK {
 		var out chatGPTSMSReply
-		_ = json.Unmarshal(b, &out)
+		_ = json.Unmarshal(body, &out)
 		if out.Detail != "" {
 			return errors.New(out.Detail)
 		}
@@ -289,7 +289,7 @@ func (b *Bridge) runChatGPTSMS(ctx context.Context, command string) (string, err
 		mode = browserModeChat
 	}
 	dataDir := filepath.Dir(b.statePath)
-	reply, err := chatGPTBrowserSendModeWithProgress(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode, b.setProgress)
+	reply, err := chatGPTBrowserSendModeWithProgress(ctx, dataDir, b.composeChatGPTSMSPrompt(command), mode, nil)
 	return finishBrowserGeneratedImageTurn(ctx, command, reply, err)
 }
 
