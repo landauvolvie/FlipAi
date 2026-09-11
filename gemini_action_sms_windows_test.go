@@ -17,7 +17,7 @@ func TestGeminiSMSExcludesGmailActionCardChrome(t *testing.T) {
 			t.Fatalf("Gemini SMS action handling lost %q", want)
 		}
 	}
-	for _, chrome := range []string{`button,[role=\"button\"]`, `[role=\"toolbar\"]`, `[data-testid*=\"action\" i]`} {
+	for _, chrome := range []string{`button,[role="button"]`, `[role="toolbar"]`, `[data-testid*="action" i]`} {
 		if !strings.Contains(geminiChatTurnJS, chrome) {
 			t.Fatalf("Gemini reply extraction no longer strips action-card UI via %q", chrome)
 		}
