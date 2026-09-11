@@ -45,11 +45,19 @@ const geminiChatTurnJS = `(async(input)=>{
   };
   // Only authored response prose is deliverable. Gemini action cards expose
   // controls such as Gmail/To/Cc/Bcc/Edit/Cancel/Send through innerText; those
-  // are UI chrome and must never become an SMS reply.
+  // are UI chrome and must never become an SMS reply. Gemini may split one
+  // answer across multiple sibling prose containers, so gather every top-level
+  // prose block rather than returning only the first matching descendant.
   const replyText=node=>{
     if(!node)return '';
-    const prose=node.querySelector&&node.querySelector('.markdown-main-panel,.model-response-text,[data-test-id="response-content"],[data-testid="response-content"]');
-    if(prose&&text(prose))return text(prose);
+    if(node.querySelectorAll){
+      const candidates=unique(Array.from(node.querySelectorAll('.markdown-main-panel,.model-response-text,[data-test-id="response-content"],[data-testid="response-content"]'))).filter(n=>text(n));
+      const roots=candidates.filter(n=>!candidates.some(p=>p!==n&&p.contains(n)));
+      if(roots.length){
+        const parts=roots.map(text).filter(Boolean);
+        if(parts.length)return parts.join('\n\n').trim();
+      }
+    }
     const clone=node.cloneNode&&node.cloneNode(true);
     if(!clone)return text(node);
     clone.querySelectorAll('button,[role="button"],[role="menu"],[role="toolbar"],mat-chip,[data-test-id*="action" i],[data-testid*="action" i]').forEach(n=>n.remove());
@@ -113,19 +121,28 @@ const geminiChatTurnJS = `(async(input)=>{
     if(!live||composerText(live)===''||stop()||candidate){accepted=true;break}
   }
   if(!accepted)return {ok:false,detail:'FlipAi filled the Gemini prompt box, but Gemini did not accept the Send action. Reconnect Gemini Chat in FlipAi and try again.',href:location.href};
-  let last='',stable=0,started=false;
+  // Gemini streams text in bursts. In v0.46.76, five unchanged 250 ms samples
+  // were treated as final, which could text only the first few words while the
+  // page continued writing the answer. Require a real quiet period after the
+  // last authored-text change. Finished-response controls are only supporting
+  // evidence; they do not bypass the quiet-period requirement.
+  let last='',started=false,startedAt=0,lastChangedAt=0;
   const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);
     const node=responseForTurn();
     if(node){
-      const raw=text(node),now=replyText(node);
+      const now=replyText(node);
       if(!now||sameText(now,input))continue;
-      started=true;
-      if(raw===last)stable++;else{last=raw;stable=0}
-      if(responseFinishedChrome(node)&&stable>=2)return {ok:true,reply:now,href:location.href};
-      if(!stop()&&stable>=5)return {ok:true,reply:now,href:location.href};
-      if(stable>=16)return {ok:true,reply:now,href:location.href};
+      const at=Date.now();
+      if(!started){started=true;startedAt=at;lastChangedAt=at}
+      if(now!==last){last=now;lastChangedAt=at}
+      const quietFor=at-lastChangedAt;
+      const runningFor=at-startedAt;
+      if(!stop()&&runningFor>=1500&&quietFor>=3000)return {ok:true,reply:now,href:location.href};
+      if(responseFinishedChrome(node)&&quietFor>=4000)return {ok:true,reply:now,href:location.href};
+      // A stale Stop control must not hold a fully settled answer forever.
+      if(quietFor>=8000)return {ok:true,reply:now,href:location.href};
     }
   }
   return {ok:false,detail:started?'Gemini started answering but did not finish within 90 seconds.':'Gemini did not produce a new response within 90 seconds.',href:location.href};
