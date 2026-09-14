@@ -46,7 +46,18 @@ const copilotChatTurnJS = `(async(input)=>{
     const primary=all('[data-content="ai-message"],[data-testid*="assistant" i],[data-testid*="bot" i],[data-message-author-role="assistant"],[data-author="bot"],[data-author="assistant"],[class*="response-message" i],[class*="assistant-message" i]').filter(n=>text(n)&&!n.closest('form'));
     if(primary.length)return primary;
     const articles=all('main [role="article"],main [class*="markdown" i],main .markdown,main .prose').filter(n=>text(n)&&!n.closest('form'));
-    return articles;
+    if(articles.length)return articles;
+    return genericBlocks();
+  };
+  const genericBlocks=()=>{
+    const out=[];
+    for(const r of roots())for(const n of r.querySelectorAll('div,p,section,article,li,pre,span')){
+      if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')||n.closest('button')))continue;
+      const t=text(n);if(t.length<2)continue;
+      if(Array.from(n.children).some(ch=>text(ch)===t))continue;
+      out.push(n);
+    }
+    return out;
   };
   const composer=()=>first('textarea#userInput,textarea[data-testid*="composer" i],textarea[data-testid*="input" i],textarea[aria-label*="message" i],textarea[aria-label*="ask" i],textarea[placeholder*="message" i],textarea[placeholder*="ask" i],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="input" i],div[contenteditable="true"]');
   const send=()=>{const xs=all('button[data-testid*="send" i],button[aria-label*="send" i],button[title*="send" i],button[type="submit"]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||xs.find(b=>!b.disabled)||null};
@@ -54,8 +65,18 @@ const copilotChatTurnJS = `(async(input)=>{
   let c=null;
   for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200)}
   if(!c)return {ok:false,detail:'Microsoft Copilot is loaded but FlipAi could not find the prompt box. The Copilot site layout may have changed.',href:location.href};
-  const before=assistants();const beforeCount=before.length;const beforeLast=beforeCount?text(before[beforeCount-1]):'';
-  const responseForTurn=()=>{const current=assistants();if(!current.length)return null;const last=current[current.length-1];if(current.length>beforeCount)return last;return text(last)&&text(last)!==beforeLast?last:null};
+  const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
+  const promptText=canon(input);
+  const beforeTexts=new Set(assistants().map(n=>canon(text(n))));
+  const responseForTurn=()=>{
+    const current=assistants();
+    for(let i=current.length-1;i>=0;i--){
+      const t=canon(text(current[i]));
+      if(!t||t===promptText||beforeTexts.has(t))continue;
+      return current[i];
+    }
+    return null;
+  };
   c.focus();
   try{
     if(c instanceof HTMLTextAreaElement||c instanceof HTMLInputElement){
@@ -71,8 +92,17 @@ const copilotChatTurnJS = `(async(input)=>{
   await sleep(300);
   let b=null;
   for(let i=0;i<80&&!b;i++){b=send();if(!b)await sleep(100)}
-  if(!b)return {ok:false,detail:'FlipAi filled the Microsoft Copilot prompt box but the Send button never became ready.',href:location.href};
-  b.click();
+  if(b){b.click()}
+  else{
+    // Copilot's send control is not always a <button> FlipAi can name, and the
+    // turn used to be abandoned here with the prompt typed and never sent.
+    // Enter is how a person sends it.
+    const form=c.closest&&c.closest('form');
+    if(form&&typeof form.requestSubmit==='function'){try{form.requestSubmit()}catch(e){}}
+    for(const type of ['keydown','keypress','keyup']){
+      c.dispatchEvent(new KeyboardEvent(type,{bubbles:true,composed:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13,which:13}));
+    }
+  }
   let last='',stable=0,started=false;const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();

@@ -1,0 +1,122 @@
+// Drives each provider's real turn script against synthetic chat pages in a
+// real browser.
+//
+// The page deliberately uses none of the attributes the drivers look for by
+// name -- no data-message-author-role, no data-testid, no "assistant" class,
+// no <main>. That is the situation the Muse driver was actually in: Muse
+// answered, the answer was on screen, and every selector missed it, so the
+// turn reported that the model had stopped without producing anything.
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const pwPath = process.env.FLIPAI_PLAYWRIGHT_MODULE;
+if (!pwPath) throw new Error('FLIPAI_PLAYWRIGHT_MODULE is required');
+const { chromium } = await import(pathToFileURL(pwPath).href);
+
+function turnScript(file, constant, prompt) {
+  const source = fs.readFileSync(path.resolve(file), 'utf8');
+  const marker = `const ${constant} = \``;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`${constant} was not found`);
+  const bodyStart = start + marker.length;
+  const bodyEnd = source.indexOf('`', bodyStart);
+  if (bodyEnd < 0) throw new Error(`${constant} closing marker was not found`);
+  return source.slice(bodyStart, bodyEnd).replace('%s', JSON.stringify(prompt));
+}
+
+// An unremarkable chat app: anonymous divs, no recognizable hooks anywhere.
+// `withSendButton` false removes the send control entirely, so the only way to
+// submit is the Enter key -- the case that stranded Copilot with the prompt
+// typed and never sent.
+function pageHTML({ withSendButton }) {
+  return `<!doctype html><html><body>
+    <div id="log"><div class="x1">an earlier answer that was already on screen</div></div>
+    <div id="composer-wrap">
+      <textarea id="box" placeholder="Ask anything"></textarea>
+      ${withSendButton ? '<button id="go">Go</button>' : ''}
+    </div>
+    <script>
+      const submit = () => {
+        const box = document.querySelector('#box');
+        const value = box.value;
+        if (!value) return;
+        const log = document.querySelector('#log');
+        const mine = document.createElement('div');
+        mine.className = 'x2';
+        mine.textContent = value;
+        log.appendChild(mine);
+        const busy = document.createElement('button');
+        busy.textContent = 'Stop';
+        busy.setAttribute('aria-label', 'Stop');
+        document.body.appendChild(busy);
+        setTimeout(() => {
+          const reply = document.createElement('div');
+          reply.className = 'x3';
+          log.appendChild(reply);
+          reply.textContent = 'FLIPAI';
+          setTimeout(() => { reply.textContent = 'FLIPAI answered: ' + value; }, 200);
+          setTimeout(() => busy.remove(), 700);
+        }, 400);
+      };
+      const go = document.querySelector('#go');
+      if (go) go.addEventListener('click', submit);
+      document.querySelector('#box').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      });
+    </script>
+  </body></html>`;
+}
+
+const drivers = [
+  ['Muse', 'muse_chat_webview_windows.go', 'museChatTurnJS'],
+  ['Microsoft Copilot', 'copilot_chat_webview_windows.go', 'copilotChatTurnJS'],
+];
+
+const prompt = 'browser harness prompt';
+const browser = await chromium.launch({ headless: true });
+const failures = [];
+const report = [];
+
+// Every scenario runs at once. A driver that cannot find the answer sits out
+// its own 90-second deadline, and serially that is six minutes of CI for a
+// result each scenario reaches independently.
+const scenarios = [];
+for (const [name, file, constant] of drivers) {
+  for (const withSendButton of [true, false]) {
+    scenarios.push({ name, file, constant, withSendButton });
+  }
+}
+
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton }) => {
+  const label = `${name} (${withSendButton ? 'send button' : 'Enter only'})`;
+  const page = await browser.newPage();
+  const pageErrors = [];
+  page.on('pageerror', e => pageErrors.push(String(e)));
+  await page.setContent(pageHTML({ withSendButton }));
+  let result;
+  try {
+    result = await page.evaluate(turnScript(file, constant, prompt));
+  } catch (e) {
+    failures.push(`${label}: driver threw: ${e}`);
+    await page.close();
+    return;
+  }
+  if (pageErrors.length) failures.push(`${label}: page errors: ${pageErrors.join(' | ')}`);
+  if (!result || !result.ok) {
+    failures.push(`${label}: turn failed: ${result && result.detail}`);
+  } else if (!String(result.reply).includes(prompt)) {
+    failures.push(`${label}: reply did not carry the answer: ${JSON.stringify(result.reply)}`);
+  } else if (String(result.reply).trim() === prompt) {
+    failures.push(`${label}: the prompt was echoed back as the answer`);
+  } else {
+    report.push(`${label}: ok`);
+  }
+  await page.close();
+}));
+
+report.sort();
+failures.sort();
+await browser.close();
+console.log(JSON.stringify({ ok: failures.length === 0, report, failures }, null, 2));
+if (failures.length) process.exit(1);
