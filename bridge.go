@@ -74,6 +74,11 @@ type Bridge struct {
 
 	// processedSet indexes state.ProcessedMessageIDs for O(1) replay checks.
 	processedSet map[string]struct{}
+
+	// unreadableSince records when a message first failed to read, so one that
+	// can never be read is given up on instead of being retried on every poll
+	// for as long as FlipAi runs.
+	unreadableSince map[string]time.Time
 }
 
 func NewBridge(cfg Config, statePath string, state State, g MailClient, c *CodexClient, a *ClaudeClient) *Bridge {
@@ -684,6 +689,53 @@ func (b *Bridge) markProcessed(id string) {
 	}
 	b.state.LastMessageID = id
 }
+
+// unreadableMessageGiveUp is how long a message may stay unreadable before
+// FlipAi stops retrying it. It deliberately outlasts the Google Voice MMS
+// recovery window, so a real attachment that is still appearing in the
+// conversation is never skipped by this outer bound.
+const unreadableMessageGiveUp = 5 * time.Minute
+
+// noteUnreadable records a failed read and reports whether it is time to stop
+// retrying this message. A message that can never be read used to be re-fetched
+// on every poll -- once a second, forever -- which wrote the same error line to
+// the Activity log and bridge.log thousands of times and buried every other
+// event in them.
+func (b *Bridge) noteUnreadable(id string, cause error) bool {
+	b.mu.Lock()
+	if b.unreadableSince == nil {
+		b.unreadableSince = make(map[string]time.Time)
+	}
+	first, repeat := b.unreadableSince[id]
+	if !repeat {
+		first = time.Now()
+		b.unreadableSince[id] = first
+	}
+	giveUp := time.Since(first) >= unreadableMessageGiveUp
+	if giveUp {
+		delete(b.unreadableSince, id)
+	}
+	b.mu.Unlock()
+
+	reason := truncate(cause.Error(), 220)
+	switch {
+	case !repeat:
+		log.Printf("Gmail get %s: %v", id, cause)
+		b.event("error", "gmail", "Could not read matching Gmail message: "+reason, "", "", id)
+	case giveUp:
+		log.Printf("Gmail get %s: giving up after %s: %v", id, unreadableMessageGiveUp, cause)
+		b.event("warn", "gmail", "Could not read matching Gmail message: "+reason+" — FlipAi stopped retrying it, so it was not delivered to an agent.", "", "", id)
+	}
+	return giveUp
+}
+
+// noteReadable clears the retry bookkeeping for a message that read cleanly.
+func (b *Bridge) noteReadable(id string) {
+	b.mu.Lock()
+	delete(b.unreadableSince, id)
+	b.mu.Unlock()
+}
+
 func (b *Bridge) poll(ctx context.Context) {
 	b.mu.Lock()
 	if b.paused {
@@ -715,10 +767,16 @@ func (b *Bridge) poll(ctx context.Context) {
 		}
 		m, err := b.gmail.Get(ctx, id)
 		if err != nil {
-			log.Printf("Gmail get %s: %v", id, err)
-			b.event("error", "gmail", "Could not read matching Gmail message: "+truncate(err.Error(), 220), "", "", id)
+			if b.noteUnreadable(id, err) {
+				b.mu.Lock()
+				b.markProcessed(id)
+				s := b.state
+				b.mu.Unlock()
+				_ = saveState(b.statePath, s)
+			}
 			continue
 		}
+		b.noteReadable(id)
 		if !m.InternalDate.IsZero() && m.InternalDate.Unix() < baseline {
 			b.mu.Lock()
 			b.markProcessed(id)

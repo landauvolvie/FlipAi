@@ -401,28 +401,26 @@ func requirePost(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (a *App) startBridge(ctx context.Context) {
+// startBridge brings SMS processing up once the direct Google Voice transport
+// is usable, and reports why it could not yet. The caller is
+// superviseBridgeStart, which keeps asking: a single attempt at boot is what
+// used to leave an install permanently silent, because the transport is a
+// background browser that is still restoring its saved session when FlipAi's
+// first connection test runs.
+func (a *App) startBridge(ctx context.Context) error {
+	a.mu.Lock()
+	running := a.bridge
+	a.mu.Unlock()
+	if running != nil {
+		return nil
+	}
+	a.adoptConnectedVoiceTransport()
 	a.mu.Lock()
 	cfg, mc := a.cfg, a.mail
 	a.mu.Unlock()
-	if cfg.Gmail.Method != GmailMethodGoogleVoice {
-		log.Printf("Google Voice SMS is not connected; background host is alive and waiting for setup")
-		return
+	if err := bridgeTransportGate(ctx, cfg, mc); err != nil {
+		return err
 	}
-	if mc == nil || !mc.Authorized() {
-		log.Printf("Google Voice SMS background connection is not ready; waiting for the saved browser session")
-		return
-	}
-	// The direct Google Voice transport starts as soon as its saved background
-	// browser session is usable. Phone allowlists and security codes belong to
-	// routing and are enforced after each received message, not at startup.
-	tctx, cancelTransport := context.WithTimeout(ctx, 35*time.Second)
-	if err := mc.Test(tctx); err != nil {
-		cancelTransport()
-		log.Printf("Google Voice SMS connection test failed: %v", err)
-		return
-	}
-	cancelTransport()
 	var codex *CodexClient
 	c := NewCodexClient(cfg.CodexPath, cfg.codexWorkingDir())
 	if err := c.Start(ctx); err != nil {
@@ -473,4 +471,125 @@ func (a *App) startBridge(ctx context.Context) {
 	// Claude ends up texting back.
 	go a.warmClaudeConnection(ctx, cfg, b, claude)
 	log.Printf("Google Voice SMS monitoring active through the signed-in background browser")
+	return nil
+}
+
+// bridgeStartRetryDelay is how long superviseBridgeStart waits between
+// attempts. The transport test inside each attempt already blocks for up to its
+// own readiness window, so this is a pause between tries rather than a poll
+// interval.
+var bridgeStartRetryDelay = 10 * time.Second
+
+// bridgeStartGraceBeforeWarning is how long the transport may stay unready
+// before the Activity log calls it out as a problem rather than as start-up.
+var bridgeStartGraceBeforeWarning = 2 * time.Minute
+
+// superviseBridgeStart keeps trying until SMS processing is actually running.
+//
+// The Google Voice transport lives in a background browser that restores its
+// saved session after FlipAi starts, at the same moment every connected agent
+// browser is restoring its own. On a cold or busy machine that restore
+// regularly takes longer than one connection test waits, and a single attempt
+// then left the install in the worst possible state: the Google Voice listener
+// came up a minute later and went on receiving, authorizing and spooling texts,
+// while no bridge existed to hand any of them to an agent. Every message was
+// detected and then silently never answered -- by any agent, browser-backed or
+// local -- until someone restarted FlipAi by hand.
+//
+// Retrying costs nothing while it is not needed: the first attempt succeeds on
+// a healthy install and this returns immediately.
+func (a *App) superviseBridgeStart(ctx context.Context) {
+	retryUntilBridgeStarts(ctx, activityLogForStatePath(a.statePath), a.startBridge)
+}
+
+// adoptConnectedVoiceTransport picks up a Google Voice connection that was
+// completed after the host started. Connecting writes the choice to
+// bridge.json, but the running host keeps the transport it was built with, so
+// a first connection could not carry a single text until FlipAi was restarted
+// by hand. Nothing is touched once the transport is usable, so a healthy
+// install never reaches the reload.
+func (a *App) adoptConnectedVoiceTransport() {
+	a.mu.Lock()
+	method, mc := a.cfg.Gmail.Method, a.mail
+	a.mu.Unlock()
+	if method == GmailMethodGoogleVoice && mc != nil && mc.Authorized() {
+		return
+	}
+	saved, err := loadConfig(a.configPath, a.dataDir)
+	if err != nil || saved.Gmail.Method != GmailMethodGoogleVoice {
+		return
+	}
+	transport, oauth, err := buildConfiguredMailClient(saved.Gmail, a.dataDir, a.tokenPath)
+	if err != nil || transport == nil {
+		return
+	}
+	// Only the transport selection is adopted. The rest of the in-memory
+	// config belongs to whatever the running UI has been editing.
+	a.mu.Lock()
+	a.cfg.Gmail = saved.Gmail
+	a.mail, a.gmail = transport, oauth
+	a.mu.Unlock()
+	log.Printf("Google Voice SMS was connected after startup; using it without a restart")
+}
+
+// bridgeTransportGate answers one question: can SMS processing start right now,
+// and if not, why not. It is separate from startBridge so the answer can be
+// re-asked cheaply for as long as it takes, and so it can be tested without
+// launching agents.
+//
+// Phone allowlists and security codes are deliberately not consulted here. They
+// belong to routing and are enforced after each received message, not at
+// startup.
+func bridgeTransportGate(ctx context.Context, cfg Config, mc MailClient) error {
+	if cfg.Gmail.Method != GmailMethodGoogleVoice {
+		return fmt.Errorf("Google Voice SMS is not connected; background host is alive and waiting for setup")
+	}
+	if mc == nil || !mc.Authorized() {
+		return fmt.Errorf("Google Voice SMS background connection is not ready; waiting for the saved browser session")
+	}
+	tctx, cancelTransport := context.WithTimeout(ctx, 35*time.Second)
+	err := mc.Test(tctx)
+	cancelTransport()
+	if err != nil {
+		return fmt.Errorf("Google Voice SMS connection test failed: %v", err)
+	}
+	return nil
+}
+
+// retryUntilBridgeStarts runs start until it reports success, the app shuts
+// down, or forever -- whichever comes first. Forever is deliberate: the one
+// thing it must never do is give up while the user keeps texting.
+func retryUntilBridgeStarts(ctx context.Context, activity *ActivityLog, start func(context.Context) error) {
+	startedWaitingAt := time.Now()
+	attempts := 0
+	reported := ""
+	warned := false
+	for {
+		attempts++
+		err := start(ctx)
+		if err == nil {
+			if attempts > 1 {
+				activity.Add("success", "bridge", "Google Voice became ready; SMS processing started.", "", "", "")
+			}
+			return
+		}
+		reason := truncate(err.Error(), 240)
+		// One line per distinct reason. This loop runs for as long as the app
+		// does, and repeating the same line every few seconds would bury the
+		// Activity log the user reads to find out what happened to a text.
+		if reason != reported {
+			reported = reason
+			log.Printf("%s", reason)
+			activity.Add("info", "bridge", "Waiting to start SMS processing: "+reason, "", "", "")
+		}
+		if !warned && time.Since(startedWaitingAt) > bridgeStartGraceBeforeWarning {
+			warned = true
+			activity.Add("warn", "bridge", "SMS processing did not start. Check Google Voice and agent diagnostics.", "", "", "")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(bridgeStartRetryDelay):
+		}
+	}
 }
