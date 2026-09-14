@@ -243,7 +243,7 @@ func chatGPTEval(d voiceDevTools, expression string, awaitPromise bool, out any)
 		return fmt.Errorf("the ChatGPT WebView did not answer Runtime.evaluate: %w", err)
 	}
 	if len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
-		return errors.New("the ChatGPT page script failed")
+		return browserPageScriptError("ChatGPT", got.ExceptionDetails)
 	}
 	if out == nil {
 		return nil

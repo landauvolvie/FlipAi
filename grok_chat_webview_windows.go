@@ -152,7 +152,7 @@ func grokChatEval(d voiceDevTools, expression string, awaitPromise bool, out any
 		return fmt.Errorf("the Grok Chat WebView did not answer Runtime.evaluate: %w", err)
 	}
 	if len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
-		return errors.New("the Grok page script failed")
+		return browserPageScriptError("Grok", got.ExceptionDetails)
 	}
 	if out == nil {
 		return nil
