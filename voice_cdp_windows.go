@@ -34,6 +34,13 @@ type webViewDevTools struct {
 }
 
 const (
+	// devToolsOutstandingCap bounds how long a call that outlived its own
+	// deadline may keep the protocol channel reserved. WebView2 has no way to
+	// cancel an outstanding call, so the channel is held until its completion
+	// callback fires; this stops a callback that never fires from reserving the
+	// channel for the life of the process.
+	devToolsOutstandingCap = 3 * time.Minute
+
 	// voiceDevToolsTimeout bounds ordinary DevTools calls. Google Voice probes
 	// must fail quickly if its page is navigating or wedged so the call observer
 	// does not disappear for a long time.
@@ -137,7 +144,6 @@ func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	defer d.call.Unlock()
 
 	// Buffered so a reply arriving after the timeout does not block the window's
 	// message loop forever.
@@ -159,8 +165,21 @@ func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (
 
 	select {
 	case got := <-answered:
+		d.call.Unlock()
 		return got, true
 	case <-time.After(timeout):
+		// We have stopped waiting, but WebView2 has not: the operation is still
+		// live inside the browser, and issuing the next one on top of it is what
+		// returns "Overlapped I/O operation is in progress". Keep the channel
+		// held until this call really finishes, so the next caller waits for a
+		// free channel instead of colliding with this one.
+		go func() {
+			select {
+			case <-answered:
+			case <-time.After(devToolsOutstandingCap):
+			}
+			d.call.Unlock()
+		}()
 		return devToolsReply{}, false
 	}
 }

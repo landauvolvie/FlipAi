@@ -155,7 +155,7 @@ func geminiChatEval(d voiceDevTools, expression string, awaitPromise bool, out a
 	var got voiceDevToolsEval
 	params := map[string]any{"expression": expression, "returnByValue": true, "awaitPromise": awaitPromise}
 	if err := d.Call("Runtime.evaluate", params, &got); err != nil { return fmt.Errorf("the Gemini Chat WebView did not answer Runtime.evaluate: %w", err) }
-	if len(got.ExceptionDetails)>0&&string(got.ExceptionDetails)!="null" { return errors.New("the Gemini page script failed") }
+	if len(got.ExceptionDetails)>0&&string(got.ExceptionDetails)!="null" { return browserPageScriptError("Gemini", got.ExceptionDetails) }
 	if out==nil { return nil }
 	if len(got.Result.Value)==0 { return errors.New("the Gemini page returned no value") }
 	if err:=json.Unmarshal(got.Result.Value,out);err!=nil{return fmt.Errorf("the Gemini page returned an unreadable value: %w",err)}

@@ -164,7 +164,7 @@ func claudeChatEval(d voiceDevTools, expression string, awaitPromise bool, out a
 		return fmt.Errorf("the Claude Chat WebView did not answer Runtime.evaluate: %w", err)
 	}
 	if len(got.ExceptionDetails) > 0 && string(got.ExceptionDetails) != "null" {
-		return errors.New("the Claude page script failed")
+		return browserPageScriptError("Claude", got.ExceptionDetails)
 	}
 	if out == nil {
 		return nil
