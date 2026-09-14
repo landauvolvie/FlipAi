@@ -45,7 +45,7 @@ func browserReplyEchoesPrompt(reply, prompt string) bool {
 func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadGrokChatRuntime(dataDir).Connected { return "", errors.New("Grok Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Grok Chat, then try again") }
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second); s, err := ensureGrokChatReady(readyCtx, dataDir); cancel()
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureGrokChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Grok Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Grok Chat, then try again: %w", err) }
 
 	// Bind this turn to the exact WebView worker that accepted it. Previously a
@@ -105,7 +105,7 @@ func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 func grokChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) { return grokChatBrowserSendWithProgress(ctx, dataDir, prompt, nil) }
 
 func grokChatBrowserNewConversation(ctx context.Context, dataDir string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second); s, err := ensureGrokChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureGrokChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second); body, code, err := grokChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`)); cancel(); if err != nil { return err }
 	if code != http.StatusOK { var out grokChatSMSReply; _ = json.Unmarshal(body, &out); if out.Detail != "" { return errors.New(out.Detail) }; return fmt.Errorf("Grok Chat new-chat request returned HTTP %d", code) }
 	return nil

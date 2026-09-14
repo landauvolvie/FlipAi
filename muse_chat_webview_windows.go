@@ -60,7 +60,7 @@ const museChatTurnJS = `(async(input)=>{
   let b=null;for(let i=0;i<80&&!b;i++){b=send();if(!b)await sleep(100)}
   if(b)b.click();else if(c.form&&c.form.requestSubmit)c.form.requestSubmit();else{c.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,composed:true}));c.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true,composed:true}))}
   let last='',stable=0,started=false;const deadline=Date.now()+90000;
-  while(Date.now()<deadline){await sleep(250);const node=responseForTurn();if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:now||'Muse completed the turn.',href:location.href}}}
+  while(Date.now()<deadline){await sleep(250);const node=responseForTurn();if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:now||'Muse completed the turn.',href:location.href}if(now&&stable>=32)return {ok:true,reply:now,href:location.href}}}
   return {ok:false,detail:started?'Muse started answering but did not finish within 90 seconds.':'Muse did not produce a new response within 90 seconds.',href:location.href};
 })(%s)`
 

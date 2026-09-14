@@ -35,7 +35,7 @@ type museChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`;
 func museChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadMuseChatRuntime(dataDir).Connected { return "", errors.New("Muse is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Muse, then try again") }
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel()
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Muse is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Muse, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
 	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second); body, code, err := museChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { return "", err }
@@ -51,7 +51,7 @@ func museChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 
 func museChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) { return museChatBrowserSendWithProgress(ctx, dataDir, prompt, nil) }
 func museChatBrowserNewConversation(ctx context.Context, dataDir string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second); body, code, err := museChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`)); cancel(); if err != nil { return err }
 	if code != http.StatusOK { var out museChatSMSReply; _ = json.Unmarshal(body, &out); if out.Detail != "" { return errors.New(out.Detail) }; return fmt.Errorf("Muse new-chat request returned HTTP %d", code) }
 	return nil

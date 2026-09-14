@@ -219,6 +219,8 @@ const chatGPTTurnJS = `(async(input)=>{
       const now=text(node);
       if(now===last)stable++;else{last=now;stable=0;}
       if(!stop()&&stable>=5&&now)return {ok:true,reply:now,href:location.href};
+      // A stale Stop control must not hold a fully settled answer forever.
+      if(now&&stable>=32)return {ok:true,reply:now,href:location.href};
     }
   }
   return {ok:false,detail:started?'ChatGPT started answering but did not finish within 90 seconds.':'ChatGPT did not produce an assistant response within 90 seconds.',href:location.href};
