@@ -6,14 +6,23 @@ import (
 	"testing"
 )
 
-// devToolsCallBody returns the source of one function in voice_cdp_windows.go.
-func devToolsFunctionBody(t *testing.T, signature string) string {
+// readGoSource reads a source file with its line endings normalized. The
+// Windows CI runner checks the tree out with CRLF, so a test that matches a
+// multi-line pattern with "\n" finds nothing there and fails a release that is
+// perfectly fine.
+func readGoSource(t *testing.T, path string) string {
 	t.Helper()
-	raw, err := os.ReadFile("voice_cdp_windows.go")
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(raw)
+	return strings.ReplaceAll(string(raw), "\r\n", "\n")
+}
+
+// devToolsFunctionBody returns the source of one function in voice_cdp_windows.go.
+func devToolsFunctionBody(t *testing.T, signature string) string {
+	t.Helper()
+	src := readGoSource(t, "voice_cdp_windows.go")
 	start := strings.Index(src, signature)
 	if start < 0 {
 		t.Fatalf("%s not found", signature)
