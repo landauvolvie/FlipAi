@@ -47,7 +47,16 @@ const chatGPTSignedInJS = `(async()=>{
 // page into that experience before it fills the composer. The selector is
 // deliberately accessibility/text based rather than coordinate based because
 // ChatGPT's DOM classes change frequently.
-const chatGPTSelectModeJS = `(async(wanted)=>{
+// chatGPTSelectModeJS carries a marker so the DevTools layer gives it a
+// deadline that outlasts its own. It retries ChatGPT's experience picker for
+// more than twelve seconds, and the generic page-probe deadline is eight, so a
+// slow picker made the call time out before the script had finished trying --
+// reported as "the ChatGPT WebView did not answer Runtime.evaluate", with
+// ChatGPT never seeing the message at all.
+//
+// It is deliberately not a browser-turn marker: switching experience is not a
+// model turn, and must not start a long-turn watcher or a media scan.
+const chatGPTSelectModeJS = `/*` + browserLongPageCallMarker + `*/(async(wanted)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
   const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden';

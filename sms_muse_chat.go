@@ -38,15 +38,16 @@ func museChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Muse is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Muse, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := museChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { return waitForBrowserLongTurn(ctx, dataDir, "U", nil) }; return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := museChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "U", nil); return stripBrowserChatReplyLabel(reply), waitErr }; return "", err }
 	var out museChatSMSReply; _ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
-		if browserLongTurnTimeoutDetail(out.Detail) { return waitForBrowserLongTurn(ctx, dataDir, "U", nil) }
+		if browserLongTurnTimeoutDetail(out.Detail) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "U", nil); return stripBrowserChatReplyLabel(reply), waitErr }
 		return "", errors.New(out.Detail)
 	}
-	if strings.TrimSpace(out.Reply) == "" { return "", errors.New("Muse returned an empty reply") }
-	return strings.TrimSpace(out.Reply), nil
+	cleaned := stripBrowserChatReplyLabel(out.Reply)
+	if cleaned == "" { return "", errors.New("Muse returned an empty reply") }
+	return cleaned, nil
 }
 
 func museChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, error) { return museChatBrowserSendWithProgress(ctx, dataDir, prompt, nil) }

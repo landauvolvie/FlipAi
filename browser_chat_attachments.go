@@ -171,17 +171,23 @@ func browserChatFindFileInputJS(attachments []browserChatAttachment) string {
     const tokens=String(input.accept||'').toLowerCase().split(',').map(v=>v.trim()).filter(Boolean);
     return files.every(f=>!tokens.length||tokens.some(t=>t==='*/*'||t==='*'||t===f.type||t===f.ext||(t.endsWith('/*')&&f.type.startsWith(t.slice(0,-1)))));
   };
-  const pick=()=>Array.from(document.querySelectorAll('input[type="file"]')).find(accepts)||null;
+  // Search open shadow roots too. A composer built from web components -- as
+  // Gemini's is -- keeps its file input inside one, where a plain document
+  // query cannot see it, and the message was refused as "this chat has no file
+  // picker" while the picker was right there.
+  const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};
+  const queryAll=sel=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(sel));return Array.from(new Set(out))};
+  const pick=()=>queryAll('input[type="file"]').find(accepts)||null;
   const input=pick();if(input)return input;
   // Open each visible attachment/menu control once. Never fall back to an
   // image-only picker for audio, or repeatedly toggle the same menu closed.
   const clicked=globalThis.__flipaiAttachmentMenus||(globalThis.__flipaiAttachmentMenus=new WeakSet());
   const visible=n=>{const r=n.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(n).visibility!=='hidden'};
-  const controls=Array.from(document.querySelectorAll('button,[role="button"],[role="menuitem"],label'));
+  const controls=queryAll('button,[role="button"],[role="menuitem"],label');
   const button=controls.find(n=>{
     if(!visible(n)||n.disabled||clicked.has(n)||n.matches('label[for]')&&document.getElementById(n.htmlFor)?.matches('input[type="file"]'))return false;
-    const s=((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+(n.innerText||n.textContent||'')).toLowerCase();
-    return /attach|upload|add files?|add photos?|add images?|from (computer|device)/.test(s);
+    const s=((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+(n.getAttribute('data-testid')||'')+' '+(n.innerText||n.textContent||'')).toLowerCase();
+    return /attach|upload|add files?|add photos?|add images?|add media|insert|from (computer|device)|open upload|plus/.test(s);
   });
   if(button){clicked.add(button);button.click();}
   return pick();

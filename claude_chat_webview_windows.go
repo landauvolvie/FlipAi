@@ -114,7 +114,10 @@ const claudeChatTurnJS = `(async(input)=>{
 // action; the remote task can continue after FlipAi leaves the page. We verify
 // that Claude accepted the prompt by observing a Code session URL or running
 // state. We never choose an arbitrary GitHub repository for the user.
-const claudeCodeStartJS = `(async(input)=>{
+// Claude's Code-mode start retries for up to thirty seconds of its own, so it
+// carries the long-page-call marker: the generic eight-second probe deadline
+// would cut it off mid-retry and report the page as unresponsive.
+const claudeCodeStartJS = `/*` + browserLongPageCallMarker + `*/(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
   const composer=()=>document.querySelector('[data-testid="chat-input"],div.ProseMirror[contenteditable="true"],div[data-placeholder][contenteditable="true"],div[contenteditable="true"][role="textbox"],div[contenteditable="true"],textarea');

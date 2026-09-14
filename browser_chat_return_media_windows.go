@@ -13,6 +13,12 @@ import (
 
 const browserChatReturnedMediaMarker = "__FLIPAI_BROWSER_RETURN_MEDIA__"
 
+// browserLongPageCallMarker tags a page script that keeps working for longer
+// than the generic page-probe deadline, so the DevTools layer gives it one that
+// outlasts its own retries. It is not a turn marker: a script carrying it is
+// not a model turn and must not start a long-turn watcher or a media scan.
+const browserLongPageCallMarker = "__FLIPAI_LONG_PAGE_CALL__"
+
 func isBrowserChatTurnExpression(expression string) bool {
 	// Every browser-chat provider uses the same bounded 90-second awaited page
 	// turn as its first checkpoint. Login probes and ordinary page checks do not
