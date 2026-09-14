@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -66,11 +65,8 @@ func TestTurnRequestBudgetOutlastsTheWorkersOwnBudget(t *testing.T) {
 		"chatgpt_webview.go", "claude_chat_webview.go", "gemini_chat_webview.go",
 		"grok_chat_webview.go", "copilot_chat_webview.go", "muse_chat_webview.go",
 	} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(raw), "Timeout: 100 * time.Second") || strings.Contains(string(raw), "Timeout:100*time.Second") {
+		src := readGoSource(t, file)
+		if strings.Contains(src, "Timeout: 100 * time.Second") || strings.Contains(src, "Timeout:100*time.Second") {
 			t.Fatalf("%s still gives up on the worker after 100 seconds", file)
 		}
 	}
@@ -103,11 +99,8 @@ func TestHostTimeoutCollectsTheAnswerInsteadOfFailing(t *testing.T) {
 		"sms_sticky_chatgpt.go", "sms_claude_chat.go", "sms_gemini_chat.go",
 		"sms_grok_chat.go", "sms_copilot_chat.go", "sms_muse_chat.go",
 	} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(raw), "browserChatTurnRequestTimedOut") {
+		src := readGoSource(t, file)
+		if !strings.Contains(src, "browserChatTurnRequestTimedOut") {
 			t.Fatalf("%s still discards the answer when the host hits its own deadline", file)
 		}
 	}

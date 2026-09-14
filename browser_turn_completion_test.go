@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -25,11 +24,7 @@ var browserTurnDrivers = map[string]struct {
 
 func readTurnJS(t *testing.T, file, constant string) string {
 	t.Helper()
-	raw, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(raw)
+	src := readGoSource(t, file)
 	open := "const " + constant + " = `"
 	i := strings.Index(src, open)
 	if i < 0 {
@@ -89,11 +84,7 @@ func TestEveryBrowserDriverCanFinishWithAStuckStopControl(t *testing.T) {
 // continuation, so the SMS side waits out its whole extended window on a state
 // file nothing will ever write and then fails. Muse was in exactly that state.
 func TestEveryBrowserTurnExpressionResolvesToItsLongTurnProvider(t *testing.T) {
-	raw, err := os.ReadFile("browser_long_turn_windows.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(raw)
+	src := readGoSource(t, "browser_long_turn_windows.go")
 	start := strings.Index(src, "func browserLongTurnProviderFromExpression")
 	end := strings.Index(src[start:], "\nfunc ")
 	if start < 0 || end < 0 {
@@ -158,11 +149,8 @@ func TestBrowserTurnWaitsAreAllBounded(t *testing.T) {
 		t.Fatal("the generated-image wait is unbounded, so an image that never arrives pins the agent queue forever")
 	}
 
-	src, err := os.ReadFile("browser_chat_generated_image_wait.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(src), "waitForCapturedBrowserChatReturnedMedia(ctx, 0)") {
+	src := readGoSource(t, "browser_chat_generated_image_wait.go")
+	if strings.Contains(src, "waitForCapturedBrowserChatReturnedMedia(ctx, 0)") {
 		t.Fatal("the generated-image wait went back to waiting with no cap")
 	}
 }
@@ -171,11 +159,7 @@ func TestBrowserTurnWaitsAreAllBounded(t *testing.T) {
 // model is usually still answering. Without starting the continuation there,
 // the answer lands in the page with nothing watching for it.
 func TestDevToolsTimeoutStillWatchesTheBrowserTurn(t *testing.T) {
-	raw, err := os.ReadFile("voice_cdp_windows.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(raw)
+	src := readGoSource(t, "voice_cdp_windows.go")
 	// The branch Call takes when its protocol call did not answer in time.
 	i := strings.Index(src, "\tdefault:\n\t\t// A browser turn whose page checkpoint does not come back in time")
 	if i < 0 {
@@ -202,11 +186,7 @@ func TestBrowserTurnsWaitLongEnoughForASessionRestore(t *testing.T) {
 		"sms_sticky_chatgpt.go", "sms_claude_chat.go", "sms_gemini_chat.go",
 		"sms_grok_chat.go", "sms_copilot_chat.go", "sms_muse_chat.go",
 	} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		src := string(raw)
+		src := readGoSource(t, file)
 		if !strings.Contains(src, "browserChatTurnReadyWait") {
 			t.Fatalf("%s does not use the shared browser readiness wait", file)
 		}
