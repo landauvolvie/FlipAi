@@ -195,7 +195,14 @@ func browserChatPromptRequestsGeneratedImage(prompt string) bool {
 func browserChatReplySuggestsPendingImage(reply string) bool {
 	s := strings.ToLower(strings.TrimSpace(reply))
 	if s == "" {
-		return true
+		// An empty reply is what a *failed* text turn produces, and it used to be
+		// read here as "an image is still rendering". Every browser turn that
+		// timed out therefore fell into the wait for media that was never coming
+		// -- which is the "still working..." that never ended, on a plain text
+		// question with no image anywhere in it. Emptiness on its own says
+		// nothing about an image; the caller decides, from the prompt, whether
+		// this turn was ever about one.
+		return false
 	}
 	if len([]rune(s)) > 220 {
 		return false

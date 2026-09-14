@@ -17,7 +17,11 @@ const browserChatGeneratedImageMaxWait = 10 * time.Minute
 // media collector instead of forwarding a premature text placeholder/failure.
 func finishBrowserGeneratedImageTurn(ctx context.Context, command, reply string, turnErr error) (string, error) {
 	requestedImage := browserChatPromptRequestsGeneratedImage(command)
-	pendingImage := browserChatReplySuggestsPendingImage(reply)
+	// A turn that produced no text at all is only an image turn if the prompt
+	// asked for one. Otherwise it is an ordinary text turn that failed, and it
+	// must surface that failure now rather than wait for media.
+	pendingImage := browserChatReplySuggestsPendingImage(reply) ||
+		(requestedImage && strings.TrimSpace(reply) == "")
 	if !requestedImage && !pendingImage {
 		return reply, turnErr
 	}

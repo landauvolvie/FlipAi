@@ -211,10 +211,13 @@ func chatGPTBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mo
 		return "", fmt.Errorf("ChatGPT Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect ChatGPT Chat, then try again: %w", err)
 	}
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
-	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget)
 	body, code, err := chatGPTControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
+		if browserChatTurnRequestTimedOut(err) {
+			return waitForBrowserLongTurn(ctx, dataDir, "G", nil)
+		}
 		return "", err
 	}
 	var out chatGPTSMSReply
