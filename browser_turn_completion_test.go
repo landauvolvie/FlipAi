@@ -176,7 +176,8 @@ func TestDevToolsTimeoutStillWatchesTheBrowserTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := string(raw)
-	i := strings.Index(src, "case <-time.After(timeout):")
+	// The branch Call takes when its protocol call did not answer in time.
+	i := strings.Index(src, "\tdefault:\n\t\t// A browser turn whose page checkpoint does not come back in time")
 	if i < 0 {
 		t.Fatal("the DevTools call timeout branch was not found")
 	}
