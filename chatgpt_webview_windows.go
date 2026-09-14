@@ -178,14 +178,30 @@ const chatGPTTurnJS = `(async(input)=>{
     // containers and interactive controls before reading the assistant wrapper.
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i]').forEach(el=>el.remove());
+      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],[data-testid*="citation" i],[data-testid*="source" i]').forEach(el=>el.remove());
       return clean(clone.innerText||clone.textContent||'');
     }
     return clean(n.innerText||n.textContent||'');
   };
-  const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};
+  // Finding shadow roots means walking every element on the page, and this is
+  // called several times per poll. On a large conversation that cost more than
+  // the poll interval, so the turn could not finish inside its own deadline and
+  // the whole page call was abandoned. Scan once; if the page has no shadow
+  // roots -- most do not -- stay on the fast path for the rest of the turn.
+  let rootsCache=null,rootsAt=0;
+  const roots=()=>{
+    const now=Date.now();
+    if(rootsCache&&(rootsCache.length===1||now-rootsAt<3000))return rootsCache;
+    const out=[document],seen=new Set(out);
+    for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}
+    rootsCache=out;rootsAt=now;return out;
+  };
   const queryAll=sel=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(sel));return Array.from(new Set(out))};
-  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
+  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[class*="card" i],[data-testid*="citation" i],[data-testid*="source" i],[data-testid*="card" i]';
+  // Scanning reads text the cheap way; text() above does the careful read and
+  // is reserved for the reply FlipAi actually sends. Running the careful one
+  // over every candidate on every poll is what made the turn miss its deadline.
+  const rawText=n=>String(n&&(n.innerText||n.textContent)||'').trim();
   // A short status line is not an answer, and neither is a running tool log.
   const interim=t=>{
     const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
@@ -198,17 +214,31 @@ const chatGPTTurnJS = `(async(input)=>{
   // Last resort when ChatGPT names nothing FlipAi recognizes: read the
   // conversation structurally. Without this the turn produced nothing at all
   // and was reported as the model having stopped without answering.
+  const activitySel='aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
+  // Bounded and linear. Comparing every block against every other was
+  // quadratic, and on a real ChatGPT conversation that cost more per poll than
+  // the poll interval, so the turn could not finish inside its own deadline.
   const genericBlocks=()=>{
-    const out=[];
-    for(const r of roots())for(const n of r.querySelectorAll('div,p,section,article,li,pre,span')){
-      if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
-      if(n.matches&&n.matches(chromeSel))continue;
-      if(n.closest&&n.closest(chromeSel))continue;
-      if(n.closest&&n.closest('aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]'))continue;
-      if(text(n).length<2)continue;
-      out.push(n);
+    const found=[];
+    for(const r of roots()){
+      for(const n of r.querySelectorAll('div,p,section,article,li,pre')){
+        if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
+        if(n.querySelector&&n.querySelector('textarea,input,[contenteditable="true"]'))continue;
+        if(n.matches&&n.matches(chromeSel))continue;
+        if(n.closest&&n.closest(chromeSel))continue;
+        if(n.closest&&n.closest(activitySel))continue;
+        const t=rawText(n);
+        if(t.length<2||t.length>20000)continue;
+        found.push(n);
+      }
     }
-    return out.filter(n=>!out.some(o=>o!==n&&n.contains(o)));
+    const set=new Set(found),container=new Set();
+    for(const n of found){
+      let p=n.parentElement;
+      for(let hops=0;p&&hops<40;hops++,p=p.parentElement){if(set.has(p))container.add(p)}
+    }
+    // The newest message is the last one, so keep the tail.
+    return found.filter(n=>!container.has(n)).slice(-400);
   };
   const users=()=>queryAll('[data-message-author-role="user"]');
   const assistants=()=>{
@@ -225,7 +255,7 @@ const chatGPTTurnJS = `(async(input)=>{
   const promptText=canon(input);
   const beforeUserCount=users().length;
   const beforeAssistantCount=assistants().length;
-  const beforeTexts=new Set(assistants().map(n=>canon(text(n))));
+  const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
   const assistantForThisTurn=()=>{
     const us=users();
     const as=assistants();
@@ -235,13 +265,18 @@ const chatGPTTurnJS = `(async(input)=>{
         if(newUser.compareDocumentPosition(as[i])&Node.DOCUMENT_POSITION_FOLLOWING)return as[i];
       }
     }
-    if(as.length>beforeAssistantCount)return as[as.length-1];
-    // Nothing ChatGPT labelled as an assistant message changed. Fall back to
-    // new text in the conversation that is neither the prompt nor a status.
+    // Prefer new, non-prompt, non-status text over "whatever is last": the last
+    // block on a page is easily a control strip, whose text disappears once its
+    // buttons are stripped, leaving an empty reply that never settles.
     for(let i=as.length-1;i>=0;i--){
-      const t=canon(text(as[i]));
+      const t=canon(rawText(as[i]));
       if(!t||t===promptText||beforeTexts.has(t)||interim(t))continue;
+      if(!canon(text(as[i])))continue;
       return as[i];
+    }
+    if(as.length>beforeAssistantCount){
+      const last=as[as.length-1];
+      if(canon(text(last)))return last;
     }
     return null;
   };
