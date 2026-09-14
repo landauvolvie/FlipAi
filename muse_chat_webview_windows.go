@@ -35,7 +35,29 @@ const museChatSignedInJS = `(()=>{const roots=()=>{const out=[document],seen=new
 
 const museChatTurnJS = `(async(input)=>{
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  const text=n=>(n&&n.innerText||n&&n.textContent||'').trim();
+  // The reply's own action row -- "Edit in a page", "Copy", "Good response" --
+  // is page furniture, not part of what the model said, and it was going out
+  // on the end of the message. Strip controls before reading the text.
+  const text=n=>{
+    if(!n)return '';
+    const clone=n.cloneNode&&n.cloneNode(true);
+    if(clone&&clone.querySelectorAll){
+      clone.querySelectorAll('button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],svg').forEach(el=>el.remove());
+      return String(clone.innerText||clone.textContent||'').trim();
+    }
+    return String(n.innerText||n.textContent||'').trim();
+  };
+  // A short status line is not an answer. "Searching sources" reached the phone
+  // in place of what the model said, because it sat unchanged long enough to
+  // look settled.
+  const interim=t=>{
+    const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
+    if(!v)return true;
+    if(v.length>80)return false;
+    return /^(search|think|reason|analy[sz]|work|generat|load|read|brows|look|check|process|plan|writ|draft|creat|gather|review)(ing|ed)?\b/.test(v)
+      ||/^(using|calling|running|opening) \S+/.test(v)
+      ||/^(one moment|just a moment|please wait)\b/.test(v);
+  };
   const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};
   const all=q=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(q));return Array.from(new Set(out))};
   const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};
@@ -52,18 +74,24 @@ const museChatTurnJS = `(async(input)=>{
     // instead of by name.
     return genericBlocks();
   };
+  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
   const genericBlocks=()=>{
     const out=[];
     for(const r of roots())for(const n of r.querySelectorAll('div,p,section,article,li,pre,span')){
-      if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')||n.closest('button')))continue;
+      if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
+      // The reply's own action row is page furniture, never the message.
+      if(n.matches&&n.matches(chromeSel))continue;
+      if(n.closest&&n.closest(chromeSel))continue;
       // A running tool/step log is not the answer. Reading one sent a list of
       // timestamped steps to the phone in place of what the model actually said.
       if(n.closest&&n.closest('aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]'))continue;
-      const t=text(n);if(t.length<2)continue;
-      if(Array.from(n.children).some(ch=>text(ch)===t))continue;
+      if(text(n).length<2)continue;
       out.push(n);
     }
-    return out;
+    // Keep only the innermost blocks. A scroll container's text is every
+    // message concatenated, and treating it as one block sent the whole
+    // conversation -- prompt included -- as the answer.
+    return out.filter(n=>!out.some(o=>o!==n&&n.contains(o)));
   };
   // The conversation is wherever the prompt just landed. Anchoring to it keeps
   // the answer and the side panels apart without having to know either by name.
@@ -86,16 +114,17 @@ const museChatTurnJS = `(async(input)=>{
   const responseForTurn=()=>{
     const current=assistants();
     const box=conversationBox();
-    const pick=restrict=>{
+    const pick=(restrict,allowInterim)=>{
       for(let i=current.length-1;i>=0;i--){
         const n=current[i],t=canon(text(n));
         if(!t||t===promptText||beforeTexts.has(t))continue;
         if(restrict&&box&&!box.contains(n))continue;
+        if(!allowInterim&&interim(t))continue;
         return n;
       }
       return null;
     };
-    return pick(true)||pick(false);
+    return pick(true,false)||pick(false,false);
   };
   c.focus();
   try{
@@ -346,11 +375,9 @@ func startMuseChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 		}
 		if newChat {
 			var ignored bool
-			if err := museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored); err != nil {
-				rw.WriteHeader(http.StatusBadGateway)
-				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
-				return
-			}
+			// Navigating destroys this call's own execution context; the
+			// readiness wait below decides whether the navigation worked.
+			_ = museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored)
 		}
 		if !waitForMuseChatPageSignedIn(dev, 25*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
@@ -407,11 +434,7 @@ func startMuseChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 			return
 		}
 		var ignored bool
-		if err := museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored); err != nil {
-			rw.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
-			return
-		}
+		_ = museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored)
 		if !waitForMuseChatPageSignedIn(dev, 45*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Muse did not restore the saved session after opening a new chat"})

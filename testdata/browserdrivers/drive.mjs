@@ -34,7 +34,14 @@ function turnScript(file, constant, prompt) {
 // beside the answer. Reading that panel instead of the answer is what sent
 // "Find today's last email Opening today's latest email 3:19 pm Review
 // proactive preferences ..." to the phone in place of the real answer.
-function pageHTML({ withSendButton, withActivityPanel }) {
+//
+// `withInterimStatus` shows a short status line -- "Searching sources" -- in the
+// conversation before the answer arrives. Taking that as the answer is what
+// texted "Searching sources" instead of what the model said.
+//
+// `withActionBar` appends the reply's action row ("Edit in a page", "Copy"),
+// which is page furniture and not part of the message.
+function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar }) {
   return `<!doctype html><html><body>
     <div id="log"><div class="x1">an earlier answer that was already on screen</div></div>
     ${withActivityPanel ? `<aside id="steps">
@@ -58,7 +65,14 @@ function pageHTML({ withSendButton, withActivityPanel }) {
         const busy = document.createElement('button');
         busy.textContent = 'Stop';
         busy.setAttribute('aria-label', 'Stop');
-        document.body.appendChild(busy);
+        if (!${JSON.stringify(!!withInterimStatus)}) document.body.appendChild(busy);
+        if (${JSON.stringify(!!withInterimStatus)}) {
+          const status = document.createElement('div');
+          status.className = 'x9';
+          status.textContent = 'Searching sources';
+          log.appendChild(status);
+          setTimeout(() => status.remove(), 2600);
+        }
         setTimeout(() => {
           const reply = document.createElement('div');
           reply.className = 'x3';
@@ -66,6 +80,14 @@ function pageHTML({ withSendButton, withActivityPanel }) {
           reply.textContent = 'FLIPAI';
           setTimeout(() => { reply.textContent = 'FLIPAI answered: ' + value; }, 200);
           setTimeout(() => busy.remove(), 700);
+          if (${JSON.stringify(!!withActionBar)}) {
+            setTimeout(() => {
+              const bar = document.createElement('div');
+              bar.className = 'actions';
+              bar.textContent = 'Edit in a page';
+              reply.appendChild(bar);
+            }, 900);
+          }
           const steps = document.querySelector('#steps');
           if (steps) {
             setTimeout(() => {
@@ -75,7 +97,7 @@ function pageHTML({ withSendButton, withActivityPanel }) {
               steps.appendChild(step);
             }, 500);
           }
-        }, 400);
+        }, ${JSON.stringify(withInterimStatus ? 3000 : 400)});
       };
       const go = document.querySelector('#go');
       if (go) go.addEventListener('click', submit);
@@ -89,6 +111,7 @@ function pageHTML({ withSendButton, withActivityPanel }) {
 const drivers = [
   ['Muse', 'muse_chat_webview_windows.go', 'museChatTurnJS'],
   ['Microsoft Copilot', 'copilot_chat_webview_windows.go', 'copilotChatTurnJS'],
+  ['ChatGPT', 'chatgpt_webview_windows.go', 'chatGPTTurnJS'],
 ];
 
 const prompt = 'browser harness prompt';
@@ -105,14 +128,16 @@ for (const [name, file, constant] of drivers) {
     scenarios.push({ name, file, constant, withSendButton, withActivityPanel: false });
   }
   scenarios.push({ name, file, constant, withSendButton: true, withActivityPanel: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withInterimStatus: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withActionBar: true });
 }
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel }) => {
-  const label = `${name} (${withActivityPanel ? 'activity panel' : withSendButton ? 'send button' : 'Enter only'})`;
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar }) => {
+  const label = `${name} (${withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.setContent(pageHTML({ withSendButton, withActivityPanel }));
+  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar }));
   let result;
   try {
     result = await page.evaluate(turnScript(file, constant, prompt));
@@ -130,6 +155,10 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     failures.push(`${label}: the prompt was echoed back as the answer`);
   } else if (/\d:\d\d ?[ap]m/i.test(String(result.reply))) {
     failures.push(`${label}: the tool/step panel was sent instead of the answer: ${JSON.stringify(result.reply)}`);
+  } else if (/searching sources/i.test(String(result.reply))) {
+    failures.push(`${label}: an interim status was sent instead of the answer: ${JSON.stringify(result.reply)}`);
+  } else if (/edit in a page/i.test(String(result.reply))) {
+    failures.push(`${label}: the reply's action bar was included: ${JSON.stringify(result.reply)}`);
   } else {
     report.push(`${label}: ok`);
   }

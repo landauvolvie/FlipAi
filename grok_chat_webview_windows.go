@@ -405,11 +405,10 @@ func startGrokChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 		}
 		if newChat {
 			var ignored bool
-			if err := grokChatEval(dev, `(()=>{location.href='https://grok.com';return true})()`, false, &ignored); err != nil {
-				rw.WriteHeader(http.StatusBadGateway)
-				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
-				return
-			}
+			// Navigating destroys the execution context this call runs in, so it
+			// often never answers -- that is the navigation working, not a
+			// failure. The readiness wait below decides whether it worked.
+			_ = grokChatEval(dev, `(()=>{location.href='https://grok.com';return true})()`, false, &ignored)
 		}
 		if !waitForGrokChatPageSignedIn(dev, 25*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
@@ -454,11 +453,7 @@ func startGrokChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 			return
 		}
 		var ignored bool
-		if err := grokChatEval(dev, `(()=>{location.href='https://grok.com';return true})()`, false, &ignored); err != nil {
-			rw.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": err.Error()})
-			return
-		}
+		_ = grokChatEval(dev, `(()=>{location.href='https://grok.com';return true})()`, false, &ignored)
 		if !waitForGrokChatPageSignedIn(dev, 45*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Grok did not restore the saved sign-in after opening a new chat"})
