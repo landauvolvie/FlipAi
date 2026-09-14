@@ -167,6 +167,16 @@ const chatGPTTurnJS = `(async(input)=>{
     .replace(/Unable to display this message due to an error\.?\s*Reload the page to try again\.?/gi,' ')
     .replace(/Unable to display this message due to an error\.?/gi,' ')
     .replace(/\s+/g,' ').trim();
+  // Source cards are page furniture; the linked words inside a sentence are
+  // part of the answer. Matching "citation"/"source"/"card" on any element at
+  // all deleted both, so an answer lost the phrases it had linked. Only a
+  // block-level container can be a card; an <a> or <span> in a sentence stays.
+  const refKeys=['[class*="citation" i]','[class*="source" i]','[class*="reference" i]','[class*="card" i]','[data-testid*="citation" i]','[data-testid*="source" i]','[data-testid*="card" i]'];
+  const joinSel=(tags,keys)=>{const out=[];for(const t of tags)for(const k of keys)out.push(t+k);return out.join(',')};
+  const refBlockSel=joinSel(['div','aside','section','nav','ul','ol','footer','table','details'],refKeys);
+  // Inline reference chrome worth dropping is the bare marker -- a superscript
+  // number, "[1]" -- never a linked phrase. Letters mean it is prose.
+  const refInlineSel=joinSel(['a','span','cite','sup','small'],refKeys)+',sup';
   const text=n=>{
     if(!n)return '';
     // ChatGPT renders the normal written answer in a Markdown subtree and rich
@@ -178,7 +188,8 @@ const chatGPTTurnJS = `(async(input)=>{
     // containers and interactive controls before reading the assistant wrapper.
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],[data-testid*="citation" i],[data-testid*="source" i]').forEach(el=>el.remove());
+      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],'+refBlockSel).forEach(el=>el.remove());
+      clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
       return clean(clone.innerText||clone.textContent||'');
     }
     return clean(n.innerText||n.textContent||'');
@@ -197,7 +208,7 @@ const chatGPTTurnJS = `(async(input)=>{
     rootsCache=out;rootsAt=now;return out;
   };
   const queryAll=sel=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(sel));return Array.from(new Set(out))};
-  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[class*="card" i],[data-testid*="citation" i],[data-testid*="source" i],[data-testid*="card" i]';
+  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],'+refBlockSel;
   // Scanning reads text the cheap way; text() above does the careful read and
   // is reserved for the reply FlipAi actually sends. Running the careful one
   // over every candidate on every poll is what made the turn miss its deadline.
@@ -256,6 +267,29 @@ const chatGPTTurnJS = `(async(input)=>{
   const beforeUserCount=users().length;
   const beforeAssistantCount=assistants().length;
   const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
+  // A reply is a message, not the one paragraph inside it that happens to be
+  // the deepest block. Once ChatGPT put a linked sentence in its own paragraph,
+  // the message stopped being a leaf and only that paragraph was sent -- the
+  // written answer above it was dropped. Lift the match back to the message.
+  const wholeMessage=(n,box)=>{
+    if(!n||!box||!box.contains(n))return n;
+    let cur=n;
+    while(cur.parentElement&&cur.parentElement!==box)cur=cur.parentElement;
+    return cur===n?n:cur;
+  };
+  // The conversation is wherever the prompt just landed. It does not move
+  // during a turn, so find it once: another full page scan on every poll is
+  // what stopped a turn from finishing inside its own deadline.
+  let boxCache=null;
+  const conversationBox=()=>{
+    if(boxCache&&boxCache.isConnected)return boxCache;
+    const mine=genericBlocks().filter(n=>canon(rawText(n))===promptText);
+    if(!mine.length)return null;
+    let box=mine[mine.length-1].parentElement;
+    while(box&&box.children.length<2&&box.parentElement)box=box.parentElement;
+    boxCache=box;
+    return box;
+  };
   const assistantForThisTurn=()=>{
     const us=users();
     const as=assistants();
@@ -268,14 +302,17 @@ const chatGPTTurnJS = `(async(input)=>{
     // Prefer new, non-prompt, non-status text over "whatever is last": the last
     // block on a page is easily a control strip, whose text disappears once its
     // buttons are stripped, leaving an empty reply that never settles.
+    const box=conversationBox();
     for(let i=as.length-1;i>=0;i--){
       const t=canon(rawText(as[i]));
       if(!t||t===promptText||beforeTexts.has(t)||interim(t))continue;
-      if(!canon(text(as[i])))continue;
-      return as[i];
+      const whole=wholeMessage(as[i],box);
+      const chosen=canon(rawText(whole))===promptText?as[i]:whole;
+      if(!canon(text(chosen)))continue;
+      return chosen;
     }
     if(as.length>beforeAssistantCount){
-      const last=as[as.length-1];
+      const last=wholeMessage(as[as.length-1],box);
       if(canon(text(last)))return last;
     }
     return null;
@@ -366,6 +403,34 @@ func waitForChatGPTPageSignedIn(d voiceDevTools, timeout time.Duration) bool {
 		time.Sleep(250 * time.Millisecond)
 	}
 	return false
+}
+
+// chatGPTComposerReadyJS asks only whether the page can currently take a
+// prompt. A signed-in ChatGPT is not the same thing as a ChatGPT that has
+// mounted its composer: the experience switch can leave the page on a shell
+// that has neither, and the page driver then fails inside the WebView with the
+// message never reaching ChatGPT at all.
+const chatGPTComposerReadyJS = `(()=>!!document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"]'))()`
+
+// chatGPTGoHomeJS lands on the canonical ChatGPT root. Navigating destroys the
+// execution context this call runs in, so it is never awaited and its failure
+// is never an error; whether it worked is decided by waiting for the page.
+const chatGPTGoHomeJS = `(()=>{location.href='https://chatgpt.com/';return true})()`
+
+// chatGPTPageCouldNotRunScript reports whether the WebView refused to run the
+// expression at all -- a destroyed or navigating execution context, which
+// surfaces as "Runtime.evaluate failed in the WebView page (0x80070057)".
+//
+// This is the one failure where FlipAi knows ChatGPT never saw the message:
+// the script did not start, so nothing was typed and nothing was sent.
+func chatGPTPageCouldNotRunScript(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "did not answer Runtime.evaluate") ||
+		strings.Contains(msg, "failed in the WebView page") ||
+		strings.Contains(msg, "returned no value")
 }
 
 func platformStartChatGPTLogin(dataDir string) error {
@@ -640,19 +705,39 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		return evalMode()
 	}
 
-	waitForFreshComposer := func() chatGPTTurnResult {
-		composerReady := false
-		deadline := time.Now().Add(20 * time.Second)
-		for time.Now().Before(deadline) {
-			if err := chatGPTEval(dev, `(()=>!!document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"]'))()`, false, &composerReady); err == nil && composerReady {
-				break
+	waitForComposer := func(timeout time.Duration) bool {
+		deadline := time.Now().Add(timeout)
+		for {
+			ready := false
+			if err := chatGPTEval(dev, chatGPTComposerReadyJS, false, &ready); err == nil && ready {
+				return true
+			}
+			if !time.Now().Before(deadline) {
+				return false
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
-		if !composerReady {
+	}
+
+	waitForFreshComposer := func() chatGPTTurnResult {
+		if !waitForComposer(20 * time.Second) {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT opened a new chat but the fresh composer did not become ready"}
 		}
 		return chatGPTTurnResult{OK: true}
+	}
+
+	// recoverPage puts the WebView back on a page that can take a prompt. It is
+	// the answer to a page whose execution context is gone or whose shell never
+	// mounted a composer: without it the turn is simply lost, and ChatGPT never
+	// sees the message. Its waits are deliberately short so a recovered turn
+	// still finishes inside the worker's own request budget.
+	recoverPage := func() bool {
+		_ = chatGPTEval(dev, chatGPTGoHomeJS, false, nil)
+		time.Sleep(650 * time.Millisecond)
+		if !waitForChatGPTPageSignedIn(dev, 20*time.Second) {
+			return false
+		}
+		return waitForComposer(12 * time.Second)
 	}
 
 	openFreshChat := func() chatGPTTurnResult {
@@ -702,6 +787,7 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 			http.Error(rw, "FlipAi token required", http.StatusForbidden)
 			return
 		}
+		startedAt := time.Now()
 		if newChat {
 			modeResult := prepareFresh(mode)
 			if !modeResult.OK {
@@ -727,9 +813,40 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 				return
 			}
 		}
+		// Signed in is not the same as ready. When the experience switch leaves
+		// the page on a shell with no composer, the driver cannot type anything
+		// and the WebView rejects the call outright; the message was then lost
+		// with ChatGPT never seeing it. Land on a page that can take a prompt
+		// first.
+		if !waitForComposer(5 * time.Second) {
+			if !recoverPage() {
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT is signed in but its page never showed a prompt box. The message was not sent."})
+				return
+			}
+			if modeResult := ensureMode(mode); !modeResult.OK {
+				rw.WriteHeader(http.StatusBadGateway)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": modeResult.Detail})
+				return
+			}
+		}
 		expr := fmt.Sprintf(chatGPTTurnJS, chatGPTJSString(prompt))
 		var got chatGPTTurnResult
-		if err := chatGPTEval(dev, expr, true, &got); err != nil {
+		err := chatGPTEval(dev, expr, true, &got)
+		// A page that could not run the script at all never typed the prompt, so
+		// sending it again cannot deliver it twice. Recover onto the canonical
+		// root -- a conversation the abandoned attempt could not have touched --
+		// and send it once there, but only while enough of the worker's request
+		// budget is left for the whole turn to still finish.
+		if err != nil && chatGPTPageCouldNotRunScript(err) && time.Since(startedAt) < 60*time.Second {
+			if recoverPage() {
+				if modeResult := ensureMode(mode); modeResult.OK {
+					got = chatGPTTurnResult{}
+					err = chatGPTEval(dev, expr, true, &got)
+				}
+			}
+		}
+		if err != nil {
 			rw.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "FlipAi could not run the ChatGPT page driver: " + err.Error()})
 			return

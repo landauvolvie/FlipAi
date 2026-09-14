@@ -46,6 +46,12 @@ function turnScript(file, constant, prompt) {
 // under an answer ("CBS News", "www.thephoto-news.com", "Show all"). They are
 // references the page renders, not sentences the model wrote.
 //
+// The same scenario also writes a sentence whose phrases are links back to
+// those sources -- "AI regulation", "climate rules", "immigration lawsuits".
+// Those phrases are the answer. Removing anything the page called a citation
+// or a source deleted them along with the cards, and the text message then
+// arrived with holes in its sentences.
+//
 // `withLongHistory` builds a conversation of a realistic size. A driver that
 // scans the whole page on every poll cannot finish inside its own deadline
 // there, and one that treats a scroll container as a block sends the entire
@@ -70,6 +76,7 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
         const box = document.querySelector('#box');
         const value = box.value;
         if (!value) return;
+        window.__flipaiSubmitted = value;
         const log = document.querySelector('#log');
         const mine = document.createElement('div');
         mine.className = 'x2';
@@ -95,6 +102,12 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
           setTimeout(() => busy.remove(), 700);
           if (${JSON.stringify(!!withCitationCards)}) {
             setTimeout(() => {
+              const linked = document.createElement('p');
+              linked.innerHTML = 'The cases involve <a class="citation-link" href="#">AI regulation</a>, '
+                + '<span class="source-chip">climate rules</span>, or '
+                + '<a class="reference-link" href="#">immigration lawsuits</a>.'
+                + '<sup class="citation-marker">1</sup>';
+              reply.appendChild(linked);
               const cards = document.createElement('div');
               cards.className = 'citation-row';
               cards.innerHTML = '<div class="card">CBS News U.S. News: Latest news, breaking news</div>'
@@ -137,6 +150,20 @@ const drivers = [
   ['ChatGPT', 'chatgpt_webview_windows.go', 'chatGPTTurnJS'],
 ];
 
+// Gemini stopped sending altogether -- "FlipAi filled the Gemini prompt box but
+// the Send button never became ready" -- because it was the last driver with no
+// way to submit other than a button it could name. These three are covered for
+// exactly that: a composer and no send control at all.
+// This scenario checks one thing only: the prompt leaves the composer. These
+// drivers read their provider's own reply layout, which this anonymous page
+// deliberately does not have, so what they make of the answer is not what is
+// under test here.
+const enterOnlyDrivers = [
+  ['Gemini', 'gemini_chat_webview_windows.go', 'geminiChatTurnJS'],
+  ['Claude', 'claude_chat_webview_windows.go', 'claudeChatTurnJS'],
+  ['Grok', 'grok_chat_webview_windows.go', 'grokChatTurnJS'],
+];
+
 const prompt = 'browser harness prompt';
 const browser = await chromium.launch({ headless: true });
 const failures = [];
@@ -156,14 +183,34 @@ for (const [name, file, constant] of drivers) {
   scenarios.push({ name, file, constant, withSendButton: true, withLongHistory: true });
   scenarios.push({ name, file, constant, withSendButton: true, withCitationCards: true });
 }
+for (const [name, file, constant] of enterOnlyDrivers) {
+  scenarios.push({ name, file, constant, withSendButton: false, sendOnly: true });
+}
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards }) => {
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, sendOnly }) => {
   const label = `${name} (${withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
   await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards }));
   const startedAt = Date.now();
+  if (sendOnly) {
+    // The driver keeps polling for a reply it will never recognize here, so do
+    // not wait it out: watch the page for the submit instead.
+    const running = page.evaluate(turnScript(file, constant, prompt)).catch(e => ({ threw: String(e) }));
+    let sent = null;
+    while (Date.now() - startedAt < 25000) {
+      sent = await page.evaluate(() => window.__flipaiSubmitted || null).catch(() => null);
+      if (sent) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    if (sent !== prompt) failures.push(`${label}: the prompt was never sent (composer filled, nothing submitted)`);
+    else if (pageErrors.length) failures.push(`${label}: page errors: ${pageErrors.join(' | ')}`);
+    else report.push(`${label}: ok`);
+    void running;
+    await page.close().catch(() => {});
+    return;
+  }
   let result;
   try {
     result = await page.evaluate(turnScript(file, constant, prompt));
@@ -189,6 +236,12 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     failures.push(`${label}: the conversation history was sent as the answer (${String(result.reply).length} chars)`);
   } else if (/CBS News|thephoto-news|Show all/i.test(String(result.reply))) {
     failures.push(`${label}: source cards were included in the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withCitationCards && !/AI regulation/.test(String(result.reply))) {
+    failures.push(`${label}: a linked phrase was stripped out of the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withCitationCards && !/climate rules/.test(String(result.reply))) {
+    failures.push(`${label}: a linked phrase was stripped out of the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withCitationCards && !/immigration lawsuits/.test(String(result.reply))) {
+    failures.push(`${label}: a linked phrase was stripped out of the answer: ${JSON.stringify(result.reply)}`);
   } else if (Date.now() - startedAt > 30000) {
     failures.push(`${label}: the turn took ${Math.round((Date.now() - startedAt) / 1000)}s, which will not finish inside its own deadline`);
   } else {

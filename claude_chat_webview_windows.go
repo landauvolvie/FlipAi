@@ -100,8 +100,17 @@ const claudeChatTurnJS = `(async(input)=>{
   let b=null;
   for(let i=0;i<50&&!b;i++){let x=send();if(x&&!x.disabled)b=x;else await sleep(100);}
   if(!b){const form=c.closest('form');const x=form&&form.querySelector('button[type="submit"]');if(x&&!x.disabled)b=x;}
-  if(!b)return {ok:false,detail:'FlipAi filled the Claude composer but the Send button never became ready.',href:location.href};
-  b.click();
+  if(b){b.click()}
+  else{
+    // The Send control is not always a button FlipAi can name. The turn used to
+    // be abandoned here with the prompt typed and never sent; Enter is how a
+    // person sends it.
+    const form=c.closest&&c.closest('form');
+    if(form&&typeof form.requestSubmit==='function'){try{form.requestSubmit()}catch(e){}}
+    for(const type of ['keydown','keypress','keyup']){
+      c.dispatchEvent(new KeyboardEvent(type,{bubbles:true,composed:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13,which:13}));
+    }
+  }
   let last='',stable=0,started=false;const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();

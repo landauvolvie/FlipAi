@@ -95,8 +95,17 @@ const grokChatTurnJS = `(async(input)=>{
   await sleep(250);
   let b=null;
   for(let i=0;i<60&&!b;i++){b=send();if(!b)await sleep(100);}
-  if(!b)return {ok:false,detail:'FlipAi filled the Grok prompt box but the Send button never became ready.',href:location.href};
-  b.click();
+  if(b){b.click()}
+  else{
+    // The Send control is not always a button FlipAi can name. The turn used to
+    // be abandoned here with the prompt typed and never sent; Enter is how a
+    // person sends it.
+    const form=c.closest&&c.closest('form');
+    if(form&&typeof form.requestSubmit==='function'){try{form.requestSubmit()}catch(e){}}
+    for(const type of ['keydown','keypress','keyup']){
+      c.dispatchEvent(new KeyboardEvent(type,{bubbles:true,composed:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13,which:13}));
+    }
+  }
   // A clickable button is not proof that Grok accepted the prompt. Confirm the
   // composer cleared, generation started, or genuinely new assistant output
   // appeared. In particular, never mistake the just-added user bubble for a
