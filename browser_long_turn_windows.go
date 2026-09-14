@@ -24,6 +24,11 @@ func browserLongTurnProviderFromExpression(expression string) string {
 		return "grok"
 	case strings.Contains(s, "microsoft copilot is loaded") || strings.Contains(s, "microsoft copilot completed the turn"):
 		return "copilot"
+	// Muse was missing here, so its turn expression resolved to no provider at
+	// all: the continuation never started, and the SMS side then waited out its
+	// whole extended window on a state file nothing was ever going to write.
+	case strings.Contains(s, "muse is loaded") || strings.Contains(s, "muse completed the turn"):
+		return "muse"
 	default:
 		return ""
 	}
@@ -120,12 +125,13 @@ func readBrowserLongTurnSnapshot(d voiceDevTools) (browserLongTurnSnapshot, erro
 	return snapshot, nil
 }
 
-// continueBrowserLongTurn is started only after the provider's legacy 90-second
-// page checkpoint fires. It has no elapsed-time deadline while the provider is
-// visibly working or its final response is still changing. If the page has no
-// working control and makes no response progress for 15 seconds, the turn is
-// failed instead of leaving FlipAi to text "still working" forever. Only final
-// assistant output is retained; intermediate/thought/status text is ignored.
+// continueBrowserLongTurn is started after the provider's 90-second page
+// checkpoint fires, or when that checkpoint itself does not come back in time.
+// It keeps no elapsed-time deadline while the response is still changing, but a
+// response that has stopped changing is delivered even if the page still claims
+// to be working, and a page that reports nothing at all fails rather than
+// leaving FlipAi to text "still working" forever. Only final assistant output
+// is retained; intermediate/thought/status text is ignored.
 func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 	provider = browserLongTurnProvider(provider)
 	dataDir := browserLongTurnDataDir()
@@ -146,7 +152,19 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	watchUntil := time.Now().Add(browserLongTurnWatchCap)
 	for range ticker.C {
+		// Working is page-inferred, so a page that always reports working would
+		// otherwise keep this goroutine sampling for the life of the process.
+		if time.Now().After(watchUntil) {
+			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{
+				Provider: provider,
+				Status:   browserLongTurnFailed,
+				Reply:    lastReply,
+				Detail:   "The browser model was still reported as working long after the turn should have ended. Open the model in FlipAi, reconnect if needed, and try again.",
+			})
+			return
+		}
 		snap, err := readBrowserLongTurnSnapshot(d)
 		if err != nil {
 			consecutiveControlErrors++
@@ -182,9 +200,22 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 		// Provider image placeholders are explicitly non-final even if their Stop
 		// control temporarily disappears while the image tool swaps UI states.
 		pendingImage := browserChatReplySuggestsPendingImage(reply)
-		if seenResponse && reply != "" && !snap.Working && !pendingImage && stable >= 2 {
-			_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnDone, Reply: reply})
-			return
+		if seenResponse && reply != "" && !pendingImage {
+			if !snap.Working && stable >= 2 {
+				_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnDone, Reply: reply})
+				return
+			}
+			// A stable answer is a finished answer. Working is inferred from the
+			// page's controls, and a provider that leaves any stop-like control
+			// on screen -- voice mode, a stale streaming affordance, a control
+			// the site renames -- reads as working forever. That is what left a
+			// completed answer sitting in the browser while FlipAi texted
+			// "still working" until the turn was abandoned. Text that has not
+			// changed for this long is not being streamed any more.
+			if stable >= browserLongTurnSettledSamples {
+				_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnDone, Reply: reply})
+				return
+			}
 		}
 
 		if snap.Working || replyChanged {

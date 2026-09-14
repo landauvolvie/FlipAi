@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.46.78"
+const version = "0.46.80"
 
 // FlipAi is a transport, so fresh installs add no behavioral instruction to a
 // user's command. A user can still enter a custom instruction in the Agents UI.

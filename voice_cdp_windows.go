@@ -210,6 +210,15 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 		}
 		return nil
 	case <-time.After(timeout):
+		// A browser turn whose page checkpoint does not come back in time is not
+		// a dead turn: the model is frequently still answering, and the answer
+		// then lands in the page with nothing watching for it. Start the same
+		// continuation the checkpoint would have started, so the SMS side can
+		// still collect the reply instead of waiting out its whole window on a
+		// state file nobody was going to write.
+		if browserTurn && browserProvider != "" {
+			go continueBrowserLongTurn(d, browserProvider, true)
+		}
 		return errors.New("the WebView page did not answer " + method)
 	}
 }

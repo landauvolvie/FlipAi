@@ -35,7 +35,7 @@ type claudeChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"
 func claudeChatBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mode string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadClaudeChatRuntime(dataDir).Connected { return "", errors.New("Claude Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Claude Chat, then try again") }
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second); s, err := ensureClaudeChatReady(readyCtx, dataDir); cancel()
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureClaudeChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Claude Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Claude Chat, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
 	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second); body, code, err := claudeChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel()
@@ -55,7 +55,7 @@ func claudeChatBrowserSend(ctx context.Context, dataDir, prompt string) (string,
 func claudeChatBrowserNewConversation(ctx context.Context, dataDir string) error { return claudeChatBrowserNewConversationMode(ctx, dataDir, browserModeChat) }
 
 func claudeChatBrowserNewConversationMode(ctx context.Context, dataDir, mode string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second); s, err := ensureClaudeChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureClaudeChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
 	if mode == "" { mode = browserModeChat }
 	payload, _ := json.Marshal(map[string]any{"mode": mode})
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second); body, code, err := claudeChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(string(payload))); cancel(); if err != nil { return err }

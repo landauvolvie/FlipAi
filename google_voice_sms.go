@@ -441,6 +441,14 @@ func appendDirectGoogleVoiceSMS(dataDir, payload string) error {
 		return nil
 	}
 	activity.Add("success", "security", "Google Voice SMS phone number verified and allowed", m.Sender, agent, m.ID)
+	// A pause is honoured -- the text is spooled, not delivered -- but it used
+	// to be honoured silently. This listener keeps running while FlipAi is
+	// paused, so the Activity log showed the text arriving and its sender being
+	// allowed, and then nothing at all. That silence is indistinguishable from a
+	// broken bridge, so say which one it is while the text is still in hand.
+	if cfg.Paused {
+		activity.Add("warn", "bridge", "FlipAi is paused: this text is waiting and will not reach an agent until you press Resume.", m.Sender, agent, m.ID)
+	}
 
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return err

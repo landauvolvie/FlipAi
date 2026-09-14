@@ -105,7 +105,7 @@ const claudeChatTurnJS = `(async(input)=>{
   let last='',stable=0,started=false;const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();
-    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0;}if(!stop()&&stable>=5)return {ok:true,reply:now||'Claude completed the turn.',href:location.href};}
+    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0;}if(!stop()&&stable>=5)return {ok:true,reply:now||'Claude completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:now,href:location.href};}
   }
   return {ok:false,detail:started?'Claude started answering but did not finish within 90 seconds.':'Claude did not produce a new assistant response within 90 seconds.',href:location.href};
 })(%s)`

@@ -3,7 +3,13 @@ package main
 import (
 	"context"
 	"strings"
+	"time"
 )
+
+// browserChatGeneratedImageMaxWait bounds the wait for media a provider may
+// still be rendering. It outlasts any realistic image generation while still
+// guaranteeing the turn ends.
+const browserChatGeneratedImageMaxWait = 10 * time.Minute
 
 // finishBrowserGeneratedImageTurn turns the browser providers' intermediate
 // text state into a real completed media turn. The provider page keeps doing
@@ -33,10 +39,12 @@ func finishBrowserGeneratedImageTurn(ctx context.Context, command, reply string,
 		return reply, turnErr
 	}
 
-	// There is deliberately no elapsed-time cap here. Image tools can stay
-	// active for many minutes; the wait ends only when the actual media arrives
-	// or the parent turn is cancelled because the provider/app truly stopped.
-	if waitForCapturedBrowserChatReturnedMedia(ctx, 0) {
+	// Image tools can stay active for many minutes, so this wait is generous --
+	// but it is not unbounded. It is entered on a turn that has already failed
+	// with a timeout, and an image that is never coming would otherwise hold the
+	// agent's whole SMS queue for the life of the process while the sender was
+	// texted "still working" every couple of minutes.
+	if waitForCapturedBrowserChatReturnedMedia(ctx, browserChatGeneratedImageMaxWait) {
 		return completedBrowserGeneratedImageReply(reply), nil
 	}
 	return reply, turnErr

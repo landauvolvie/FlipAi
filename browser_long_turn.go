@@ -20,6 +20,24 @@ const (
 	// browser turn pin SMS delivery forever. This is intentionally browser-only;
 	// CLI agents keep their own lifecycle semantics.
 	browserLongTurnMaxWait = 5 * time.Minute
+
+	// browserLongTurnSettledSamples is how many consecutive one-second samples
+	// an unchanged, non-empty answer must survive before FlipAi delivers it even
+	// though the page still reports itself as working.
+	//
+	// "Working" is inferred from the page's own controls, and every provider
+	// driver treats any stop-like control as proof that the model is still
+	// generating. A page that leaves such a control on screen after the answer
+	// is finished -- voice mode, a stale streaming affordance, a renamed button
+	// -- therefore reads as working forever, and a complete answer sat in the
+	// browser while FlipAi texted "still working" until the turn was abandoned.
+	// Text that has not changed for this long is not being streamed any more.
+	browserLongTurnSettledSamples = 12
+
+	// browserLongTurnWatchCap bounds the continuation goroutine itself. The SMS
+	// side stops waiting after browserLongTurnMaxWait; without this the sampler
+	// behind it would keep running for the life of the process.
+	browserLongTurnWatchCap = 15 * time.Minute
 )
 
 type browserLongTurnState struct {

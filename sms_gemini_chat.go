@@ -93,7 +93,7 @@ func geminiChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt stri
 	// Browser models must prove a live signed-in session before FlipAi sends a
 	// delayed "working on it" receipt. A dead/expired session therefore fails
 	// clearly instead of producing endless progress texts.
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait)
 	s, err := ensureGeminiChatReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
@@ -137,7 +137,7 @@ func geminiChatBrowserSend(ctx context.Context, dataDir, prompt string) (string,
 }
 
 func geminiChatBrowserNewConversation(ctx context.Context, dataDir string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait)
 	s, err := ensureGeminiChatReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {

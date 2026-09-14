@@ -204,7 +204,7 @@ func chatGPTBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mo
 	if !loadChatGPTRuntime(dataDir).Connected {
 		return "", errors.New("ChatGPT Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for ChatGPT Chat, then try again")
 	}
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {
@@ -247,7 +247,7 @@ func chatGPTBrowserNewConversation(ctx context.Context, dataDir string) error {
 }
 
 func chatGPTBrowserNewConversationMode(ctx context.Context, dataDir, mode string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
 	if err != nil {

@@ -488,16 +488,14 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 	// Muse restores a saved connected session after a FlipAi restart instead of
 	// waiting for the next SMS to discover that its worker is gone.
 	go runMuseChatBackgroundSupervisor(ctx, dataDir)
+	// Bringing SMS processing up is supervised rather than attempted once: the
+	// Google Voice transport is a background browser restoring its saved session,
+	// and it is routinely not ready in the first seconds after a restart. The
+	// supervisor reports each distinct reason it is still waiting, and warns in
+	// the Activity log if the transport never arrives.
 	go func() {
 		time.Sleep(800 * time.Millisecond)
-		app.startBridge(ctx)
-		time.Sleep(100 * time.Millisecond)
-		app.mu.Lock()
-		started := app.bridge != nil
-		app.mu.Unlock()
-		if !started {
-			activity.Add("warn", "bridge", "SMS processing did not start. Check Gmail, phone security, and agent diagnostics.", "", "", "")
-		}
+		app.superviseBridgeStart(ctx)
 	}()
 	<-ctx.Done()
 	sd, c := context.WithTimeout(context.Background(), 5*time.Second)
