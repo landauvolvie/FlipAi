@@ -100,10 +100,14 @@ func geminiChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt stri
 		return "", fmt.Errorf("Gemini Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Gemini Chat, then try again: %w", err)
 	}
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget)
 	body, code, err := geminiChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
+		if browserChatTurnRequestTimedOut(err) {
+			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "M", nil)
+			return cleanGeminiChatReply(reply), waitErr
+		}
 		return "", err
 	}
 	var out geminiChatSMSReply

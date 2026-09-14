@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -42,11 +43,36 @@ func browserLongTurnDataDir() string {
 	return dataDir
 }
 
+// browserLongTurnGeneration counts turns per provider. A continuation belongs
+// to the turn that started it; when the next turn on that provider begins, the
+// old sampler is superseded and must stop. Left running it kept polling the
+// page underneath the new turn, and its DevTools calls collided with the page
+// driver's -- "Overlapped I/O operation is in progress" -- failing a turn that
+// was otherwise fine.
+var (
+	browserLongTurnGenMu sync.Mutex
+	browserLongTurnGen   = map[string]uint64{}
+)
+
+func nextBrowserLongTurnGeneration(provider string) uint64 {
+	browserLongTurnGenMu.Lock()
+	defer browserLongTurnGenMu.Unlock()
+	browserLongTurnGen[provider]++
+	return browserLongTurnGen[provider]
+}
+
+func currentBrowserLongTurnGeneration(provider string) uint64 {
+	browserLongTurnGenMu.Lock()
+	defer browserLongTurnGenMu.Unlock()
+	return browserLongTurnGen[provider]
+}
+
 func beginBrowserLongTurn(expression string) string {
 	provider := browserLongTurnProviderFromExpression(expression)
 	if provider == "" {
 		return ""
 	}
+	nextBrowserLongTurnGeneration(provider)
 	if dataDir := browserLongTurnDataDir(); dataDir != "" {
 		clearBrowserLongTurnState(dataDir, provider)
 	}
@@ -139,6 +165,7 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 		return
 	}
 	_ = saveBrowserLongTurnState(dataDir, browserLongTurnState{Provider: provider, Status: browserLongTurnPending})
+	generation := currentBrowserLongTurnGeneration(provider)
 
 	baseline := ""
 	seenResponse := started
@@ -154,6 +181,12 @@ func continueBrowserLongTurn(d voiceDevTools, provider string, started bool) {
 	defer ticker.Stop()
 	watchUntil := time.Now().Add(browserLongTurnWatchCap)
 	for range ticker.C {
+		// A newer turn on this provider owns the page now. Stop without writing
+		// state: this sampler's answer belongs to a turn nobody is waiting on,
+		// and its DevTools calls would collide with the new turn's driver.
+		if currentBrowserLongTurnGeneration(provider) != generation {
+			return
+		}
 		// Working is page-inferred, so a page that always reports working would
 		// otherwise keep this goroutine sampling for the life of the process.
 		if time.Now().After(watchUntil) {

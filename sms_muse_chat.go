@@ -38,7 +38,7 @@ func museChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Muse is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Muse, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second); body, code, err := museChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := museChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { return waitForBrowserLongTurn(ctx, dataDir, "U", nil) }; return "", err }
 	var out museChatSMSReply; _ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }

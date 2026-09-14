@@ -115,7 +115,7 @@ func museChatControlRequest(ctx context.Context, s MuseChatWebRuntime, method, p
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := (&http.Client{Timeout: 100 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: browserChatTurnRequestBudget}).Do(req)
 	if err != nil {
 		return nil, 0, err
 	}

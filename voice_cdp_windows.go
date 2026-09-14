@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -23,6 +24,13 @@ import (
 type webViewDevTools struct {
 	view     webview2.WebView
 	chromium *edge.Chromium
+
+	// call serializes DevTools calls on this WebView. WebView2 rejects a
+	// protocol call issued while another is still outstanding, with
+	// "Overlapped I/O operation is in progress" -- which is what a long-turn
+	// continuation still sampling the page did to the next turn's page driver,
+	// breaking a turn that had nothing wrong with it.
+	call sync.Mutex
 }
 
 const (
@@ -104,6 +112,8 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 	if d == nil || d.view == nil || d.chromium == nil {
 		return errNoVoiceControlChannel
 	}
+	d.call.Lock()
+	defer d.call.Unlock()
 
 	browserTurn := false
 	browserProvider := ""

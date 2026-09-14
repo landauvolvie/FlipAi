@@ -38,7 +38,7 @@ func copilotChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt str
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureCopilotChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Microsoft Copilot Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Microsoft Copilot Chat, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second); body, code, err := copilotChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := copilotChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { return waitForBrowserLongTurn(ctx, dataDir, "P", nil) }; return "", err }
 	var out copilotChatSMSReply; _ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }

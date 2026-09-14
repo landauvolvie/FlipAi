@@ -38,8 +38,8 @@ func claudeChatBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt,
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureClaudeChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Claude Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Claude Chat, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
-	turnCtx, cancel := context.WithTimeout(ctx, 100*time.Second); body, code, err := claudeChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel()
-	if err != nil { return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := claudeChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel()
+	if err != nil { if browserChatTurnRequestTimedOut(err) { return waitForBrowserLongTurn(ctx, dataDir, "H", nil) }; return "", err }
 	var out claudeChatSMSReply; _ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }

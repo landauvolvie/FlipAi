@@ -160,7 +160,7 @@ func explicitSMSRoute(raw string, cfg Config) string {
 			if routeMatchesCommand(candidate, route, newWord) {
 				return route.ID
 			}
-	}
+		}
 	}
 	return ""
 }
@@ -228,7 +228,18 @@ func selectStickySMSRoute(raw string, cfg Config, sourceAgent, sticky string) (s
 		if smsRouteAllowed(sourceAgent, route) {
 			return route, nil
 		}
-		if legacy, ok := explicitAllowedConfiguredAlias(raw, cfg, sourceAgent); ok {
+		// The legacy alias table exists so an older prefix still reaches the
+		// agent it always reached: "A:" named Claude Code Local before it named
+		// Claude Chat, so a number allowed only on Claude Code Local still gets
+		// there. That redirect is only defensible inside one vendor's family.
+		//
+		// Across families it is a silent misdelivery. "M" is Microsoft Copilot
+		// in this table and Gemini in the alias table, so a number not allowed
+		// on Copilot had its Copilot message quietly answered by Gemini. Being
+		// told the number is not allowed on Microsoft Copilot Chat is true and
+		// fixable; being answered by Gemini is neither.
+		if legacy, ok := explicitAllowedConfiguredAlias(raw, cfg, sourceAgent); ok &&
+			smsAgentFamily(legacy.Agent) == smsAgentFamily(route.Agent) {
 			return legacy, nil
 		}
 		return smsRouteSpec{}, wrongAgentForNumber(sourceAgent, route.Agent)
@@ -245,6 +256,29 @@ func selectStickySMSRoute(raw string, cfg Config, sourceAgent, sticky string) (s
 		}
 	}
 	return smsRouteSpec{}, errors.New("no SMS agent is selected for this phone yet; use O: ChatGPT, OW: ChatGPT Work, OC: Codex, A: Claude Chat, AC: Claude Code Web, AW: Claude Cowork, AL: Claude Code Local, G: Gemini, M: Copilot, MU: Muse, or X: Grok")
+}
+
+// smsAgentFamily groups the agents that are the same product behind different
+// FlipAi surfaces. Only inside one family may a prefix whose meaning changed be
+// redirected to the agent it used to name; across families the sender asked for
+// something else entirely.
+func smsAgentFamily(agent string) string {
+	switch strings.ToUpper(strings.TrimSpace(agent)) {
+	case "G", "C": // ChatGPT Chat / ChatGPT Work / Codex
+		return "openai"
+	case "H", "A": // Claude Chat / Claude Code Web / Cowork / Claude Code Local
+		return "anthropic"
+	case "M":
+		return "google"
+	case "P":
+		return "microsoft"
+	case "U":
+		return "muse"
+	case "X":
+		return "xai"
+	default:
+		return ""
+	}
 }
 
 func underlyingPrefixForRoute(cfg Config, route smsRouteSpec) string {

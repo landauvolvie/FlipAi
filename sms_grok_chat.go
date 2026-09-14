@@ -83,10 +83,17 @@ func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 	}
 
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	requestCtx, requestCancel := context.WithTimeout(turnCtx, 100*time.Second)
+	requestCtx, requestCancel := context.WithTimeout(turnCtx, browserChatTurnRequestBudget)
 	body, code, err := grokChatControlRequest(requestCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	requestCancel()
-	if err != nil { return "", changedError(err) }
+	if err != nil {
+		if browserChatTurnRequestTimedOut(err) {
+			reply, waitErr := waitForBrowserLongTurn(turnCtx, dataDir, "X", nil)
+			if waitErr != nil { return reply, changedError(waitErr) }
+			return reply, nil
+		}
+		return "", changedError(err)
+	}
 	var out grokChatSMSReply; _ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
