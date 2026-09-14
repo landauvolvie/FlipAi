@@ -178,21 +178,54 @@ const chatGPTTurnJS = `(async(input)=>{
     // containers and interactive controls before reading the assistant wrapper.
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i]').forEach(el=>el.remove());
+      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i]').forEach(el=>el.remove());
       return clean(clone.innerText||clone.textContent||'');
     }
     return clean(n.innerText||n.textContent||'');
   };
-  const users=()=>Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-  const assistants=()=>Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-  const composer=()=>document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"]');
-  const send=()=>document.querySelector('button[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label^="Send" i]');
-  const stop=()=>document.querySelector('button[data-testid="stop-button"],button[aria-label^="Stop" i]');
+  const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};
+  const queryAll=sel=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(sel));return Array.from(new Set(out))};
+  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
+  // A short status line is not an answer, and neither is a running tool log.
+  const interim=t=>{
+    const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
+    if(!v)return true;
+    if(v.length>80)return false;
+    return /^(search|think|reason|analy[sz]|work|generat|load|read|brows|look|check|process|plan|writ|draft|creat|gather|review)(ing|ed)?\b/.test(v)
+      ||/^(using|calling|running|opening) \S+/.test(v)
+      ||/^(one moment|just a moment|please wait)\b/.test(v);
+  };
+  // Last resort when ChatGPT names nothing FlipAi recognizes: read the
+  // conversation structurally. Without this the turn produced nothing at all
+  // and was reported as the model having stopped without answering.
+  const genericBlocks=()=>{
+    const out=[];
+    for(const r of roots())for(const n of r.querySelectorAll('div,p,section,article,li,pre,span')){
+      if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
+      if(n.matches&&n.matches(chromeSel))continue;
+      if(n.closest&&n.closest(chromeSel))continue;
+      if(n.closest&&n.closest('aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]'))continue;
+      if(text(n).length<2)continue;
+      out.push(n);
+    }
+    return out.filter(n=>!out.some(o=>o!==n&&n.contains(o)));
+  };
+  const users=()=>queryAll('[data-message-author-role="user"]');
+  const assistants=()=>{
+    const named=queryAll('[data-message-author-role="assistant"]');
+    return named.length?named:genericBlocks();
+  };
+  const composer=()=>queryAll('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"],textarea')[0]||null;
+  const send=()=>queryAll('button[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label^="Send" i],button[type="submit"]').find(b=>!b.disabled)||null;
+  const stop=()=>queryAll('button[data-testid="stop-button"],button[aria-label^="Stop" i]')[0]||null;
   let c=null;
   for(let i=0;i<100&&!c;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'ChatGPT is loaded but FlipAi could not find the message composer. The site layout may have changed.',href:location.href};
+  const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
+  const promptText=canon(input);
   const beforeUserCount=users().length;
   const beforeAssistantCount=assistants().length;
+  const beforeTexts=new Set(assistants().map(n=>canon(text(n))));
   const assistantForThisTurn=()=>{
     const us=users();
     const as=assistants();
@@ -202,7 +235,15 @@ const chatGPTTurnJS = `(async(input)=>{
         if(newUser.compareDocumentPosition(as[i])&Node.DOCUMENT_POSITION_FOLLOWING)return as[i];
       }
     }
-    return as.length>beforeAssistantCount?as[as.length-1]:null;
+    if(as.length>beforeAssistantCount)return as[as.length-1];
+    // Nothing ChatGPT labelled as an assistant message changed. Fall back to
+    // new text in the conversation that is neither the prompt nor a status.
+    for(let i=as.length-1;i>=0;i--){
+      const t=canon(text(as[i]));
+      if(!t||t===promptText||beforeTexts.has(t)||interim(t))continue;
+      return as[i];
+    }
+    return null;
   };
   c.focus();
   if(c.tagName==='TEXTAREA'||c.tagName==='INPUT'){
@@ -216,8 +257,17 @@ const chatGPTTurnJS = `(async(input)=>{
   await sleep(120);
   let b=null;
   for(let i=0;i<50&&!b;i++){b=send();if(!b||b.disabled){b=null;await sleep(100);}}
-  if(!b)return {ok:false,detail:'FlipAi filled the ChatGPT composer but the Send button never became ready.',href:location.href};
-  b.click();
+  if(b){b.click()}
+  else{
+    // ChatGPT's send control is not always a button FlipAi can name. Enter is
+    // how a person sends it, and abandoning the turn here left the prompt
+    // typed into the composer and never sent.
+    const form=c.closest&&c.closest('form');
+    if(form&&typeof form.requestSubmit==='function'){try{form.requestSubmit()}catch(e){}}
+    for(const type of ['keydown','keypress','keyup']){
+      c.dispatchEvent(new KeyboardEvent(type,{bubbles:true,composed:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13,which:13}));
+    }
+  }
   let last='',stable=0,started=false;
   const deadline=Date.now()+90000;
   while(Date.now()<deadline){
@@ -227,6 +277,7 @@ const chatGPTTurnJS = `(async(input)=>{
       started=true;
       const now=text(node);
       if(now===last)stable++;else{last=now;stable=0;}
+      if(interim(now)){stable=0;continue}
       if(!stop()&&stable>=5&&now)return {ok:true,reply:now,href:location.href};
       // A stale Stop control must not hold a fully settled answer forever.
       if(now&&stable>=32)return {ok:true,reply:now,href:location.href};
@@ -539,10 +590,14 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		// the canonical root is a safe Chat boundary. This may start a fresh Chat
 		// conversation when crossing out of Work, which is preferable to ever
 		// sending an O: request into the Work conversation.
-		var ignored bool
-		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not open regular ChatGPT Chat: " + err.Error()}
-		}
+		// Navigating destroys the execution context this very call is running
+		// in, so the call frequently never answers -- which is not a failure,
+		// it is the navigation working. Reporting it as one is why an O:
+		// message came back as "could not open regular ChatGPT Chat: the
+		// WebView did not answer Runtime.evaluate" without ChatGPT ever seeing
+		// the message. Whether the navigation worked is decided below, by
+		// waiting for the page it lands on.
+		_ = chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, nil)
 		time.Sleep(650 * time.Millisecond)
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in while switching from Work to Chat"}
@@ -570,9 +625,9 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		// the single reset primitive: the root is always a fresh regular ChatGPT
 		// Chat conversation, independent of whether the previous page was Chat or Work.
 		var ignored bool
-		if err := chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored); err != nil {
-			return chatGPTTurnResult{OK: false, Detail: "FlipAi could not open a fresh ChatGPT Chat session: " + err.Error()}
-		}
+		// Navigating destroys this call's own execution context; the readiness
+		// wait below decides whether the navigation worked.
+		_ = chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored)
 		time.Sleep(650 * time.Millisecond)
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a fresh Chat session"}

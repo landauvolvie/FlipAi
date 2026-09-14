@@ -39,3 +39,64 @@ func stripBrowserChatReplyLabel(reply string) string {
 	}
 	return rest
 }
+
+// browserChatReplyChrome is the action row a provider renders under a reply.
+// It is page furniture -- controls for the person looking at the browser -- and
+// it was arriving on the end of text messages. Only a trailing run of these is
+// removed, so an answer that happens to end with one of these words survives.
+var browserChatReplyChrome = []string{
+	"Edit in a page", "Edit in page", "Edit in canvas",
+	"Good response", "Bad response", "Copy link", "Copy",
+	"Read aloud", "Regenerate", "Share", "Export", "Save",
+	"Like", "Dislike", "Retry", "Try again", "More actions",
+}
+
+func stripBrowserChatReplyChrome(reply string) string {
+	out := strings.TrimSpace(reply)
+	for changed := true; changed; {
+		changed = false
+		for _, chrome := range browserChatReplyChrome {
+			if len(out) <= len(chrome) {
+				continue
+			}
+			tail := out[len(out)-len(chrome):]
+			if !strings.EqualFold(tail, chrome) {
+				continue
+			}
+			head := out[:len(out)-len(chrome)]
+			// A one-word control is also an ordinary English word, so it only
+			// counts as furniture when the page set it apart -- its own line, or
+			// a separator. Without that rule "you can copy" lost its last word.
+			if !strings.Contains(chrome, " ") && !endsWithChromeSeparator(head) {
+				continue
+			}
+			trimmed := strings.TrimRight(strings.TrimSpace(head), " \t\r\n·|•")
+			if strings.TrimSpace(trimmed) == "" {
+				continue
+			}
+			out = strings.TrimSpace(trimmed)
+			changed = true
+		}
+	}
+	return out
+}
+
+// endsWithChromeSeparator reports whether the page visibly separated what
+// follows from the message: a line break, or a bullet/pipe separator.
+func endsWithChromeSeparator(head string) bool {
+	trimmed := strings.TrimRight(head, " \t")
+	if trimmed == "" {
+		return false
+	}
+	switch trimmed[len(trimmed)-1] {
+	case '\n', '\r', '|':
+		return true
+	}
+	return strings.HasSuffix(trimmed, "·") || strings.HasSuffix(trimmed, "•")
+}
+
+// cleanBrowserChatReply removes what the page added around the message: the
+// speaker label in front and the action row behind.
+func cleanBrowserChatReply(reply string) string {
+	return stripBrowserChatReplyChrome(stripBrowserChatReplyLabel(reply))
+}
