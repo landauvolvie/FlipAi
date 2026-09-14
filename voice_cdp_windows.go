@@ -108,12 +108,67 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	return voiceDevToolsTimeout
 }
 
+// devToolsReply is one completed protocol call.
+type devToolsReply struct {
+	code   uintptr
+	result string
+	err    error
+}
+
+// dispatch performs exactly one protocol call and waits for its answer.
+//
+// The lock is held for this window and nothing else. Call itself issues further
+// DevTools calls around this one -- the attachment upload before a turn, the
+// returned-media scan after it -- and a sync.Mutex is not reentrant, so holding
+// it across Call's body made the very first browser turn re-enter the lock it
+// already owned. That wedged the WebView worker permanently: the page had run
+// the prompt and the model had answered, but the control channel never came
+// back and every later call on that browser blocked behind it forever.
+func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (devToolsReply, bool) {
+	// Waiting for the channel counts against this call's own deadline. A short
+	// page probe issued while a 90-second turn holds the channel reports "did
+	// not answer" on its own schedule rather than parking a goroutine until the
+	// turn ends -- which, at one probe every 250ms, is how a readiness poll
+	// would pile hundreds of them up behind a single turn.
+	deadline := time.Now().Add(timeout)
+	for !d.call.TryLock() {
+		if time.Now().After(deadline) {
+			return devToolsReply{}, false
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	defer d.call.Unlock()
+
+	// Buffered so a reply arriving after the timeout does not block the window's
+	// message loop forever.
+	answered := make(chan devToolsReply, 1)
+	d.view.Dispatch(func() {
+		err := d.chromium.CallDevToolsProtocolMethod(method, body, func(code uintptr, result string) {
+			select {
+			case answered <- devToolsReply{code: code, result: result}:
+			default:
+			}
+		})
+		if err != nil {
+			select {
+			case answered <- devToolsReply{err: err}:
+			default:
+			}
+		}
+	})
+
+	select {
+	case got := <-answered:
+		return got, true
+	case <-time.After(timeout):
+		return devToolsReply{}, false
+	}
+}
+
 func (d *webViewDevTools) Call(method string, params any, out any) error {
 	if d == nil || d.view == nil || d.chromium == nil {
 		return errNoVoiceControlChannel
 	}
-	d.call.Lock()
-	defer d.call.Unlock()
 
 	browserTurn := false
 	browserProvider := ""
@@ -160,32 +215,9 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 		body = string(b)
 	}
 
-	type reply struct {
-		code   uintptr
-		result string
-		err    error
-	}
-	// Buffered so a reply arriving after the timeout below does not block the
-	// window's message loop forever.
-	answered := make(chan reply, 1)
-	d.view.Dispatch(func() {
-		err := d.chromium.CallDevToolsProtocolMethod(method, body, func(code uintptr, result string) {
-			select {
-			case answered <- reply{code: code, result: result}:
-			default:
-			}
-		})
-		if err != nil {
-			select {
-			case answered <- reply{err: err}:
-			default:
-			}
-		}
-	})
-
-	timeout := webViewDevToolsCallTimeout(method, params)
-	select {
-	case got := <-answered:
+	got, answeredInTime := d.dispatch(method, body, webViewDevToolsCallTimeout(method, params))
+	switch {
+	case answeredInTime:
 		if got.err != nil {
 			return got.err
 		}
@@ -219,7 +251,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 			}
 		}
 		return nil
-	case <-time.After(timeout):
+	default:
 		// A browser turn whose page checkpoint does not come back in time is not
 		// a dead turn: the model is frequently still answering, and the answer
 		// then lands in the page with nothing watching for it. Start the same

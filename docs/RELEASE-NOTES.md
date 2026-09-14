@@ -1,11 +1,36 @@
-# FlipAi v0.46.81
+# FlipAi v0.46.82
 
-The remaining browser agents deliver their answers, and an explicit prefix always reaches the agent it names.
+Fixes a deadlock introduced in v0.46.81 that stopped every browser agent.
 
-- **A failed text turn is no longer mistaken for a rendering image.** An empty reply was read as "an image is still being generated", so every browser turn that timed out fell into the wait for media that was never coming — on plain text questions with no image anywhere in them. That wait had no cap before v0.46.80, which is the "still working…" that never ended; v0.46.80 bounded it at ten minutes, which is why the failures finally became visible as `FAILED:` texts. Emptiness on its own now says nothing about an image: only a prompt that actually asked for one enters that wait.
-- **FlipAi no longer abandons an answer it is still waiting for.** The host gave up on a browser worker after 100 seconds, but the worker's own budget for one turn runs to about 140 — 25s proving the page is signed in, up to 95s for the page turn, up to 20s scanning for returned media. A turn that used its full checkpoint was abandoned while the worker was still finishing, reported as `Post "http://127.0.0.1:PORT/chat": context deadline exceeded`, with the model's answer sitting complete in the browser. The budget now outlasts the worker's, and if the host does hit its own deadline it collects the answer through the long-turn state instead of discarding it.
-- **`Overlapped I/O operation is in progress` is fixed.** WebView2 rejects a DevTools call issued while another is outstanding. A long-turn watcher left sampling the page collided with the next turn's page driver and failed a turn that was otherwise fine. Calls on one WebView are now serialized, and a watcher is superseded the moment a new turn starts on that provider.
-- **An explicit prefix is never silently answered by another agent.** "M" means Microsoft Copilot in the route table and Gemini in the legacy alias table, so a number not allowed on Copilot had its `m:` message quietly answered by Gemini. The legacy redirect now stays inside one vendor's family — `A:` still reaches Claude Code Local for a number allowed only there — and anything else reports that the number is not allowed on the agent the sender named.
-- Regression coverage asserts a failed text turn surfaces its real error immediately, that a genuine image request still waits, that the request budget outlasts the worker's, that a host-side deadline collects rather than discards, and that `m:` reaches Microsoft Copilot or reports why it cannot.
+v0.46.81 began serializing DevTools calls on each background browser, to stop a
+leftover page sampler colliding with the next turn's page driver. It took that
+lock around the whole of `Call` — but `Call` itself issues further DevTools
+calls on either side of the one it is making: the attachment upload before a
+turn, and the returned-media scan after it. A Go mutex is not reentrant, so the
+first browser turn on each provider re-entered the lock it already held.
+
+That wedged the browser worker permanently. The page had already run the prompt
+and the model had already answered, but the control channel never came back and
+every later call on that browser blocked behind it forever — which is exactly
+"the model gets the message and replies, but FlipAi does not send it back", on
+ChatGPT Chat, Claude Chat, Grok Chat and Gemini Chat at once, with Microsoft
+Copilot Chat and Muse never reaching their model because their worker was
+already wedged by an earlier readiness probe.
+
+- The lock now covers exactly one protocol call and nothing else. Everything
+  `Call` does around it — the attachment upload, the media scan, starting a
+  long-turn watcher — runs unlocked, so it can never re-enter.
+- Waiting for the channel counts against the waiting call's own deadline. A
+  short page probe issued while a 90-second turn holds the channel reports that
+  it did not answer, instead of parking a goroutine until the turn ends; at one
+  probe every 250ms a readiness poll would otherwise stack hundreds of them
+  behind a single turn.
+- Regression coverage fails if the lock is ever taken around `Call`'s body
+  again, naming the nested calls that make it a deadlock, and separately
+  asserts the single protocol call is still serialized.
+
+Everything in v0.46.81 is retained: the empty-reply image trap, the request
+budget that outlasts the worker's own, collecting an answer after a host-side
+deadline, and an explicit prefix never being answered by another agent.
 
 Validation: publication is gated by the release workflow's full Linux test suite, real-browser call-flow tests, Windows tests, vet, race tests, Windows build, Google Voice integration, installer install/uninstall smoke tests, Microsoft Defender checks, provenance, checksum, and CycloneDX SBOM generation.
