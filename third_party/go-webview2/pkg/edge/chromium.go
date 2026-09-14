@@ -5,6 +5,7 @@ package edge
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -178,15 +179,30 @@ func (e *Chromium) CallDevToolsProtocolMethod(method, parametersAsJSON string, d
 	// so: without a reference the collector is free to move or free it, and
 	// the callback would land somewhere else entirely.
 	devToolsKeep(handler)
-	_, _, callErr := e.webview.vtbl.CallDevToolsProtocolMethod.Call(
+	hr, _, callErr := e.webview.vtbl.CallDevToolsProtocolMethod.Call(
 		uintptr(unsafe.Pointer(e.webview)),
 		uintptr(unsafe.Pointer(name)),
 		uintptr(unsafe.Pointer(params)),
 		uintptr(unsafe.Pointer(handler)),
 	)
-	if callErr != nil && callErr != windows.ERROR_SUCCESS {
+	// Whether this COM call succeeded is the HRESULT it returns, and nothing
+	// else. The third value from a syscall is the thread's last error, which is
+	// only meaningful when the call actually failed: on success it is whatever
+	// unrelated Windows API happened to set it last on this thread.
+	//
+	// Reading it as the result is why a perfectly good DevTools call was
+	// reported as "Overlapped I/O operation is in progress" -- ERROR_IO_PENDING,
+	// left behind by async I/O elsewhere on the WebView2 UI thread. The call had
+	// been accepted and its completion handler was going to fire, but the
+	// handler was dropped and the caller was told the page had refused. It
+	// looked exactly like two DevTools calls colliding, and no amount of
+	// serializing them could fix it, because they never collided.
+	if int32(hr) < 0 {
 		devToolsDrop(handler)
-		return callErr
+		if callErr != nil && callErr != windows.ERROR_SUCCESS {
+			return callErr
+		}
+		return fmt.Errorf("CallDevToolsProtocolMethod failed (HRESULT 0x%X)", uint32(hr))
 	}
 	return nil
 }

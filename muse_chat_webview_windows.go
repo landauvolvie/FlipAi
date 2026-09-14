@@ -43,14 +43,43 @@ const museChatTurnJS = `(async(input)=>{
   const assistants=()=>{
     const primary=all('[data-content="ai-message"],[data-testid*="assistant" i],[data-testid*="bot" i],[data-message-author-role="assistant"],[data-author="bot"],[data-author="assistant"],[class*="assistant" i],[class*="response" i]').filter(n=>text(n)&&!n.closest('form'));
     if(primary.length)return primary;
-    return all('main [role="article"],main article,main [class*="markdown" i],main .markdown,main .prose').filter(n=>text(n)&&!n.closest('form'));
+    const articles=all('main [role="article"],main article,main [class*="markdown" i],main .markdown,main .prose').filter(n=>text(n)&&!n.closest('form'));
+    if(articles.length)return articles;
+    // Last resort: the page names none of the things FlipAi knows to look for.
+    // Muse answered and the answer was on screen, and none of the selectors
+    // above matched a single node, so the turn reported that the model had
+    // stopped without producing anything. Read the conversation structurally
+    // instead of by name.
+    return genericBlocks();
+  };
+  const genericBlocks=()=>{
+    const out=[];
+    for(const r of roots())for(const n of r.querySelectorAll('div,p,section,article,li,pre,span')){
+      if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')||n.closest('button')))continue;
+      const t=text(n);if(t.length<2)continue;
+      if(Array.from(n.children).some(ch=>text(ch)===t))continue;
+      out.push(n);
+    }
+    return out;
   };
   const send=()=>{const xs=all('button[data-testid*="send" i],button[aria-label*="send" i],button[title*="send" i],button[type="submit"]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||xs.find(b=>!b.disabled)||null};
   const stop=()=>{const xs=all('button[data-testid*="stop" i],button[data-testid*="cancel" i],button[aria-label*="stop" i],button[aria-label*="cancel" i],button[title*="stop" i]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
   let c=null;for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200)}
   if(!c)return {ok:false,detail:'Muse is loaded but FlipAi could not find the prompt box. The Muse site layout may have changed.',href:location.href};
-  const before=assistants(),beforeCount=before.length,beforeLast=beforeCount?text(before[beforeCount-1]):'';
-  const responseForTurn=()=>{const current=assistants();if(!current.length)return null;const last=current[current.length-1];if(current.length>beforeCount)return last;return text(last)&&text(last)!==beforeLast?last:null};
+  const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
+  const promptText=canon(input);
+  const beforeTexts=new Set(assistants().map(n=>canon(text(n))));
+  // Novelty by text, not by position: the set of matched nodes changes as the
+  // page renders, and an index into it does not survive that.
+  const responseForTurn=()=>{
+    const current=assistants();
+    for(let i=current.length-1;i>=0;i--){
+      const t=canon(text(current[i]));
+      if(!t||t===promptText||beforeTexts.has(t))continue;
+      return current[i];
+    }
+    return null;
+  };
   c.focus();
   try{
     if(c instanceof HTMLTextAreaElement||c instanceof HTMLInputElement){const proto=c instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;const setter=Object.getOwnPropertyDescriptor(proto,'value').set;setter.call(c,input);c.dispatchEvent(new Event('input',{bubbles:true,composed:true}));c.dispatchEvent(new Event('change',{bubbles:true,composed:true}))}

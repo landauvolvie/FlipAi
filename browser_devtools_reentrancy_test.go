@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -70,5 +71,31 @@ func TestDevToolsLockIsNeverHeldAcrossANestedCall(t *testing.T) {
 		if strings.Contains(dispatch, nested) {
 			t.Fatalf("dispatch holds the lock across %s, which calls back into it", nested)
 		}
+	}
+}
+
+// "Overlapped I/O operation is in progress" was never two DevTools calls
+// colliding. A COM vtable call reports success in its HRESULT; the third value
+// from a Go syscall is the thread's last error, which is meaningful only when
+// the call actually failed. The vendored WebView2 binding read that last error
+// as the result, so a DevTools call that WebView2 had accepted was reported as
+// refused whenever unrelated async I/O had left ERROR_IO_PENDING on the UI
+// thread -- and its completion handler was dropped, so the reply could never
+// arrive either. Gemini Chat failed instantly on every turn because of it.
+func TestDevToolsCallIsJudgedByItsHRESULT(t *testing.T) {
+	src := readGoSource(t, filepath.Join("third_party", "go-webview2", "pkg", "edge", "chromium.go"))
+	start := strings.Index(src, "func (e *Chromium) CallDevToolsProtocolMethod(")
+	if start < 0 {
+		t.Fatal("CallDevToolsProtocolMethod was not found")
+	}
+	body := src[start:]
+	if end := strings.Index(body, "\n}\n"); end > 0 {
+		body = body[:end]
+	}
+	if strings.Contains(body, "_, _, callErr :=") {
+		t.Fatal("the call's HRESULT is discarded, so a stale thread last error is read as the result")
+	}
+	if !strings.Contains(body, "int32(hr) < 0") {
+		t.Fatal("success is no longer decided by the HRESULT the COM call returned")
 	}
 }
