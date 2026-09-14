@@ -13,7 +13,13 @@ const (
 	// hundred milliseconds apart made later chunks disappear even though the UI
 	// driver reported success. Leave a small gap between confirmed chunks so a
 	// long answer is delivered in order instead of only its first 1,500 chars.
-	googleVoiceOutboundTextChunkGap = time.Second
+	// Three seconds, not one. FlipAi sends the parts in order and waits for
+	// each to be confirmed, but two texts handed to the carrier a second apart
+	// can still be delivered to the phone in the other order -- which is how a
+	// two-part answer arrived with its second half on top. A wider gap is the
+	// only lever FlipAi has over that, short of numbering the parts and
+	// rewriting the model's answer.
+	googleVoiceOutboundTextChunkGap = 3 * time.Second
 )
 
 // splitGoogleVoiceOutboundText divides one logical FlipAi reply into Google

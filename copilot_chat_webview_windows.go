@@ -25,7 +25,19 @@ import (
 const copilotChatPageMonitorJS = `(function(){
   if(window.__flipAiCopilotChatMonitor)return;
   window.__flipAiCopilotChatMonitor=true;
-  const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};
+  // Finding shadow roots means walking every element on the page, and this is
+  // called several times per poll. On a large conversation that cost more than
+  // the poll interval, so the turn could not finish inside its own deadline and
+  // the whole page call was abandoned. Scan once; if the page has no shadow
+  // roots -- most do not -- stay on the fast path for the rest of the turn.
+  let rootsCache=null,rootsAt=0;
+  const roots=()=>{
+    const now=Date.now();
+    if(rootsCache&&(rootsCache.length===1||now-rootsAt<3000))return rootsCache;
+    const out=[document],seen=new Set(out);
+    for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}
+    rootsCache=out;rootsAt=now;return out;
+  };
   const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};
   const composer=()=>first('textarea#userInput,textarea[data-testid*="composer" i],textarea[data-testid*="input" i],textarea[aria-label*="message" i],textarea[aria-label*="ask" i],textarea[placeholder*="message" i],textarea[placeholder*="ask" i],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="input" i],div[contenteditable="true"]');
   const loginPage=()=>/(?:login\.live\.com|login\.microsoftonline\.com)$/i.test(location.hostname)||/(?:\/login|\/signin|\/sign-in)(?:\/|$)/i.test(location.pathname)||!!first('form input[type="email"],form input[name="loginfmt"],form input[autocomplete="username"]');
@@ -41,14 +53,19 @@ const copilotChatTurnJS = `(async(input)=>{
   // The reply's own action row -- "Edit in a page", "Copy", "Good response" --
   // is page furniture, not part of what the model said, and it was going out
   // on the end of the message. Strip controls before reading the text.
+  // Scanning reads text the cheap way. Cloning every candidate on every poll
+  // to strip its controls cost more than the poll interval on a real
+  // conversation, and the turn then could not finish inside its own deadline.
+  const rawText=n=>String(n&&(n.innerText||n.textContent)||'').trim();
+  // The chosen reply gets the careful read: its action row is page furniture.
   const text=n=>{
     if(!n)return '';
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll('button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],svg').forEach(el=>el.remove());
+      clone.querySelectorAll('button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[class*="card" i],[data-testid*="citation" i],[data-testid*="source" i],[data-testid*="card" i],svg').forEach(el=>el.remove());
       return String(clone.innerText||clone.textContent||'').trim();
     }
-    return String(n.innerText||n.textContent||'').trim();
+    return rawText(n);
   };
   // A short status line is not an answer. "Searching sources" reached the phone
   // in place of what the model said, because it sat unchanged long enough to
@@ -61,7 +78,19 @@ const copilotChatTurnJS = `(async(input)=>{
       ||/^(using|calling|running|opening) \S+/.test(v)
       ||/^(one moment|just a moment|please wait)\b/.test(v);
   };
-  const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};
+  // Finding shadow roots means walking every element on the page, and this is
+  // called several times per poll. On a large conversation that cost more than
+  // the poll interval, so the turn could not finish inside its own deadline and
+  // the whole page call was abandoned. Scan once; if the page has no shadow
+  // roots -- most do not -- stay on the fast path for the rest of the turn.
+  let rootsCache=null,rootsAt=0;
+  const roots=()=>{
+    const now=Date.now();
+    if(rootsCache&&(rootsCache.length===1||now-rootsAt<3000))return rootsCache;
+    const out=[document],seen=new Set(out);
+    for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}
+    rootsCache=out;rootsAt=now;return out;
+  };
   const all=q=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(q));return Array.from(new Set(out))};
   const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};
   const assistants=()=>{
@@ -71,29 +100,50 @@ const copilotChatTurnJS = `(async(input)=>{
     if(articles.length)return articles;
     return genericBlocks();
   };
-  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
+  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[class*="card" i],[data-testid*="citation" i],[data-testid*="source" i],[data-testid*="card" i]';
+  const activitySel='aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
+  // Only leaf-ish blocks, and cheaply. Comparing every block against every
+  // other to drop containers was quadratic, and on a real conversation it cost
+  // more than the poll interval; an ancestor walk over a small set is linear.
+  // A container is never a candidate on its own, which is what stopped the
+  // whole thread -- every message joined together -- from being sent as one
+  // answer.
   const genericBlocks=()=>{
-    const out=[];
-    for(const r of roots())for(const n of r.querySelectorAll('div,p,section,article,li,pre,span')){
-      if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
-      // The reply's own action row is page furniture, never the message.
-      if(n.matches&&n.matches(chromeSel))continue;
-      if(n.closest&&n.closest(chromeSel))continue;
-      // A running tool/step log is not the answer. Reading one sent a list of
-      // timestamped steps to the phone in place of what the model actually said.
-      if(n.closest&&n.closest('aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]'))continue;
-      if(text(n).length<2)continue;
-      out.push(n);
+    const found=[];
+    for(const r of roots()){
+      for(const n of r.querySelectorAll('div,p,section,article,li,pre')){
+        if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
+        if(n.querySelector&&n.querySelector('textarea,input,[contenteditable="true"]'))continue;
+        if(n.matches&&n.matches(chromeSel))continue;
+        if(n.closest&&n.closest(chromeSel))continue;
+        if(n.closest&&n.closest(activitySel))continue;
+        const t=rawText(n);
+        if(t.length<2||t.length>20000)continue;
+        found.push(n);
+      }
     }
-    // Keep only the innermost blocks. A scroll container's text is every
-    // message concatenated, and treating it as one block sent the whole
-    // conversation -- prompt included -- as the answer.
-    return out.filter(n=>!out.some(o=>o!==n&&n.contains(o)));
+    const set=new Set(found),container=new Set();
+    for(const n of found){
+      let p=n.parentElement;
+      for(let hops=0;p&&hops<40;hops++,p=p.parentElement){if(set.has(p))container.add(p)}
+    }
+    // The newest message is the last one, so keep the tail. Capping the head
+    // stopped the scan before it ever reached this turn's reply.
+    return found.filter(n=>!container.has(n)).slice(-400);
+  };
+  // A message is usually several blocks. Lift a matched block to the element
+  // the conversation holds directly, so the whole answer travels rather than
+  // only its last paragraph.
+  const wholeMessage=(n,box)=>{
+    if(!n||!box||!box.contains(n))return n;
+    let cur=n;
+    while(cur.parentElement&&cur.parentElement!==box)cur=cur.parentElement;
+    return cur===n?n:cur;
   };
   // The conversation is wherever the prompt just landed. Anchoring to it keeps
   // the answer and the side panels apart without having to know either by name.
   const conversationBox=()=>{
-    const mine=genericBlocks().filter(n=>canon(text(n))===promptText);
+    const mine=genericBlocks().filter(n=>canon(rawText(n))===promptText);
     if(!mine.length)return null;
     let box=mine[mine.length-1].parentElement;
     while(box&&box.children.length<2&&box.parentElement)box=box.parentElement;
@@ -107,17 +157,20 @@ const copilotChatTurnJS = `(async(input)=>{
   if(!c)return {ok:false,detail:'Microsoft Copilot is loaded but FlipAi could not find the prompt box. The Copilot site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
-  const beforeTexts=new Set(assistants().map(n=>canon(text(n))));
+  const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
   const responseForTurn=()=>{
     const current=assistants();
     const box=conversationBox();
     const pick=(restrict,allowInterim)=>{
       for(let i=current.length-1;i>=0;i--){
-        const n=current[i],t=canon(text(n));
+        const n=current[i],t=canon(rawText(n));
         if(!t||t===promptText||beforeTexts.has(t))continue;
         if(restrict&&box&&!box.contains(n))continue;
         if(!allowInterim&&interim(t))continue;
-        return n;
+        const whole=wholeMessage(n,box);
+        const chosen=canon(rawText(whole))===promptText?n:whole;
+        if(!canon(text(chosen)))continue;
+        return chosen;
       }
       return null;
     };
