@@ -29,9 +29,18 @@ function turnScript(file, constant, prompt) {
 // `withSendButton` false removes the send control entirely, so the only way to
 // submit is the Enter key -- the case that stranded Copilot with the prompt
 // typed and never sent.
-function pageHTML({ withSendButton }) {
+//
+// `withActivityPanel` adds the running tool/step log these assistants show
+// beside the answer. Reading that panel instead of the answer is what sent
+// "Find today's last email Opening today's latest email 3:19 pm Review
+// proactive preferences ..." to the phone in place of the real answer.
+function pageHTML({ withSendButton, withActivityPanel }) {
   return `<!doctype html><html><body>
     <div id="log"><div class="x1">an earlier answer that was already on screen</div></div>
+    ${withActivityPanel ? `<aside id="steps">
+      <div class="s">Search tool initialization Loaded device tools and initialized 4 functions 3:14 pm</div>
+      <div class="s">Review proactive preferences Updated preferences and memory files 3:18 pm</div>
+    </aside>` : ''}
     <div id="composer-wrap">
       <textarea id="box" placeholder="Ask anything"></textarea>
       ${withSendButton ? '<button id="go">Go</button>' : ''}
@@ -57,6 +66,15 @@ function pageHTML({ withSendButton }) {
           reply.textContent = 'FLIPAI';
           setTimeout(() => { reply.textContent = 'FLIPAI answered: ' + value; }, 200);
           setTimeout(() => busy.remove(), 700);
+          const steps = document.querySelector('#steps');
+          if (steps) {
+            setTimeout(() => {
+              const step = document.createElement('div');
+              step.className = 's';
+              step.textContent = "Find today's last email Opening today's latest email 3:19 pm";
+              steps.appendChild(step);
+            }, 500);
+          }
         }, 400);
       };
       const go = document.querySelector('#go');
@@ -84,16 +102,17 @@ const report = [];
 const scenarios = [];
 for (const [name, file, constant] of drivers) {
   for (const withSendButton of [true, false]) {
-    scenarios.push({ name, file, constant, withSendButton });
+    scenarios.push({ name, file, constant, withSendButton, withActivityPanel: false });
   }
+  scenarios.push({ name, file, constant, withSendButton: true, withActivityPanel: true });
 }
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton }) => {
-  const label = `${name} (${withSendButton ? 'send button' : 'Enter only'})`;
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel }) => {
+  const label = `${name} (${withActivityPanel ? 'activity panel' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.setContent(pageHTML({ withSendButton }));
+  await page.setContent(pageHTML({ withSendButton, withActivityPanel }));
   let result;
   try {
     result = await page.evaluate(turnScript(file, constant, prompt));
@@ -109,6 +128,8 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton })
     failures.push(`${label}: reply did not carry the answer: ${JSON.stringify(result.reply)}`);
   } else if (String(result.reply).trim() === prompt) {
     failures.push(`${label}: the prompt was echoed back as the answer`);
+  } else if (/\d:\d\d ?[ap]m/i.test(String(result.reply))) {
+    failures.push(`${label}: the tool/step panel was sent instead of the answer: ${JSON.stringify(result.reply)}`);
   } else {
     report.push(`${label}: ok`);
   }

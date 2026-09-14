@@ -37,9 +37,17 @@ const (
 	// devToolsOutstandingCap bounds how long a call that outlived its own
 	// deadline may keep the protocol channel reserved. WebView2 has no way to
 	// cancel an outstanding call, so the channel is held until its completion
-	// callback fires; this stops a callback that never fires from reserving the
-	// channel for the life of the process.
-	devToolsOutstandingCap = 3 * time.Minute
+	// callback fires.
+	//
+	// It is deliberately short. A page that navigates -- ChatGPT does, to cross
+	// between its Chat and Work experiences -- can orphan an in-flight call
+	// whose callback never arrives, and a long reservation then blocks that
+	// browser for as long as it lasts.
+	devToolsOutstandingCap = 15 * time.Second
+
+	// devToolsQueueWait bounds how long a call waits for the channel to become
+	// free before giving up.
+	devToolsQueueWait = 30 * time.Second
 
 	// voiceDevToolsTimeout bounds ordinary DevTools calls. Google Voice probes
 	// must fail quickly if its page is navigating or wedged so the call observer
@@ -52,6 +60,12 @@ const (
 	// indefinite browserLongTurn continuation before returning that checkpoint
 	// to the SMS layer, which then waits on the persisted continuation state.
 	chatGPTTurnDevToolsTimeout = 95 * time.Second
+
+	// browserLongPageCallDevToolsTimeout covers a marked page script that keeps
+	// working for longer than a probe: ChatGPT's experience picker retries for
+	// over twelve seconds, Claude's Code-mode start for thirty. Anything shorter
+	// cuts the script off mid-retry and reports the page as unresponsive.
+	browserLongPageCallDevToolsTimeout = 45 * time.Second
 
 	// Returned-media scans are individually short. Generated image turns repeat
 	// these scans for as long as the provider remains active, so this is only a
@@ -99,6 +113,9 @@ func webViewDevToolsCallTimeout(method string, params any) time.Duration {
 	if await && isBrowserChatTurnExpression(expression) {
 		return chatGPTTurnDevToolsTimeout
 	}
+	if await && strings.Contains(expression, browserLongPageCallMarker) {
+		return browserLongPageCallDevToolsTimeout
+	}
 	if await && strings.Contains(expression, googleVoiceSMSUITurnMarker) {
 		return googleVoiceSMSUITurnDevToolsTimeout
 	}
@@ -132,14 +149,15 @@ type devToolsReply struct {
 // the prompt and the model had answered, but the control channel never came
 // back and every later call on that browser blocked behind it forever.
 func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (devToolsReply, bool) {
-	// Waiting for the channel counts against this call's own deadline. A short
-	// page probe issued while a 90-second turn holds the channel reports "did
-	// not answer" on its own schedule rather than parking a goroutine until the
-	// turn ends -- which, at one probe every 250ms, is how a readiness poll
-	// would pile hundreds of them up behind a single turn.
-	deadline := time.Now().Add(timeout)
+	// Queueing for the channel is bounded, but it is not charged to the call's
+	// own deadline. Charging it there meant a call could spend its whole
+	// allowance waiting for its turn and then report that the page had not
+	// answered -- without the page ever being asked. ChatGPT, which issues a
+	// rapid burst of small probes around switching experience, failed that way
+	// on every message while the channel was still reserved by an earlier call.
+	queueUntil := time.Now().Add(devToolsQueueWait)
 	for !d.call.TryLock() {
-		if time.Now().After(deadline) {
+		if time.Now().After(queueUntil) {
 			return devToolsReply{}, false
 		}
 		time.Sleep(25 * time.Millisecond)

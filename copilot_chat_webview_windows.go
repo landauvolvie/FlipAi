@@ -53,11 +53,23 @@ const copilotChatTurnJS = `(async(input)=>{
     const out=[];
     for(const r of roots())for(const n of r.querySelectorAll('div,p,section,article,li,pre,span')){
       if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')||n.closest('button')))continue;
+      // A running tool/step log is not the answer. Reading one sent a list of
+      // timestamped steps to the phone in place of what the model actually said.
+      if(n.closest&&n.closest('aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]'))continue;
       const t=text(n);if(t.length<2)continue;
       if(Array.from(n.children).some(ch=>text(ch)===t))continue;
       out.push(n);
     }
     return out;
+  };
+  // The conversation is wherever the prompt just landed. Anchoring to it keeps
+  // the answer and the side panels apart without having to know either by name.
+  const conversationBox=()=>{
+    const mine=genericBlocks().filter(n=>canon(text(n))===promptText);
+    if(!mine.length)return null;
+    let box=mine[mine.length-1].parentElement;
+    while(box&&box.children.length<2&&box.parentElement)box=box.parentElement;
+    return box;
   };
   const composer=()=>first('textarea#userInput,textarea[data-testid*="composer" i],textarea[data-testid*="input" i],textarea[aria-label*="message" i],textarea[aria-label*="ask" i],textarea[placeholder*="message" i],textarea[placeholder*="ask" i],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="input" i],div[contenteditable="true"]');
   const send=()=>{const xs=all('button[data-testid*="send" i],button[aria-label*="send" i],button[title*="send" i],button[type="submit"]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||xs.find(b=>!b.disabled)||null};
@@ -70,12 +82,17 @@ const copilotChatTurnJS = `(async(input)=>{
   const beforeTexts=new Set(assistants().map(n=>canon(text(n))));
   const responseForTurn=()=>{
     const current=assistants();
-    for(let i=current.length-1;i>=0;i--){
-      const t=canon(text(current[i]));
-      if(!t||t===promptText||beforeTexts.has(t))continue;
-      return current[i];
-    }
-    return null;
+    const box=conversationBox();
+    const pick=restrict=>{
+      for(let i=current.length-1;i>=0;i--){
+        const n=current[i],t=canon(text(n));
+        if(!t||t===promptText||beforeTexts.has(t))continue;
+        if(restrict&&box&&!box.contains(n))continue;
+        return n;
+      }
+      return null;
+    };
+    return pick(true)||pick(false);
   };
   c.focus();
   try{
