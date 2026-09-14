@@ -54,12 +54,24 @@ const museChatTurnJS = `(async(input)=>{
   // to strip its controls cost more than the poll interval on a real
   // conversation, and the turn then could not finish inside its own deadline.
   const rawText=n=>String(n&&(n.innerText||n.textContent)||'').trim();
+  // Source cards are page furniture; the linked words inside a sentence are
+  // part of the answer. Matching "citation"/"source"/"card" on any element at
+  // all deleted both, so an answer lost the phrases it had linked. Only a
+  // block-level container can be a card; an <a> or <span> in a sentence stays.
+  const refKeys=['[class*="citation" i]','[class*="source" i]','[class*="reference" i]','[class*="card" i]','[data-testid*="citation" i]','[data-testid*="source" i]','[data-testid*="card" i]'];
+  const joinSel=(tags,keys)=>{const out=[];for(const t of tags)for(const k of keys)out.push(t+k);return out.join(',')};
+  const refBlockSel=joinSel(['div','aside','section','nav','ul','ol','footer','table','details'],refKeys);
+  // Inline reference chrome worth dropping is the bare marker -- a superscript
+  // number, "[1]" -- never a linked phrase. Letters mean it is prose.
+  const refInlineSel=joinSel(['a','span','cite','sup','small'],refKeys)+',sup';
+  const chromeControlSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
   // The chosen reply gets the careful read: its action row is page furniture.
   const text=n=>{
     if(!n)return '';
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll('button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[class*="card" i],[data-testid*="citation" i],[data-testid*="source" i],[data-testid*="card" i],svg').forEach(el=>el.remove());
+      clone.querySelectorAll(chromeControlSel+','+refBlockSel+',svg').forEach(el=>el.remove());
+      clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
       return String(clone.innerText||clone.textContent||'').trim();
     }
     return rawText(n);
@@ -103,7 +115,7 @@ const museChatTurnJS = `(async(input)=>{
     // instead of by name.
     return genericBlocks();
   };
-  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[class*="citation" i],[class*="source" i],[class*="reference" i],[class*="card" i],[data-testid*="citation" i],[data-testid*="source" i],[data-testid*="card" i]';
+  const chromeSel=chromeControlSel+','+refBlockSel;
   const activitySel='aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
   // Only leaf-ish blocks, and cheaply. Comparing every block against every
   // other to drop containers was quadratic, and on a real conversation it cost

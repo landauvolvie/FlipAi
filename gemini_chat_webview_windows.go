@@ -110,8 +110,19 @@ const geminiChatTurnJS = `(async(input)=>{
   await sleep(250);
   let b=null;
   for(let i=0;i<60&&!b;i++){b=send();if(!b)await sleep(100);}
-  if(!b)return {ok:false,detail:'FlipAi filled the Gemini prompt box but the Send button never became ready.',href:location.href};
-  b.click();
+  if(b){b.click()}
+  else{
+    // Gemini does not always expose a Send control FlipAi can name: the button
+    // can stay disabled, lose its label, or live inside a shadow root. The turn
+    // used to be abandoned here with the prompt typed and never sent. Enter is
+    // how a person sends it, and the acceptance check below still proves the
+    // message actually left the composer.
+    const form=c.closest&&c.closest('form');
+    if(form&&typeof form.requestSubmit==='function'){try{form.requestSubmit()}catch(e){}}
+    for(const type of ['keydown','keypress','keyup']){
+      c.dispatchEvent(new KeyboardEvent(type,{bubbles:true,composed:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13,which:13}));
+    }
+  }
   // Do not assume a click means Gemini accepted the message. A stale/half-dead
   // page can expose a Send control that receives the click but never submits.
   let accepted=false;
