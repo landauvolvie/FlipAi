@@ -52,17 +52,23 @@ function turnScript(file, constant, prompt) {
 // or a source deleted them along with the cards, and the text message then
 // arrived with holes in its sentences.
 //
+// `withNamedWrapper` gives the scroll container a class the drivers look for by
+// name -- "responses" matches `[class*="response" i]` -- and gives no message
+// its own hook. Nothing dropped that wrapper, so the entire conversation came
+// back as one reply: weeks of old messages, plus the running tool log, arriving
+// as a single text message.
+//
 // `withLongHistory` builds a conversation of a realistic size. A driver that
 // scans the whole page on every poll cannot finish inside its own deadline
 // there, and one that treats a scroll container as a block sends the entire
 // history -- every message joined together -- as the answer.
-function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards }) {
+function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper }) {
   const history = withLongHistory
     ? Array.from({ length: 700 }, (_, i) =>
         `<div class="x1"><p>Earlier turn ${i}</p><p>A paragraph of an older answer that is already on screen and should never be mistaken for this turn's reply.</p></div>`).join('')
     : '<div class="x1">an earlier answer that was already on screen</div>';
   return `<!doctype html><html><body>
-    <div id="log">${history}</div>
+    <main><div id="log" class="${withNamedWrapper ? 'responses assistant-message markdown' : 'plain'}">${history}</div></main>
     ${withActivityPanel ? `<aside id="steps">
       <div class="s">Search tool initialization Loaded device tools and initialized 4 functions 3:14 pm</div>
       <div class="s">Review proactive preferences Updated preferences and memory files 3:18 pm</div>
@@ -182,17 +188,18 @@ for (const [name, file, constant] of drivers) {
   scenarios.push({ name, file, constant, withSendButton: true, withActionBar: true });
   scenarios.push({ name, file, constant, withSendButton: true, withLongHistory: true });
   scenarios.push({ name, file, constant, withSendButton: true, withCitationCards: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withNamedWrapper: true, withActivityPanel: true });
 }
 for (const [name, file, constant] of enterOnlyDrivers) {
   scenarios.push({ name, file, constant, withSendButton: false, sendOnly: true });
 }
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, sendOnly }) => {
-  const label = `${name} (${withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, sendOnly }) => {
+  const label = `${name} (${withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards }));
+  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper }));
   const startedAt = Date.now();
   if (sendOnly) {
     // The driver keeps polling for a reply it will never recognize here, so do
@@ -232,7 +239,7 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     failures.push(`${label}: an interim status was sent instead of the answer: ${JSON.stringify(result.reply)}`);
   } else if (/edit in a page/i.test(String(result.reply))) {
     failures.push(`${label}: the reply's action bar was included: ${JSON.stringify(result.reply)}`);
-  } else if (/Earlier turn \d/.test(String(result.reply))) {
+  } else if (/Earlier turn \d|an earlier answer that was already on screen/.test(String(result.reply))) {
     failures.push(`${label}: the conversation history was sent as the answer (${String(result.reply).length} chars)`);
   } else if (/CBS News|thephoto-news|Show all/i.test(String(result.reply))) {
     failures.push(`${label}: source cards were included in the answer: ${JSON.stringify(result.reply)}`);

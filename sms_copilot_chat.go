@@ -38,14 +38,14 @@ func copilotChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt str
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureCopilotChatReady(readyCtx, dataDir); cancel()
 	if err != nil { return "", fmt.Errorf("Microsoft Copilot Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Microsoft Copilot Chat, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := copilotChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); return cleanBrowserChatReply(reply), waitErr }; return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := copilotChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }; return "", err }
 	var out copilotChatSMSReply; _ = json.Unmarshal(body, &out)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
-		if browserLongTurnTimeoutDetail(out.Detail) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); return cleanBrowserChatReply(reply), waitErr }
+		if browserLongTurnTimeoutDetail(out.Detail) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }
 		return "", errors.New(out.Detail)
 	}
-	cleaned := cleanBrowserChatReply(out.Reply)
+	cleaned := cleanBrowserChatReplyForPrompt(out.Reply, prompt)
 	if cleaned == "" { return "", errors.New("Microsoft Copilot Chat returned an empty reply") }
 	return cleaned, nil
 }

@@ -57,7 +57,7 @@ func TestDevToolsLockIsNeverHeldAcrossANestedCall(t *testing.T) {
 		}
 	}
 
-	dispatch := devToolsFunctionBody(t, "func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (devToolsReply, bool) {")
+	dispatch := devToolsFunctionBody(t, "func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration, holdOnTimeout bool) (devToolsReply, bool) {")
 	if !strings.Contains(dispatch, "d.call.TryLock()") || !strings.Contains(dispatch, "d.call.Unlock()") {
 		t.Fatal("the single protocol call is no longer serialized, so a page sampler can collide with a turn again")
 	}
@@ -70,6 +70,18 @@ func TestDevToolsLockIsNeverHeldAcrossANestedCall(t *testing.T) {
 	} {
 		if strings.Contains(dispatch, nested) {
 			t.Fatalf("dispatch holds the lock across %s, which calls back into it", nested)
+		}
+	}
+
+	// handOff is the other place that issues a protocol call, for navigations.
+	// It takes the same lock and is under the same rule.
+	handOff := devToolsFunctionBody(t, "func (d *webViewDevTools) handOff(method, body string) {")
+	if !strings.Contains(handOff, "d.call.TryLock()") || !strings.Contains(handOff, "d.call.Unlock()") {
+		t.Fatal("handOff does not serialize its protocol call")
+	}
+	for _, nested := range []string{"uploadBrowserChatImages", "captureBrowserChatReturnedMedia", "continueBrowserLongTurn", "d.Call("} {
+		if strings.Contains(handOff, nested) {
+			t.Fatalf("handOff holds the lock across %s, which calls back into it", nested)
 		}
 	}
 }

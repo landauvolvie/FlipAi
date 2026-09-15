@@ -430,7 +430,11 @@ func runHost(dataDir, cfgPath, statePath, tokenPath string) {
 		defer lf.Close()
 	}
 	activity := activityLogForStatePath(statePath)
-	activity.Add("info", "host", "FlipAi background host is starting", "", "", "")
+	// The version belongs in the log. Every diagnosis of "it worked two builds
+	// ago" so far has come down to guessing which build a log was written by
+	// from the timestamps of releases, and a guess there sends the whole
+	// investigation to the wrong commit.
+	activity.Add("info", "host", "FlipAi background host is starting (v"+version+")", "", "", "")
 	cfg := loadOrCreateConfig(cfgPath, dataDir)
 	// Decide how stored credentials are protected before anything reads them.
 	// When FlipAi is set to start before sign-in they are protected for the PC,
