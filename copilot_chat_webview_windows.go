@@ -74,9 +74,11 @@ const copilotChatTurnJS = `(async(input)=>{
     if(!n)return '';
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll(chromeSel+',svg').forEach(el=>el.remove());
+      clone.querySelectorAll(chromeSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
-      return String(clone.innerText||clone.textContent||'').trim();
+      // Never let stripping empty a real message: if everything went, a
+      // selector matched the answer, and the raw text beats nothing at all.
+      return String(clone.innerText||clone.textContent||'').trim()||rawText(n);
     }
     return rawText(n);
   };
@@ -106,10 +108,23 @@ const copilotChatTurnJS = `(async(input)=>{
   };
   const all=q=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(q));return Array.from(new Set(out))};
   const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};
+  // A named match can be a wrapper around every message just as easily as one
+  // reply, and nothing dropped it. A candidate that contains another candidate
+  // is a container, never a message.
+  const dropContainers=list=>{
+    if(list.length<2)return list;
+    const set=new Set(list),container=new Set();
+    for(const n of list){let p=n.parentElement;for(let hops=0;p&&hops<40;hops++,p=p.parentElement){if(set.has(p))container.add(p)}}
+    const out=list.filter(n=>!container.has(n));
+    return out.length?out:list;
+  };
   const assistants=()=>{
-    const primary=all('[data-content="ai-message"],[data-testid*="assistant" i],[data-testid*="bot" i],[data-message-author-role="assistant"],[data-author="bot"],[data-author="assistant"],[class*="response-message" i],[class*="assistant-message" i]').filter(n=>text(n)&&!n.closest('form'));
+    // rawText, not text: the careful clone-and-strip read is for the one reply
+    // FlipAi sends, and running it over every candidate on every poll is what
+    // made a turn miss its own deadline.
+    const primary=dropContainers(all('[data-content="ai-message"],[data-testid*="assistant" i],[data-testid*="bot" i],[data-message-author-role="assistant"],[data-author="bot"],[data-author="assistant"],[class*="response-message" i],[class*="assistant-message" i]').filter(n=>rawText(n)&&!n.closest('form')));
     if(primary.length)return primary;
-    const articles=all('main [role="article"],main [class*="markdown" i],main .markdown,main .prose').filter(n=>text(n)&&!n.closest('form'));
+    const articles=dropContainers(all('main [role="article"],main [class*="markdown" i],main .markdown,main .prose').filter(n=>rawText(n)&&!n.closest('form')));
     if(articles.length)return articles;
     return genericBlocks();
   };
@@ -147,10 +162,13 @@ const copilotChatTurnJS = `(async(input)=>{
   // the conversation holds directly, so the whole answer travels rather than
   // only its last paragraph.
   const wholeMessage=(n,box)=>{
-    if(!n||!box||!box.contains(n))return n;
+    // n===box, or a walk that escapes the box, is how the reply became the whole
+    // document: the climb ran past the conversation to <html> and every word on
+    // the page was sent as the answer.
+    if(!n||!box||n===box||!box.contains(n))return n;
     let cur=n;
-    while(cur.parentElement&&cur.parentElement!==box)cur=cur.parentElement;
-    return cur===n?n:cur;
+    while(cur.parentElement&&cur.parentElement!==box&&box.contains(cur.parentElement))cur=cur.parentElement;
+    return cur.parentElement===box?cur:n;
   };
   // The conversation is wherever the prompt just landed. Anchoring to it keeps
   // the answer and the side panels apart without having to know either by name.
@@ -170,6 +188,40 @@ const copilotChatTurnJS = `(async(input)=>{
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
   const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
+  // Last line of defence. If the node FlipAi matched spans this turn's own
+  // prompt, it is a conversation container and not one message, however it was
+  // matched -- so everything up to and including the prompt is history, and the
+  // answer is what follows.
+  const olderSnippets=Array.from(beforeTexts).filter(t=>t.length>=40);
+  const spansPrompt=n=>{
+    if(!n||!n.querySelectorAll||!promptText)return false;
+    for(const e of n.querySelectorAll('div,p,section,article,li,span,pre,td')){if(canon(rawText(e))===promptText)return true}
+    return false;
+  };
+  // The latest boundary that still leaves something after it. The plain last
+  // occurrence is not it: an answer often repeats the question, so cutting
+  // after that left nothing and the whole history was sent instead.
+  const lastUsefulEnd=(v,s)=>{
+    if(!s)return -1;
+    let at=-1,i=v.indexOf(s);
+    for(let guard=0;i>=0&&guard<200;guard++){
+      const end=i+s.length;
+      if(v.slice(end).trim())at=end;
+      i=v.indexOf(s,i+1);
+    }
+    return at;
+  };
+  const newestPart=(node,value)=>{
+    const v=canon(value);
+    if(!v||!spansPrompt(node))return v;
+    let cut=0;
+    for(const s of [promptText].concat(olderSnippets)){
+      const end=lastUsefulEnd(v,s);
+      if(end>cut)cut=end;
+    }
+    const tail=cut>0?v.slice(cut).trim():'';
+    return tail||v;
+  };
   const responseForTurn=()=>{
     const current=assistants();
     const box=conversationBox();
@@ -217,7 +269,7 @@ const copilotChatTurnJS = `(async(input)=>{
   let last='',stable=0,started=false;const deadline=Date.now()+90000;
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();
-    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:now||'Microsoft Copilot completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:now,href:location.href}}
+    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:newestPart(node,now)||'Microsoft Copilot completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href}}
   }
   return {ok:false,detail:started?'Microsoft Copilot started answering but did not finish within 90 seconds.':'Microsoft Copilot did not produce a new response within 90 seconds.',href:location.href};
 })(%s)`
@@ -477,10 +529,9 @@ func startCopilotChatControlEndpoint(dataDir string, w webview2.WebView, dev voi
 			return
 		}
 		if newChat {
-			var ignored bool
 			// Navigating destroys this call's own execution context; the
 			// readiness wait below decides whether the navigation worked.
-			_ = copilotChatEval(dev, `(()=>{location.href='https://copilot.microsoft.com/';return true})()`, false, &ignored)
+			_ = copilotChatEval(dev, browserPageNavigateJS("https://copilot.microsoft.com/"), false, nil)
 		}
 		if !waitForCopilotChatPageSignedIn(dev, 25*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
@@ -541,8 +592,7 @@ func startCopilotChatControlEndpoint(dataDir string, w webview2.WebView, dev voi
 			http.Error(rw, "FlipAi token required", http.StatusForbidden)
 			return
 		}
-		var ignored bool
-		_ = copilotChatEval(dev, `(()=>{location.href='https://copilot.microsoft.com/';return true})()`, false, &ignored)
+		_ = copilotChatEval(dev, browserPageNavigateJS("https://copilot.microsoft.com/"), false, nil)
 		if !waitForCopilotChatPageSignedIn(dev, 45*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Microsoft Copilot did not restore the saved session after opening a new chat"})

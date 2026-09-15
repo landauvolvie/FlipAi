@@ -65,14 +65,25 @@ const museChatTurnJS = `(async(input)=>{
   // number, "[1]" -- never a linked phrase. Letters mean it is prose.
   const refInlineSel=joinSel(['a','span','cite','sup','small'],refKeys)+',sup';
   const chromeControlSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
+  // Muse's running tool/step log is not the answer. It is stripped out of the
+  // candidate scan, but it also has to go from the reply FlipAi actually sends:
+  // when the page exposes the conversation as one container, the log sits
+  // inside it and travelled to the phone along with the message.
+  const activitySel='aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
+  // Narrower than activitySel, on purpose. A streaming answer is commonly
+  // announced through [aria-live] or [role=status], and cutting those out of
+  // the chosen reply would delete the message itself.
+  const activityStripSel='aside,[role="log"],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
   // The chosen reply gets the careful read: its action row is page furniture.
   const text=n=>{
     if(!n)return '';
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll(chromeControlSel+','+refBlockSel+',svg').forEach(el=>el.remove());
+      clone.querySelectorAll(chromeControlSel+','+refBlockSel+','+activityStripSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
-      return String(clone.innerText||clone.textContent||'').trim();
+      // Never let stripping empty a real message: if everything went, a
+      // selector matched the answer, and the raw text beats nothing at all.
+      return String(clone.innerText||clone.textContent||'').trim()||rawText(n);
     }
     return rawText(n);
   };
@@ -103,10 +114,24 @@ const museChatTurnJS = `(async(input)=>{
   const all=q=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(q));return Array.from(new Set(out))};
   const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};
   const composer=()=>first('textarea[data-testid*="composer" i],textarea[data-testid*="input" i],textarea[aria-label*="message" i],textarea[aria-label*="ask" i],textarea[aria-label*="prompt" i],textarea[placeholder*="message" i],textarea[placeholder*="ask" i],textarea[placeholder*="prompt" i],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="input" i],[contenteditable="true"][aria-label*="message" i],[contenteditable="true"][aria-label*="prompt" i],div[contenteditable="true"]');
+  // A named match can be a wrapper around every message just as easily as one
+  // reply: "[class*=response i]" matches a conversation list too, and nothing
+  // dropped it. That is how the whole thread -- weeks of it -- was sent as the
+  // answer. A candidate that contains another candidate is a container.
+  const dropContainers=list=>{
+    if(list.length<2)return list;
+    const set=new Set(list),container=new Set();
+    for(const n of list){let p=n.parentElement;for(let hops=0;p&&hops<40;hops++,p=p.parentElement){if(set.has(p))container.add(p)}}
+    const out=list.filter(n=>!container.has(n));
+    return out.length?out:list;
+  };
   const assistants=()=>{
-    const primary=all('[data-content="ai-message"],[data-testid*="assistant" i],[data-testid*="bot" i],[data-message-author-role="assistant"],[data-author="bot"],[data-author="assistant"],[class*="assistant" i],[class*="response" i]').filter(n=>text(n)&&!n.closest('form'));
+    // rawText, not text: the careful clone-and-strip read is for the one reply
+    // FlipAi sends, and running it over every candidate on every poll is what
+    // made a turn miss its own deadline.
+    const primary=dropContainers(all('[data-content="ai-message"],[data-testid*="assistant" i],[data-testid*="bot" i],[data-message-author-role="assistant"],[data-author="bot"],[data-author="assistant"],[class*="assistant" i],[class*="response" i]').filter(n=>rawText(n)&&!n.closest('form')));
     if(primary.length)return primary;
-    const articles=all('main [role="article"],main article,main [class*="markdown" i],main .markdown,main .prose').filter(n=>text(n)&&!n.closest('form'));
+    const articles=dropContainers(all('main [role="article"],main article,main [class*="markdown" i],main .markdown,main .prose').filter(n=>rawText(n)&&!n.closest('form')));
     if(articles.length)return articles;
     // Last resort: the page names none of the things FlipAi knows to look for.
     // Muse answered and the answer was on screen, and none of the selectors
@@ -116,7 +141,6 @@ const museChatTurnJS = `(async(input)=>{
     return genericBlocks();
   };
   const chromeSel=chromeControlSel+','+refBlockSel;
-  const activitySel='aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
   // Only leaf-ish blocks, and cheaply. Comparing every block against every
   // other to drop containers was quadratic, and on a real conversation it cost
   // more than the poll interval; an ancestor walk over a small set is linear.
@@ -150,10 +174,13 @@ const museChatTurnJS = `(async(input)=>{
   // the conversation holds directly, so the whole answer travels rather than
   // only its last paragraph.
   const wholeMessage=(n,box)=>{
-    if(!n||!box||!box.contains(n))return n;
+    // n===box, or a walk that escapes the box, is how the reply became the whole
+    // document: the climb ran past the conversation to <html> and every word on
+    // the page was sent as the answer.
+    if(!n||!box||n===box||!box.contains(n))return n;
     let cur=n;
-    while(cur.parentElement&&cur.parentElement!==box)cur=cur.parentElement;
-    return cur===n?n:cur;
+    while(cur.parentElement&&cur.parentElement!==box&&box.contains(cur.parentElement))cur=cur.parentElement;
+    return cur.parentElement===box?cur:n;
   };
   // The conversation is wherever the prompt just landed. Anchoring to it keeps
   // the answer and the side panels apart without having to know either by name.
@@ -171,6 +198,41 @@ const museChatTurnJS = `(async(input)=>{
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
   const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
+  // Last line of defence. If the node FlipAi matched spans this turn's own
+  // prompt, it is a conversation container and not one message, however it was
+  // matched -- so everything up to and including the prompt is history, and the
+  // answer is what follows. Without this the entire conversation arrived as one
+  // text message.
+  const olderSnippets=Array.from(beforeTexts).filter(t=>t.length>=40);
+  const spansPrompt=n=>{
+    if(!n||!n.querySelectorAll||!promptText)return false;
+    for(const e of n.querySelectorAll('div,p,section,article,li,span,pre,td')){if(canon(rawText(e))===promptText)return true}
+    return false;
+  };
+  // The latest boundary that still leaves something after it. The plain last
+  // occurrence is not it: an answer often repeats the question, so cutting
+  // after that left nothing and the whole history was sent instead.
+  const lastUsefulEnd=(v,s)=>{
+    if(!s)return -1;
+    let at=-1,i=v.indexOf(s);
+    for(let guard=0;i>=0&&guard<200;guard++){
+      const end=i+s.length;
+      if(v.slice(end).trim())at=end;
+      i=v.indexOf(s,i+1);
+    }
+    return at;
+  };
+  const newestPart=(node,value)=>{
+    const v=canon(value);
+    if(!v||!spansPrompt(node))return v;
+    let cut=0;
+    for(const s of [promptText].concat(olderSnippets)){
+      const end=lastUsefulEnd(v,s);
+      if(end>cut)cut=end;
+    }
+    const tail=cut>0?v.slice(cut).trim():'';
+    return tail||v;
+  };
   // Novelty by text, not by position: the set of matched nodes changes as the
   // page renders, and an index into it does not survive that.
   const responseForTurn=()=>{
@@ -200,7 +262,7 @@ const museChatTurnJS = `(async(input)=>{
   let b=null;for(let i=0;i<80&&!b;i++){b=send();if(!b)await sleep(100)}
   if(b)b.click();else if(c.form&&c.form.requestSubmit)c.form.requestSubmit();else{c.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,composed:true}));c.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true,composed:true}))}
   let last='',stable=0,started=false;const deadline=Date.now()+90000;
-  while(Date.now()<deadline){await sleep(250);const node=responseForTurn();if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:now||'Muse completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:now,href:location.href}}}
+  while(Date.now()<deadline){await sleep(250);const node=responseForTurn();if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:newestPart(node,now)||'Muse completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href}}}
   return {ok:false,detail:started?'Muse started answering but did not finish within 90 seconds.':'Muse did not produce a new response within 90 seconds.',href:location.href};
 })(%s)`
 
@@ -439,10 +501,9 @@ func startMuseChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 			return
 		}
 		if newChat {
-			var ignored bool
 			// Navigating destroys this call's own execution context; the
 			// readiness wait below decides whether the navigation worked.
-			_ = museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored)
+			_ = museChatEval(dev, browserPageNavigateJS("https://muse.ai/"), false, nil)
 		}
 		if !waitForMuseChatPageSignedIn(dev, 25*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
@@ -498,8 +559,7 @@ func startMuseChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 			http.Error(rw, "FlipAi token required", http.StatusForbidden)
 			return
 		}
-		var ignored bool
-		_ = museChatEval(dev, `(()=>{location.href='https://muse.ai/';return true})()`, false, &ignored)
+		_ = museChatEval(dev, browserPageNavigateJS("https://muse.ai/"), false, nil)
 		if !waitForMuseChatPageSignedIn(dev, 45*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Muse did not restore the saved session after opening a new chat"})

@@ -188,9 +188,11 @@ const chatGPTTurnJS = `(async(input)=>{
     // containers and interactive controls before reading the assistant wrapper.
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],'+refBlockSel).forEach(el=>el.remove());
+      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],script,style,template,noscript,'+refBlockSel).forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
-      return clean(clone.innerText||clone.textContent||'');
+      // Never let stripping empty a real message: if everything went, a
+      // selector matched the answer, and the raw text beats nothing at all.
+      return clean(clone.innerText||clone.textContent||'')||clean(n.innerText||n.textContent||'');
     }
     return clean(n.innerText||n.textContent||'');
   };
@@ -251,9 +253,19 @@ const chatGPTTurnJS = `(async(input)=>{
     // The newest message is the last one, so keep the tail.
     return found.filter(n=>!container.has(n)).slice(-400);
   };
+  // A named match can be a wrapper around every message just as easily as one
+  // reply, and nothing dropped it. A candidate that contains another candidate
+  // is a container, never a message.
+  const dropContainers=list=>{
+    if(list.length<2)return list;
+    const set=new Set(list),container=new Set();
+    for(const n of list){let p=n.parentElement;for(let hops=0;p&&hops<40;hops++,p=p.parentElement){if(set.has(p))container.add(p)}}
+    const out=list.filter(n=>!container.has(n));
+    return out.length?out:list;
+  };
   const users=()=>queryAll('[data-message-author-role="user"]');
   const assistants=()=>{
-    const named=queryAll('[data-message-author-role="assistant"]');
+    const named=dropContainers(queryAll('[data-message-author-role="assistant"]'));
     return named.length?named:genericBlocks();
   };
   const composer=()=>queryAll('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"],textarea')[0]||null;
@@ -267,15 +279,52 @@ const chatGPTTurnJS = `(async(input)=>{
   const beforeUserCount=users().length;
   const beforeAssistantCount=assistants().length;
   const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
+  // Last line of defence. If the node FlipAi matched spans this turn's own
+  // prompt, it is a conversation container and not one message, however it was
+  // matched -- so everything up to and including the prompt is history, and the
+  // answer is what follows.
+  const olderSnippets=Array.from(beforeTexts).filter(t=>t.length>=40);
+  const spansPrompt=n=>{
+    if(!n||!n.querySelectorAll||!promptText)return false;
+    for(const e of n.querySelectorAll('div,p,section,article,li,span,pre,td')){if(canon(rawText(e))===promptText)return true}
+    return false;
+  };
+  // The latest boundary that still leaves something after it. The plain last
+  // occurrence is not it: an answer often repeats the question, so cutting
+  // after that left nothing and the whole history was sent instead.
+  const lastUsefulEnd=(v,s)=>{
+    if(!s)return -1;
+    let at=-1,i=v.indexOf(s);
+    for(let guard=0;i>=0&&guard<200;guard++){
+      const end=i+s.length;
+      if(v.slice(end).trim())at=end;
+      i=v.indexOf(s,i+1);
+    }
+    return at;
+  };
+  const newestPart=(node,value)=>{
+    const v=canon(value);
+    if(!v||!spansPrompt(node))return v;
+    let cut=0;
+    for(const s of [promptText].concat(olderSnippets)){
+      const end=lastUsefulEnd(v,s);
+      if(end>cut)cut=end;
+    }
+    const tail=cut>0?v.slice(cut).trim():'';
+    return tail||v;
+  };
   // A reply is a message, not the one paragraph inside it that happens to be
   // the deepest block. Once ChatGPT put a linked sentence in its own paragraph,
   // the message stopped being a leaf and only that paragraph was sent -- the
   // written answer above it was dropped. Lift the match back to the message.
   const wholeMessage=(n,box)=>{
-    if(!n||!box||!box.contains(n))return n;
+    // n===box, or a walk that escapes the box, is how the reply became the whole
+    // document: the climb ran past the conversation to <html> and every word on
+    // the page was sent as the answer.
+    if(!n||!box||n===box||!box.contains(n))return n;
     let cur=n;
-    while(cur.parentElement&&cur.parentElement!==box)cur=cur.parentElement;
-    return cur===n?n:cur;
+    while(cur.parentElement&&cur.parentElement!==box&&box.contains(cur.parentElement))cur=cur.parentElement;
+    return cur.parentElement===box?cur:n;
   };
   // The conversation is wherever the prompt just landed. It does not move
   // during a turn, so find it once: another full page scan on every poll is
@@ -350,9 +399,9 @@ const chatGPTTurnJS = `(async(input)=>{
       const now=text(node);
       if(now===last)stable++;else{last=now;stable=0;}
       if(interim(now)){stable=0;continue}
-      if(!stop()&&stable>=5&&now)return {ok:true,reply:now,href:location.href};
+      if(!stop()&&stable>=5&&now)return {ok:true,reply:newestPart(node,now),href:location.href};
       // A stale Stop control must not hold a fully settled answer forever.
-      if(now&&stable>=32)return {ok:true,reply:now,href:location.href};
+      if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href};
     }
   }
   return {ok:false,detail:started?'ChatGPT started answering but did not finish within 90 seconds.':'ChatGPT did not produce an assistant response within 90 seconds.',href:location.href};
@@ -415,7 +464,7 @@ const chatGPTComposerReadyJS = `(()=>!!document.querySelector('#prompt-textarea,
 // chatGPTGoHomeJS lands on the canonical ChatGPT root. Navigating destroys the
 // execution context this call runs in, so it is never awaited and its failure
 // is never an error; whether it worked is decided by waiting for the page.
-const chatGPTGoHomeJS = `(()=>{location.href='https://chatgpt.com/';return true})()`
+var chatGPTGoHomeJS = browserPageNavigateJS("https://chatgpt.com/")
 
 // chatGPTPageCouldNotRunScript reports whether the WebView refused to run the
 // expression at all -- a destroyed or navigating execution context, which
@@ -697,7 +746,7 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		// WebView did not answer Runtime.evaluate" without ChatGPT ever seeing
 		// the message. Whether the navigation worked is decided below, by
 		// waiting for the page it lands on.
-		_ = chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, nil)
+		_ = chatGPTEval(dev, chatGPTGoHomeJS, false, nil)
 		time.Sleep(650 * time.Millisecond)
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in while switching from Work to Chat"}
@@ -744,10 +793,9 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		// O NEW: already works reliably in the user's real ChatGPT account. Make it
 		// the single reset primitive: the root is always a fresh regular ChatGPT
 		// Chat conversation, independent of whether the previous page was Chat or Work.
-		var ignored bool
 		// Navigating destroys this call's own execution context; the readiness
 		// wait below decides whether the navigation worked.
-		_ = chatGPTEval(dev, `(()=>{location.href='https://chatgpt.com/';return true})()`, false, &ignored)
+		_ = chatGPTEval(dev, chatGPTGoHomeJS, false, nil)
 		time.Sleep(650 * time.Millisecond)
 		if !waitForChatGPTPageSignedIn(dev, 45*time.Second) {
 			return chatGPTTurnResult{OK: false, Detail: "ChatGPT did not restore the saved sign-in after opening a fresh Chat session"}

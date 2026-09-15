@@ -95,8 +95,61 @@ func endsWithChromeSeparator(head string) bool {
 	return strings.HasSuffix(trimmed, "·") || strings.HasSuffix(trimmed, "•")
 }
 
+// stripBrowserChatConversation drops everything up to and including the last
+// place the prompt is quoted back, when something follows it.
+//
+// A provider page does not always expose one message as one element. When the
+// only thing FlipAi can match is the conversation itself, the text it reads is
+// the whole thread: weeks of older messages, then this turn's prompt, then the
+// answer. The page driver trims that in the page; this is the same rule on the
+// way out, for a reply that reached here through any other path -- a long-turn
+// continuation, say, which reads a state file and not the DOM.
+//
+// The *last* boundary that still leaves text after it is the one to cut at. The
+// last occurrence outright is not: an answer commonly repeats the question, and
+// cutting there would leave nothing at all.
+func stripBrowserChatConversation(reply, prompt string) string {
+	out := strings.TrimSpace(reply)
+	needle := strings.TrimSpace(prompt)
+	// Too short a prompt matches inside ordinary prose; "ok" is not a boundary.
+	if out == "" || len(needle) < 12 {
+		return out
+	}
+	cut := -1
+	for at := 0; ; {
+		i := strings.Index(out[at:], needle)
+		if i < 0 {
+			break
+		}
+		end := at + i + len(needle)
+		if strings.TrimSpace(out[end:]) != "" {
+			cut = end
+		}
+		at = at + i + 1
+		if at >= len(out) {
+			break
+		}
+	}
+	if cut < 0 {
+		return out
+	}
+	tail := strings.TrimSpace(out[cut:])
+	// Leading punctuation is what separated the quoted prompt from the answer.
+	tail = strings.TrimSpace(strings.TrimLeft(tail, ":-,;\u2013\u2014>|\u00b7\u2022 \t\r\n"))
+	if tail == "" {
+		return out
+	}
+	return tail
+}
+
 // cleanBrowserChatReply removes what the page added around the message: the
 // speaker label in front and the action row behind.
 func cleanBrowserChatReply(reply string) string {
 	return stripBrowserChatReplyChrome(stripBrowserChatReplyLabel(reply))
+}
+
+// cleanBrowserChatReplyForPrompt also drops the conversation in front of the
+// answer, which needs the prompt to recognize.
+func cleanBrowserChatReplyForPrompt(reply, prompt string) string {
+	return cleanBrowserChatReply(stripBrowserChatConversation(reply, prompt))
 }

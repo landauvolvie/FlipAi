@@ -413,11 +413,10 @@ func startGrokChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 			return
 		}
 		if newChat {
-			var ignored bool
 			// Navigating destroys the execution context this call runs in, so it
 			// often never answers -- that is the navigation working, not a
 			// failure. The readiness wait below decides whether it worked.
-			_ = grokChatEval(dev, `(()=>{location.href='https://grok.com';return true})()`, false, &ignored)
+			_ = grokChatEval(dev, browserPageNavigateJS("https://grok.com"), false, nil)
 		}
 		if !waitForGrokChatPageSignedIn(dev, 25*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
@@ -461,8 +460,7 @@ func startGrokChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 			http.Error(rw, "FlipAi token required", http.StatusForbidden)
 			return
 		}
-		var ignored bool
-		_ = grokChatEval(dev, `(()=>{location.href='https://grok.com';return true})()`, false, &ignored)
+		_ = grokChatEval(dev, browserPageNavigateJS("https://grok.com"), false, nil)
 		if !waitForGrokChatPageSignedIn(dev, 45*time.Second) {
 			rw.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "Grok did not restore the saved sign-in after opening a new chat"})

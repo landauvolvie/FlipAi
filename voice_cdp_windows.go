@@ -49,6 +49,17 @@ const (
 	// free before giving up.
 	devToolsQueueWait = 30 * time.Second
 
+	// devToolsNavigateHandoff is all the time a navigation call gets. It is a
+	// hand-off, not a wait for an answer: the navigation destroys the context
+	// its own callback would report through, so that callback is not coming.
+	// The answer is the page that loads, and every caller waits for that.
+	devToolsNavigateHandoff = 750 * time.Millisecond
+
+	// devToolsNavigateQueueWait bounds queueing for a navigation. A navigation
+	// is how a wedged page is recovered, so it must not sit behind a long turn
+	// for the length of the ordinary queue wait.
+	devToolsNavigateQueueWait = 10 * time.Second
+
 	// voiceDevToolsTimeout bounds ordinary DevTools calls. Google Voice probes
 	// must fail quickly if its page is navigating or wedged so the call observer
 	// does not disappear for a long time.
@@ -148,7 +159,7 @@ type devToolsReply struct {
 // already owned. That wedged the WebView worker permanently: the page had run
 // the prompt and the model had answered, but the control channel never came
 // back and every later call on that browser blocked behind it forever.
-func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (devToolsReply, bool) {
+func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration, holdOnTimeout bool) (devToolsReply, bool) {
 	// Queueing for the channel is bounded, but it is not charged to the call's
 	// own deadline. Charging it there meant a call could spend its whole
 	// allowance waiting for its turn and then report that the page had not
@@ -186,11 +197,20 @@ func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (
 		d.call.Unlock()
 		return got, true
 	case <-time.After(timeout):
-		// We have stopped waiting, but WebView2 has not: the operation is still
-		// live inside the browser, and issuing the next one on top of it is what
-		// returns "Overlapped I/O operation is in progress". Keep the channel
-		// held until this call really finishes, so the next caller waits for a
-		// free channel instead of colliding with this one.
+		// A model turn is the one call worth reserving the channel for: it is
+		// genuinely still running in the page, and stacking a second turn on top
+		// of it would type a second prompt.
+		//
+		// Nothing else holds it. "Overlapped I/O operation is in progress" was
+		// never a collision -- it was the thread's stale last error being read as
+		// the call's result -- and holding the channel for an ordinary probe that
+		// timed out is pure cost. ChatGPT pays that cost more than anyone: it
+		// issues a burst of short probes around switching experience, and one
+		// stuck probe parked every one of them behind it.
+		if !holdOnTimeout {
+			d.call.Unlock()
+			return devToolsReply{}, false
+		}
 		go func() {
 			select {
 			case <-answered:
@@ -202,6 +222,41 @@ func (d *webViewDevTools) dispatch(method, body string, timeout time.Duration) (
 	}
 }
 
+// handOff gives WebView2 a navigation and returns. It never waits for the
+// call's completion handler, because navigating destroys the execution context
+// that handler reports through -- so the handler frequently never fires, and
+// waiting for it costs the caller its deadline and then blocks the channel for
+// every page-readiness probe that follows.
+func (d *webViewDevTools) handOff(method, body string) {
+	queueUntil := time.Now().Add(devToolsNavigateQueueWait)
+	for !d.call.TryLock() {
+		if time.Now().After(queueUntil) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	answered := make(chan devToolsReply, 1)
+	d.view.Dispatch(func() {
+		err := d.chromium.CallDevToolsProtocolMethod(method, body, func(code uintptr, result string) {
+			select {
+			case answered <- devToolsReply{code: code, result: result}:
+			default:
+			}
+		})
+		if err != nil {
+			select {
+			case answered <- devToolsReply{err: err}:
+			default:
+			}
+		}
+	})
+	select {
+	case <-answered:
+	case <-time.After(devToolsNavigateHandoff):
+	}
+	d.call.Unlock()
+}
+
 func (d *webViewDevTools) Call(method string, params any, out any) error {
 	if d == nil || d.view == nil || d.chromium == nil {
 		return errNoVoiceControlChannel
@@ -210,6 +265,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 	browserTurn := false
 	browserProvider := ""
 	generatedImageTurn := false
+	navigate := false
 	// Browser-chat media turns carry a private marker inside the prompt sent to
 	// the worker. Strip it before the page sees the prompt, upload those local
 	// temp files through the site's own file input, then run the normal provider
@@ -218,6 +274,7 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 	if method == "Runtime.evaluate" {
 		if m, ok := params.(map[string]any); ok {
 			if expression, ok := m["expression"].(string); ok {
+				navigate = isBrowserPageNavigateExpression(expression)
 				browserTurn = isBrowserChatTurnExpression(expression)
 				if browserTurn {
 					clearCapturedBrowserChatReturnedMedia()
@@ -252,7 +309,15 @@ func (d *webViewDevTools) Call(method string, params any, out any) error {
 		body = string(b)
 	}
 
-	got, answeredInTime := d.dispatch(method, body, webViewDevToolsCallTimeout(method, params))
+	// A navigation is handed off and left alone. Reporting it as a failure -- or
+	// holding the channel while its callback does not arrive -- is what broke
+	// ChatGPT's experience switch, and the page it lands on is the real answer.
+	if navigate {
+		d.handOff(method, body)
+		return nil
+	}
+
+	got, answeredInTime := d.dispatch(method, body, webViewDevToolsCallTimeout(method, params), browserTurn)
 	switch {
 	case answeredInTime:
 		if got.err != nil {
