@@ -19,12 +19,22 @@ const browserChatReturnedMediaMarker = "__FLIPAI_BROWSER_RETURN_MEDIA__"
 // not a model turn and must not start a long-turn watcher or a media scan.
 const browserLongPageCallMarker = "__FLIPAI_LONG_PAGE_CALL__"
 
+// browserChatTurnMarker names a provider's awaited page turn.
+//
+// It replaces recognizing the turn by the literal text of its deadline. That
+// deadline is now one budget fixed when the script starts, rather than a fresh
+// ninety seconds begun after the composer wait -- two budgets end to end, which
+// could outlast the deadline the DevTools layer allows a turn and get the call
+// abandoned with the answer sitting finished in the page.
+const browserChatTurnMarker = "__FLIPAI_BROWSER_TURN__"
+
 func isBrowserChatTurnExpression(expression string) bool {
-	// Every browser-chat provider uses the same bounded 90-second awaited page
-	// turn as its first checkpoint. Login probes and ordinary page checks do not
-	// contain this deadline. FlipAi can continue the actual model turn after the
-	// checkpoint without imposing an elapsed-time cap.
-	return strings.Contains(expression, "const deadline=Date.now()+90000;") ||
+	// Every browser-chat provider uses the same bounded awaited page turn as its
+	// first checkpoint. Login probes and ordinary page checks carry no marker.
+	// FlipAi can continue the actual model turn after the checkpoint without
+	// imposing an elapsed-time cap.
+	return strings.Contains(expression, browserChatTurnMarker) ||
+		strings.Contains(expression, "const deadline=Date.now()+90000;") ||
 		strings.Contains(expression, "const deadline = Date.now() + 90000;")
 }
 

@@ -162,6 +162,12 @@ const chatGPTClickNewChatJS = `(()=>{
 // private WebView. It does not use Windows accessibility, global keyboard/mouse
 // input, the user's visible ChatGPT app, or coordinates.
 const chatGPTTurnJS = `(async(input)=>{
+  // One budget for the whole script, fixed when it starts.
+  // Waiting for the composer and then starting a fresh ninety seconds is two
+  // budgets end to end: on a slow page that ran past the deadline the DevTools
+  // layer allows a turn, and the call was abandoned at ninety-five seconds with
+  // the model's answer sitting finished in the page.
+  const turnDeadline=Date.now()+82000;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const clean=s=>String(s||'')
     .replace(/Unable to display this message due to an error\.?\s*Reload the page to try again\.?/gi,' ')
@@ -177,6 +183,25 @@ const chatGPTTurnJS = `(async(input)=>{
   // Inline reference chrome worth dropping is the bare marker -- a superscript
   // number, "[1]" -- never a linked phrase. Letters mean it is prose.
   const refInlineSel=joinSel(['a','span','cite','sup','small'],refKeys)+',sup';
+  // A card is not a sentence. Providers put an offer of connectors to switch on,
+  // and a tile for a file they produced, inside the turn; both are controls with
+  // words on them, and they were arriving in the text message. Their own buttons
+  // are the evidence, so this runs before the buttons are stripped.
+  // Narrower than activitySel, on purpose. A streaming answer is commonly
+  // announced through [aria-live] or [role=status], and cutting those out of the
+  // chosen reply would delete the message itself. The running tool log is not
+  // the answer, though, and it was arriving as part of one.
+  const activityStripSel='aside,[role="log"],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
+  const dropCards=clone=>{
+    const labelled=(el,word)=>Array.from(el.querySelectorAll('button,a,[role="button"]')).some(b=>new RegExp('^'+word+'$','i').test(String(b.innerText||b.textContent||'').replace(/\s+/g,' ').trim()));
+    for(const el of Array.from(clone.querySelectorAll('div,section,aside,article,figure'))){
+      if(!clone.contains(el))continue;
+      const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
+      if(!t)continue;
+      if(/^connectors? that could help\b/i.test(t)){el.remove();continue}
+      if(t.length<=300&&(labelled(el,'download')||labelled(el,'connect')))el.remove();
+    }
+  };
   const text=n=>{
     if(!n)return '';
     // ChatGPT renders the normal written answer in a Markdown subtree and rich
@@ -188,7 +213,8 @@ const chatGPTTurnJS = `(async(input)=>{
     // containers and interactive controls before reading the assistant wrapper.
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],script,style,template,noscript,'+refBlockSel).forEach(el=>el.remove());
+      dropCards(clone);
+      clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],script,style,template,noscript,'+activityStripSel+','+refBlockSel).forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
       // Never let stripping empty a real message: if everything went, a
       // selector matched the answer, and the raw text beats nothing at all.
@@ -272,7 +298,7 @@ const chatGPTTurnJS = `(async(input)=>{
   const send=()=>queryAll('button[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label^="Send" i],button[type="submit"]').find(b=>!b.disabled)||null;
   const stop=()=>queryAll('button[data-testid="stop-button"],button[aria-label^="Stop" i]')[0]||null;
   let c=null;
-  for(let i=0;i<100&&!c;i++){c=composer();if(!c)await sleep(200);}
+  for(let i=0;i<100&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'ChatGPT is loaded but FlipAi could not find the message composer. The site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
@@ -390,7 +416,7 @@ const chatGPTTurnJS = `(async(input)=>{
     }
   }
   let last='',stable=0,started=false;
-  const deadline=Date.now()+90000;
+  const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){
     await sleep(250);
     const node=assistantForThisTurn();
@@ -404,7 +430,7 @@ const chatGPTTurnJS = `(async(input)=>{
       if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href};
     }
   }
-  return {ok:false,detail:started?'ChatGPT started answering but did not finish within 90 seconds.':'ChatGPT did not produce an assistant response within 90 seconds.',href:location.href};
+  return {ok:false,detail:started?'ChatGPT started answering but did not finish in time.':'ChatGPT did not produce an assistant response in time.',href:location.href};
 })(%s)`
 
 type chatGPTTurnResult struct {

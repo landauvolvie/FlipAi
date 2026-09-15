@@ -34,6 +34,12 @@ const grokChatPageMonitorJS = `(function(){
 const grokChatSignedInJS = `(()=>{const c=document.querySelector('div.ProseMirror[contenteditable="true"][role="textbox"],div.tiptap.ProseMirror[contenteditable="true"],[data-testid="grokInput"][contenteditable="true"],[data-testid="grokInput"],[contenteditable="true"][role="textbox"],textarea[placeholder],textarea');const loginPage=/\/(?:login|sign-?in)(?:\/|$)/i.test(location.pathname)||!!document.querySelector('form input[type="email"],form input[name="username"],form input[autocomplete="username"]');return /(^|\.)grok\.com$/i.test(location.hostname)&&!!c&&!loginPage})()`
 
 const grokChatTurnJS = `(async(input)=>{
+  // One budget for the whole script, fixed when it starts.
+  // Waiting for the composer and then starting a fresh ninety seconds is two
+  // budgets end to end: on a slow page that ran past the deadline the DevTools
+  // layer allows a turn, and the call was abandoned at ninety-five seconds with
+  // the model's answer sitting finished in the page.
+  const turnDeadline=Date.now()+82000;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const text=n=>String(n&&n.innerText||n&&n.textContent||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
   const sameText=(a,b)=>String(a||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim()===String(b||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
@@ -63,7 +69,7 @@ const grokChatTurnJS = `(async(input)=>{
   };
   const stop=()=>{const xs=unique([...all('button[data-testid*="stop" i]'),...all('button[aria-label*="stop" i]')]);return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
   let c=null;
-  for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200);}
+  for(let i=0;i<120&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Grok is loaded but FlipAi could not find the prompt box. The Grok site layout may have changed.',href:location.href};
   const before=assistants();
   const beforeCount=before.length;
@@ -122,7 +128,7 @@ const grokChatTurnJS = `(async(input)=>{
   // assistant output for 30 seconds, fail that turn explicitly instead of
   // entering the multi-minute long-turn heartbeat path for a dead/no-output UI.
   let last='',started=false,startedAt=0,lastChangedAt=0,noOutputIdleSince=Date.now();
-  const deadline=Date.now()+90000;
+  const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){
     await sleep(250);
     const working=!!stop();
@@ -141,7 +147,7 @@ const grokChatTurnJS = `(async(input)=>{
       else if(Date.now()-noOutputIdleSince>=30000)return {ok:false,detail:'Grok accepted the prompt but no assistant response appeared. Open Grok Chat in FlipAi, reconnect if needed, and try again.',href:location.href};
     }
   }
-  return {ok:false,detail:started?'Grok started answering but did not finish within 90 seconds.':'Grok did not produce a new response within 90 seconds.',href:location.href};
+  return {ok:false,detail:started?'Grok started answering but did not finish in time.':'Grok did not produce a new response in time.',href:location.href};
 })(%s)`
 
 type grokChatTurnResult struct {

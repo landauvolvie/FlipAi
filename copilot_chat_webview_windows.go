@@ -49,6 +49,12 @@ const copilotChatPageMonitorJS = `(function(){
 const copilotChatSignedInJS = `(()=>{const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};const c=first('textarea#userInput,textarea[data-testid*="composer" i],textarea[data-testid*="input" i],textarea[aria-label*="message" i],textarea[aria-label*="ask" i],textarea[placeholder*="message" i],textarea[placeholder*="ask" i],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="input" i],div[contenteditable="true"]');const loginPage=/(?:login\.live\.com|login\.microsoftonline\.com)$/i.test(location.hostname)||/(?:\/login|\/signin|\/sign-in)(?:\/|$)/i.test(location.pathname)||!!first('form input[type="email"],form input[name="loginfmt"],form input[autocomplete="username"]');return /(^|\.)copilot\.microsoft\.com$/i.test(location.hostname)&&!!c&&!loginPage})()`
 
 const copilotChatTurnJS = `(async(input)=>{
+  // One budget for the whole script, fixed when it starts.
+  // Waiting for the composer and then starting a fresh ninety seconds is two
+  // budgets end to end: on a slow page that ran past the deadline the DevTools
+  // layer allows a turn, and the call was abandoned at ninety-five seconds with
+  // the model's answer sitting finished in the page.
+  const turnDeadline=Date.now()+82000;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   // The reply's own action row -- "Edit in a page", "Copy", "Good response" --
   // is page furniture, not part of what the model said, and it was going out
@@ -70,11 +76,31 @@ const copilotChatTurnJS = `(async(input)=>{
   const chromeControlSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
   const chromeSel=chromeControlSel+','+refBlockSel;
   // The chosen reply gets the careful read: its action row is page furniture.
+  // A card is not a sentence. Providers put an offer of connectors to switch on,
+  // and a tile for a file they produced, inside the turn; both are controls with
+  // words on them, and they were arriving in the text message. Their own buttons
+  // are the evidence, so this runs before the buttons are stripped.
+  // Narrower than activitySel, on purpose. A streaming answer is commonly
+  // announced through [aria-live] or [role=status], and cutting those out of the
+  // chosen reply would delete the message itself. The running tool log is not
+  // the answer, though, and it was arriving as part of one.
+  const activityStripSel='aside,[role="log"],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
+  const dropCards=clone=>{
+    const labelled=(el,word)=>Array.from(el.querySelectorAll('button,a,[role="button"]')).some(b=>new RegExp('^'+word+'$','i').test(String(b.innerText||b.textContent||'').replace(/\s+/g,' ').trim()));
+    for(const el of Array.from(clone.querySelectorAll('div,section,aside,article,figure'))){
+      if(!clone.contains(el))continue;
+      const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
+      if(!t)continue;
+      if(/^connectors? that could help\b/i.test(t)){el.remove();continue}
+      if(t.length<=300&&(labelled(el,'download')||labelled(el,'connect')))el.remove();
+    }
+  };
   const text=n=>{
     if(!n)return '';
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
-      clone.querySelectorAll(chromeSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
+      dropCards(clone);
+      clone.querySelectorAll(chromeSel+','+activityStripSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
       // Never let stripping empty a real message: if everything went, a
       // selector matched the answer, and the raw text beats nothing at all.
@@ -183,7 +209,7 @@ const copilotChatTurnJS = `(async(input)=>{
   const send=()=>{const xs=all('button[data-testid*="send" i],button[aria-label*="send" i],button[title*="send" i],button[type="submit"]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||xs.find(b=>!b.disabled)||null};
   const stop=()=>{const xs=all('button[data-testid*="stop" i],button[data-testid*="cancel" i],button[aria-label*="stop" i],button[aria-label*="cancel" i],button[title*="stop" i]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
   let c=null;
-  for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200)}
+  for(let i=0;i<120&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200)}
   if(!c)return {ok:false,detail:'Microsoft Copilot is loaded but FlipAi could not find the prompt box. The Copilot site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
@@ -266,12 +292,12 @@ const copilotChatTurnJS = `(async(input)=>{
       c.dispatchEvent(new KeyboardEvent(type,{bubbles:true,composed:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13,which:13}));
     }
   }
-  let last='',stable=0,started=false;const deadline=Date.now()+90000;
+  let last='',stable=0,started=false;const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();
     if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:newestPart(node,now)||'Microsoft Copilot completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href}}
   }
-  return {ok:false,detail:started?'Microsoft Copilot started answering but did not finish within 90 seconds.':'Microsoft Copilot did not produce a new response within 90 seconds.',href:location.href};
+  return {ok:false,detail:started?'Microsoft Copilot started answering but did not finish in time.':'Microsoft Copilot did not produce a new response in time.',href:location.href};
 })(%s)`
 
 type copilotChatTurnResult struct {

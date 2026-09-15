@@ -46,6 +46,12 @@ const museChatPageMonitorJS = `(function(){
 const museChatSignedInJS = `(()=>{const roots=()=>{const out=[document],seen=new Set(out);for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}return out};const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};const c=first('textarea[data-testid*="composer" i],textarea[data-testid*="input" i],textarea[aria-label*="message" i],textarea[aria-label*="ask" i],textarea[aria-label*="prompt" i],textarea[placeholder*="message" i],textarea[placeholder*="ask" i],textarea[placeholder*="prompt" i],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="input" i],[contenteditable="true"][aria-label*="message" i],[contenteditable="true"][aria-label*="prompt" i],div[contenteditable="true"]');const h=location.hostname.toLowerCase();const loginPage=h==='auth.muse.ai'||/(?:\/login|\/signin|\/sign-in|\/auth)(?:\/|$)/i.test(location.pathname)||!!first('form input[type="email"],form input[autocomplete="username"],form input[name*="email" i]');return (h==='muse.ai'||h==='www.muse.ai')&&!!c&&!loginPage})()`
 
 const museChatTurnJS = `(async(input)=>{
+  // One budget for the whole script, fixed when it starts.
+  // Waiting for the composer and then starting a fresh ninety seconds is two
+  // budgets end to end: on a slow page that ran past the deadline the DevTools
+  // layer allows a turn, and the call was abandoned at ninety-five seconds with
+  // the model's answer sitting finished in the page.
+  const turnDeadline=Date.now()+82000;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   // The reply's own action row -- "Edit in a page", "Copy", "Good response" --
   // is page furniture, not part of what the model said, and it was going out
@@ -75,10 +81,25 @@ const museChatTurnJS = `(async(input)=>{
   // the chosen reply would delete the message itself.
   const activityStripSel='aside,[role="log"],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
   // The chosen reply gets the careful read: its action row is page furniture.
+  // A card is not a sentence. Providers put an offer of connectors to switch on,
+  // and a tile for a file they produced, inside the turn; both are controls with
+  // words on them, and they were arriving in the text message. Their own buttons
+  // are the evidence, so this runs before the buttons are stripped.
+  const dropCards=clone=>{
+    const labelled=(el,word)=>Array.from(el.querySelectorAll('button,a,[role="button"]')).some(b=>new RegExp('^'+word+'$','i').test(String(b.innerText||b.textContent||'').replace(/\s+/g,' ').trim()));
+    for(const el of Array.from(clone.querySelectorAll('div,section,aside,article,figure'))){
+      if(!clone.contains(el))continue;
+      const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
+      if(!t)continue;
+      if(/^connectors? that could help\b/i.test(t)){el.remove();continue}
+      if(t.length<=300&&(labelled(el,'download')||labelled(el,'connect')))el.remove();
+    }
+  };
   const text=n=>{
     if(!n)return '';
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
+      dropCards(clone);
       clone.querySelectorAll(chromeControlSel+','+refBlockSel+','+activityStripSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
       // Never let stripping empty a real message: if everything went, a
@@ -193,7 +214,7 @@ const museChatTurnJS = `(async(input)=>{
   };
   const send=()=>{const xs=all('button[data-testid*="send" i],button[aria-label*="send" i],button[title*="send" i],button[type="submit"]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||xs.find(b=>!b.disabled)||null};
   const stop=()=>{const xs=all('button[data-testid*="stop" i],button[data-testid*="cancel" i],button[aria-label*="stop" i],button[aria-label*="cancel" i],button[title*="stop" i]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
-  let c=null;for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200)}
+  let c=null;for(let i=0;i<120&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200)}
   if(!c)return {ok:false,detail:'Muse is loaded but FlipAi could not find the prompt box. The Muse site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
@@ -261,9 +282,9 @@ const museChatTurnJS = `(async(input)=>{
   await sleep(350);
   let b=null;for(let i=0;i<80&&!b;i++){b=send();if(!b)await sleep(100)}
   if(b)b.click();else if(c.form&&c.form.requestSubmit)c.form.requestSubmit();else{c.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,composed:true}));c.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true,composed:true}))}
-  let last='',stable=0,started=false;const deadline=Date.now()+90000;
+  let last='',stable=0,started=false;const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){await sleep(250);const node=responseForTurn();if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:newestPart(node,now)||'Muse completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href}}}
-  return {ok:false,detail:started?'Muse started answering but did not finish within 90 seconds.':'Muse did not produce a new response within 90 seconds.',href:location.href};
+  return {ok:false,detail:started?'Muse started answering but did not finish in time.':'Muse did not produce a new response in time.',href:location.href};
 })(%s)`
 
 type museChatTurnResult struct {

@@ -58,11 +58,17 @@ function turnScript(file, constant, prompt) {
 // back as one reply: weeks of old messages, plus the running tool log, arriving
 // as a single text message.
 //
+// `withPreamble` is the shape of a tool-using turn: the model says what it is
+// about to do, runs tools for several seconds, offers some connectors, and only
+// then writes the answer and attaches a file. FlipAi texted the opening line and
+// nothing else -- that line sat unchanged for a second while the work was still
+// going, and it looked finished.
+//
 // `withLongHistory` builds a conversation of a realistic size. A driver that
 // scans the whole page on every poll cannot finish inside its own deadline
 // there, and one that treats a scroll container as a block sends the entire
 // history -- every message joined together -- as the answer.
-function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper }) {
+function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble }) {
   const history = withLongHistory
     ? Array.from({ length: 700 }, (_, i) =>
         `<div class="x1"><p>Earlier turn ${i}</p><p>A paragraph of an older answer that is already on screen and should never be mistaken for this turn's reply.</p></div>`).join('')
@@ -104,6 +110,36 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
           reply.className = 'x3';
           log.appendChild(reply);
           reply.textContent = 'FLIPAI';
+          if (${JSON.stringify(!!withPreamble)}) {
+            // Says something, works for a while, then answers.
+            // Claude reads its own turn container by name; this scenario is about
+            // what the driver does with a turn, not about finding one.
+            reply.setAttribute('data-testid', 'assistant-message');
+            reply.textContent = 'This will take a few minutes - pulling calendar and email first.';
+            let done = 0;
+            const tick = setInterval(() => {
+              done++;
+              let log = reply.querySelector('.tool-use');
+              if (!log) { log = document.createElement('div'); log.className = 'tool-use'; reply.appendChild(log); }
+              log.textContent = 'Ran ' + done + ' commands, used 2 integrations';
+              if (done >= 5) {
+                clearInterval(tick);
+                const offer = document.createElement('div');
+                offer.innerHTML = '<span>Connectors that could help</span>'
+                  + '<div><span>Microsoft 365</span> <button>Connect</button></div>'
+                  + '<div><span>Slack</span> <button>Connect</button></div>';
+                reply.appendChild(offer);
+                const answer = document.createElement('p');
+                answer.textContent = 'FLIPAI answered: ' + value;
+                reply.appendChild(answer);
+                const tile = document.createElement('div');
+                tile.innerHTML = '<span>Morning brief</span><span>Code - HTML</span><button>Download</button>';
+                reply.appendChild(tile);
+                busy.remove();
+              }
+            }, 900);
+            return;
+          }
           setTimeout(() => { reply.textContent = 'FLIPAI answered: ' + value; }, 200);
           setTimeout(() => busy.remove(), 700);
           if (${JSON.stringify(!!withCitationCards)}) {
@@ -193,13 +229,17 @@ for (const [name, file, constant] of drivers) {
 for (const [name, file, constant] of enterOnlyDrivers) {
   scenarios.push({ name, file, constant, withSendButton: false, sendOnly: true });
 }
+// The tool-using turn, across every driver that reads a reply out of the page.
+for (const [name, file, constant] of drivers.concat([['Claude', 'claude_chat_webview_windows.go', 'claudeChatTurnJS']])) {
+  scenarios.push({ name, file, constant, withSendButton: true, withPreamble: true });
+}
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, sendOnly }) => {
-  const label = `${name} (${withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, sendOnly }) => {
+  const label = `${name} (${withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper }));
+  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble }));
   const startedAt = Date.now();
   if (sendOnly) {
     // The driver keeps polling for a reply it will never recognize here, so do
@@ -243,6 +283,12 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     failures.push(`${label}: the conversation history was sent as the answer (${String(result.reply).length} chars)`);
   } else if (/CBS News|thephoto-news|Show all/i.test(String(result.reply))) {
     failures.push(`${label}: source cards were included in the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withPreamble && /pulling calendar and email/.test(String(result.reply)) && !/FLIPAI answered/.test(String(result.reply))) {
+    failures.push(`${label}: only the opening line was sent, while the answer was still being written: ${JSON.stringify(result.reply)}`);
+  } else if (withPreamble && /Connectors that could help|Morning brief|Code - HTML/.test(String(result.reply))) {
+    failures.push(`${label}: a connector offer or file tile was sent as part of the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withPreamble && /Ran \d+ commands/.test(String(result.reply))) {
+    failures.push(`${label}: the running tool log was sent as part of the answer: ${JSON.stringify(result.reply)}`);
   } else if (withCitationCards && !/AI regulation/.test(String(result.reply))) {
     failures.push(`${label}: a linked phrase was stripped out of the answer: ${JSON.stringify(result.reply)}`);
   } else if (withCitationCards && !/climate rules/.test(String(result.reply))) {

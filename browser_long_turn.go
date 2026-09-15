@@ -127,10 +127,20 @@ func loadBrowserLongTurnState(dataDir, provider string) (browserLongTurnState, e
 	return state, nil
 }
 
+// browserLongTurnTimeoutDetail recognizes a page driver's checkpoint: the turn
+// did not finish inside the script's own budget. That is not a failed turn --
+// the model is usually still answering -- so the continuation takes over.
+//
+// The wording is the contract between the drivers and this function, and it has
+// been broken once by rewording a driver. TestEveryDriverTimeoutIsRecognized
+// holds the two together.
 func browserLongTurnTimeoutDetail(detail string) bool {
 	s := strings.ToLower(strings.TrimSpace(detail))
+	if strings.Contains(s, "did not finish in time") || strings.Contains(s, "did not produce") && strings.Contains(s, "in time") {
+		return true
+	}
+	// The wording used before the drivers were given one budget each.
 	return strings.Contains(s, "within 90 seconds") ||
-		strings.Contains(s, "did not finish within 90 seconds") ||
 		strings.Contains(s, "did not produce") && strings.Contains(s, "90 seconds")
 }
 
