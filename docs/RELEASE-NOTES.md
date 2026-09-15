@@ -1,4 +1,4 @@
-# FlipAi v0.46.89
+# FlipAi v0.46.90
 
 ChatGPT stopped working one release after it worked, and the logs say exactly which release and why.
 
@@ -8,6 +8,7 @@ ChatGPT stopped working one release after it worked, and the logs say exactly wh
 - **Last line of defence against the same thing.** If the matched element spans this turn's own prompt, it is a conversation and not a message: the answer is what comes after the prompt. The latest boundary that still leaves text after it is the one used, because an answer commonly repeats the question. The same rule runs on the way out, so a reply that arrives through the long-turn path is trimmed too.
 - **Muse's running tool/step log is stripped out of the reply**, not just out of the scan, and no driver reads `<script>` or `<style>` text as a message. Stripping can never empty a reply now: if it takes everything, the untouched text is sent instead.
 - **The log records the version.** Diagnosing "it worked two builds ago" meant guessing which build wrote a log from release timestamps, and a wrong guess sends the whole investigation to the wrong commit.
+- **Windows-only source guards are now checked on every checkout.** A good number of this repo's guards are assertions about source text and live in Windows-only test files, which never run on Linux — so an edit that broke one was not found until the release workflow's Windows job, after the build, the signing and the attestation. Those assertions are now read and held to on any platform.
 - The driver harness grew to twenty-seven scenarios, including a conversation whose scroll container carries the names a driver looks for and gives no message its own.
 
 Validation: publication is gated by the release workflow's full Linux test suite, real-browser call-flow tests, Windows tests, vet, race tests, Windows build, Google Voice integration, installer install/uninstall smoke tests, Microsoft Defender checks, provenance, checksum, and CycloneDX SBOM generation.
