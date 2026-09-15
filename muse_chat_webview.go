@@ -127,24 +127,41 @@ func museChatControlRequest(ctx context.Context, s MuseChatWebRuntime, method, p
 func waitForMuseChatReady(ctx context.Context, dataDir string) (MuseChatWebRuntime, error) {
 	t := time.NewTicker(250 * time.Millisecond)
 	defer t.Stop()
+	startedAt := time.Now()
+	noted := false
 	for {
 		s := loadMuseChatRuntime(dataDir)
-		if s.Running && s.ControlPort > 0 && s.ControlToken != "" {
+		alive := s.Running && s.ControlPort > 0 && s.ControlToken != ""
+		healthOK, signedIn := false, false
+		if alive {
 			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			b, code, err := museChatControlRequest(probeCtx, s, http.MethodGet, "/health", nil)
 			cancel()
 			if err == nil && code == http.StatusOK {
+				healthOK = true
 				var health struct {
 					SignedIn bool `json:"signedIn"`
 				}
-				if json.Unmarshal(b, &health) == nil && health.SignedIn {
-					mutateMuseChatRuntime(dataDir, func(v *MuseChatWebRuntime) {
-						v.Connected, v.SignedIn, v.Starting = true, true, false
-						v.LastError = ""
-					})
-					return loadMuseChatRuntime(dataDir), nil
+				if json.Unmarshal(b, &health) == nil {
+					signedIn = health.SignedIn
 				}
 			}
+		}
+		if acceptBrowserWorker(signedIn, alive, healthOK, time.Since(startedAt)) {
+			if !signedIn {
+				noteBrowserWorkerAccepted(ctx, "Muse")
+			}
+			mutateMuseChatRuntime(dataDir, func(v *MuseChatWebRuntime) {
+				v.Connected, v.SignedIn, v.Starting = true, signedIn, false
+				if signedIn {
+					v.LastError = ""
+				}
+			})
+			return loadMuseChatRuntime(dataDir), nil
+		}
+		if !noted {
+			noteBrowserWorkerWaiting(ctx, "Muse", alive, healthOK)
+			noted = true
 		}
 		select {
 		case <-ctx.Done():

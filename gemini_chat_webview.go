@@ -129,24 +129,41 @@ func geminiChatControlRequest(ctx context.Context, s GeminiChatWebRuntime, metho
 func waitForGeminiChatReady(ctx context.Context, dataDir string) (GeminiChatWebRuntime, error) {
 	t := time.NewTicker(250 * time.Millisecond)
 	defer t.Stop()
+	startedAt := time.Now()
+	noted := false
 	for {
 		s := loadGeminiChatRuntime(dataDir)
-		if s.Running && s.ControlPort > 0 && s.ControlToken != "" {
+		alive := s.Running && s.ControlPort > 0 && s.ControlToken != ""
+		healthOK, signedIn := false, false
+		if alive {
 			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			b, code, err := geminiChatControlRequest(probeCtx, s, http.MethodGet, "/health", nil)
 			cancel()
 			if err == nil && code == http.StatusOK {
+				healthOK = true
 				var health struct {
 					SignedIn bool `json:"signedIn"`
 				}
-				if json.Unmarshal(b, &health) == nil && health.SignedIn {
-					mutateGeminiChatRuntime(dataDir, func(v *GeminiChatWebRuntime) {
-						v.Connected, v.SignedIn, v.Starting = true, true, false
-						v.LastError = ""
-					})
-					return loadGeminiChatRuntime(dataDir), nil
+				if json.Unmarshal(b, &health) == nil {
+					signedIn = health.SignedIn
 				}
 			}
+		}
+		if acceptBrowserWorker(signedIn, alive, healthOK, time.Since(startedAt)) {
+			if !signedIn {
+				noteBrowserWorkerAccepted(ctx, "Gemini Chat")
+			}
+			mutateGeminiChatRuntime(dataDir, func(v *GeminiChatWebRuntime) {
+				v.Connected, v.SignedIn, v.Starting = true, signedIn, false
+				if signedIn {
+					v.LastError = ""
+				}
+			})
+			return loadGeminiChatRuntime(dataDir), nil
+		}
+		if !noted {
+			noteBrowserWorkerWaiting(ctx, "Gemini Chat", alive, healthOK)
+			noted = true
 		}
 		select {
 		case <-ctx.Done():

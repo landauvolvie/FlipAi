@@ -74,6 +74,13 @@ function turnScript(file, constant, prompt) {
 // way a real one is, so reading them together runs the name into the next word:
 // "Museis working". That was texted in place of the reply.
 //
+// `wrongPage` is the provider's own site, signed in, with a box you can type in
+// -- and it is not a conversation. ChatGPT's Scheduled page is exactly this:
+// FlipAi typed a text message into "Schedule a task", sent it with Enter, and
+// read the page's list of recommended tasks back as the model's answer.
+//
+// A driver must not type a person's message into a page like this.
+//
 // `withLongHistory` builds a conversation of a realistic size. A driver that
 // scans the whole page on every poll cannot finish inside its own deadline
 // there, and one that treats a scroll container as a block sends the entire
@@ -238,6 +245,25 @@ const enterOnlyDrivers = [
   ['Grok', 'grok_chat_webview_windows.go', 'grokChatTurnJS'],
 ];
 
+// The provider's own site, but a page that is not a chat.
+function schedulePageHTML() {
+  return `<!doctype html><html><body>
+    <main>
+      <h1>Scheduled</h1>
+      <div id="composer-wrap"><textarea id="box" placeholder="Schedule a task"></textarea></div>
+      <div id="recommended">
+        <div class="row">\u{1F4BB} Let me know when a new Dell with Intel, 32 GB RAM, touchscreen, and built-in 5G appears</div>
+        <div class="row">\u{1F3B5} Give me a fresh shortlist of related music videos every Friday</div>
+      </div>
+    </main>
+    <script>
+      document.querySelector('#box').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); window.__flipaiSubmitted = document.querySelector('#box').value; }
+      });
+    </script>
+  </body></html>`;
+}
+
 const prompt = 'browser harness prompt';
 const browser = await chromium.launch({ headless: true });
 const failures = [];
@@ -263,12 +289,39 @@ for (const [name, file, constant] of drivers) {
 for (const [name, file, constant] of enterOnlyDrivers) {
   scenarios.push({ name, file, constant, withSendButton: false, sendOnly: true });
 }
+scenarios.push({ name: 'ChatGPT', file: 'chatgpt_webview_windows.go', constant: 'chatGPTTurnJS', wrongPage: true });
 // The tool-using turn, across every driver that reads a reply out of the page.
 for (const [name, file, constant] of drivers.concat([['Claude', 'claude_chat_webview_windows.go', 'claudeChatTurnJS']])) {
   scenarios.push({ name, file, constant, withSendButton: true, withPreamble: true });
 }
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, sendOnly }) => {
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, sendOnly, wrongPage }) => {
+  if (wrongPage) {
+    const page = await browser.newPage();
+    // The driver must refuse this page outright, and must not type into it. The
+    // path is what makes it the Scheduled page, so the content is served at the
+    // real URL rather than pushed into a blank one -- fulfilled locally, since
+    // the harness never reaches the network.
+    await page.route('**/*', route => route.fulfill({ status: 200, contentType: 'text/html', body: schedulePageHTML() }));
+    await page.goto('https://chatgpt.com/tasks');
+    let result;
+    try {
+      result = await page.evaluate(turnScript(file, constant, prompt));
+    } catch (e) {
+      failures.push(`${name} (wrong page): driver threw: ${e}`);
+      await page.close().catch(() => {});
+      return;
+    }
+    const typed = await page.evaluate(() => window.__flipaiSubmitted || null).catch(() => null);
+    const box = await page.evaluate(() => (document.querySelector('#box') || {}).value || '').catch(() => '');
+    if (typed) failures.push(`${name} (wrong page): the message was sent into a page that is not a chat`);
+    else if (box) failures.push(`${name} (wrong page): the message was typed into a page that is not a chat`);
+    else if (result && result.ok) failures.push(`${name} (wrong page): a page that is not a chat was reported as a completed turn: ${JSON.stringify(result.reply)}`);
+    else if (/new Dell with Intel/.test(String((result && result.reply) || ''))) failures.push(`${name} (wrong page): a recommended task was returned as the answer`);
+    else report.push(`${name} (wrong page): ok`);
+    await page.close().catch(() => {});
+    return;
+  }
   const label = `${name} (${withPageFurniture ? 'page furniture' : withBusyLabel ? 'busy label' : withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];

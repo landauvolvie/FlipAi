@@ -37,7 +37,59 @@ func grokChatConversationID(href string) string { for _,marker:=range []string{"
 
 func grokChatControlRequest(ctx context.Context,s GrokChatWebRuntime,method,path string,body io.Reader)([]byte,int,error){if s.ControlPort<1||s.ControlToken==""{return nil,0,errors.New("Grok Chat background session is not running")};req,err:=http.NewRequestWithContext(ctx,method,fmt.Sprintf("http://127.0.0.1:%d%s",s.ControlPort,path),body);if err!=nil{return nil,0,err};req.Header.Set("X-FlipAi-Token",s.ControlToken);if body!=nil{req.Header.Set("Content-Type","application/json")};resp,err:=(&http.Client{Timeout:browserChatTurnRequestBudget}).Do(req);if err!=nil{return nil,0,err};defer resp.Body.Close();b,err:=io.ReadAll(io.LimitReader(resp.Body,2<<20));return b,resp.StatusCode,err}
 
-func waitForGrokChatReady(ctx context.Context,dataDir string)(GrokChatWebRuntime,error){t:=time.NewTicker(250*time.Millisecond);defer t.Stop();for{s:=loadGrokChatRuntime(dataDir);if s.Running&&s.ControlPort>0&&s.ControlToken!=""{probeCtx,cancel:=context.WithTimeout(ctx,2*time.Second);b,code,err:=grokChatControlRequest(probeCtx,s,http.MethodGet,"/health",nil);cancel();if err==nil&&code==http.StatusOK{var health struct{SignedIn bool `json:"signedIn"`};if json.Unmarshal(b,&health)==nil&&health.SignedIn{mutateGrokChatRuntime(dataDir,func(v *GrokChatWebRuntime){v.Connected,v.SignedIn,v.Starting=true,true,false;v.LastError=""});return loadGrokChatRuntime(dataDir),nil}}};select{case<-ctx.Done():s=loadGrokChatRuntime(dataDir);if s.LastError!=""{return s,errors.New(s.LastError)};if s.Connected{return s,errors.New("the saved Grok Chat session did not become signed in in time; retry once, and reconnect only if Grok has expired the account session")};return s,errors.New("Grok Chat is not signed in inside FlipAi; press Connect and complete sign-in");case<-t.C:}}}
+func waitForGrokChatReady(ctx context.Context, dataDir string) (GrokChatWebRuntime, error) {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	startedAt := time.Now()
+	noted := false
+	for {
+		s := loadGrokChatRuntime(dataDir)
+		alive := s.Running && s.ControlPort > 0 && s.ControlToken != ""
+		healthOK, signedIn := false, false
+		if alive {
+			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			b, code, err := grokChatControlRequest(probeCtx, s, http.MethodGet, "/health", nil)
+			cancel()
+			if err == nil && code == http.StatusOK {
+				healthOK = true
+				var health struct {
+					SignedIn bool `json:"signedIn"`
+				}
+				if json.Unmarshal(b, &health) == nil {
+					signedIn = health.SignedIn
+				}
+			}
+		}
+		if acceptBrowserWorker(signedIn, alive, healthOK, time.Since(startedAt)) {
+			if !signedIn {
+				noteBrowserWorkerAccepted(ctx, "Grok Chat")
+			}
+			mutateGrokChatRuntime(dataDir, func(v *GrokChatWebRuntime) {
+				v.Connected, v.SignedIn, v.Starting = true, signedIn, false
+				if signedIn {
+					v.LastError = ""
+				}
+			})
+			return loadGrokChatRuntime(dataDir), nil
+		}
+		if !noted {
+			noteBrowserWorkerWaiting(ctx, "Grok Chat", alive, healthOK)
+			noted = true
+		}
+		select {
+		case <-ctx.Done():
+			s = loadGrokChatRuntime(dataDir)
+			if s.LastError != "" {
+				return s, errors.New(s.LastError)
+			}
+			if s.Connected {
+				return s, errors.New("the saved Grok Chat session did not become signed in in time; retry once, and reconnect only if Grok has expired the account session")
+			}
+			return s, errors.New("Grok Chat is not signed in inside FlipAi; press Connect and complete sign-in")
+		case <-t.C:
+		}
+	}
+}
 func ensureGrokChatReady(ctx context.Context,dataDir string)(GrokChatWebRuntime,error){if err:=platformEnsureGrokChatWorker(dataDir);err!=nil{return GrokChatWebRuntime{},err};return waitForGrokChatReady(ctx,dataDir)}
 func waitForGrokChatStopped(dataDir string,d time.Duration){deadline:=time.Now().Add(d);for time.Now().Before(deadline){s:=loadGrokChatRuntime(dataDir);if !s.Running&&!s.Starting{return};time.Sleep(100*time.Millisecond)}}
 
