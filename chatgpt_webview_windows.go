@@ -174,6 +174,7 @@ const chatGPTTurnJS = `(async(input)=>{
   const T=[],t0=Date.now();
   const mark=s=>{T.push(String(s)+' @'+((Date.now()-t0)/1000).toFixed(1)+'s');return true};
   const trace=()=>T.join(' | ');
+  mark('path='+(location.pathname||'/'));
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const clean=s=>String(s||'')
     .replace(/Unable to display this message due to an error\.?\s*Reload the page to try again\.?/gi,' ')
@@ -336,12 +337,28 @@ const chatGPTTurnJS = `(async(input)=>{
     const named=dropContainers(queryAll('[data-message-author-role="assistant"]'));
     return named.length?named:genericBlocks();
   };
-  const composer=()=>queryAll('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard],[contenteditable="true"],textarea')[0]||null;
+  // ChatGPT has more than one page with a box you can type in. The Scheduled
+  // page has "Schedule a task", and FlipAi typed a text message into it, sent it
+  // with Enter, and read the page's list of recommended tasks back as the
+  // answer -- which is how "Let me know when a new Dell with Intel, 32 GB RAM,
+  // touchscreen, and built-in 5G appears" was texted as a reply to "hi".
+  //
+  // Only the named chat composer will do. A generic box is accepted solely on a
+  // page that is a conversation, and never on a surface that is not chat at all.
+  const nonChatPath=()=>/^\/(codex|tasks|gpts|explore|library|sora|settings|admin|pricing|share|auth)(\/|$)/i.test(location.pathname||'/');
+  const namedComposer=()=>queryAll('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard]')[0]||null;
+  const composer=()=>{
+    const named=namedComposer();
+    if(named)return named;
+    if(nonChatPath())return null;
+    return queryAll('[contenteditable="true"],textarea')[0]||null;
+  };
   const send=()=>queryAll('button[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label^="Send" i],button[type="submit"]').find(b=>!b.disabled)||null;
   const stop=()=>queryAll('button[data-testid="stop-button"],button[aria-label^="Stop" i]')[0]||null;
   let c=null;
   for(let i=0;i<100&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
   mark(c?'composer-found':'composer-missing');
+  if(!c&&nonChatPath())return {ok:false,trace:trace(),detail:'ChatGPT is showing '+(location.pathname||'/')+', which is not a chat. FlipAi did not type the message into that page.',href:location.href};
   if(!c)return {ok:false,trace:trace(),detail:'ChatGPT is loaded but FlipAi could not find the message composer. The site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
@@ -550,6 +567,18 @@ func waitForChatGPTPageSignedIn(d voiceDevTools, timeout time.Duration) bool {
 // that has neither, and the page driver then fails inside the WebView with the
 // message never reaching ChatGPT at all.
 const chatGPTComposerReadyJS = `(()=>!!document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"]'))()`
+
+// chatGPTOnChatPageJS reports whether the page is a conversation at all.
+//
+// ChatGPT has several surfaces with a box you can type in. FlipAi's browser had
+// drifted onto the Scheduled page, typed a text message into "Schedule a task",
+// and read that page's list of recommended tasks back as the model's answer. A
+// turn belongs on a chat page, and nowhere else.
+const chatGPTOnChatPageJS = `(()=>{
+  const p=location.pathname||'/';
+  if(/^\/(codex|tasks|gpts|explore|library|sora|settings|admin|pricing|share|auth)(\/|$)/i.test(p))return false;
+  return !!document.querySelector('#prompt-textarea,textarea[data-testid="prompt-textarea"],[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard]');
+})()`
 
 // chatGPTGoHomeJS lands on the canonical ChatGPT root. Navigating destroys the
 // execution context this call runs in, so it is never awaited and its failure
@@ -844,6 +873,26 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		return evalMode()
 	}
 
+	// onChatPage is a stronger question than "is there a composer": it also
+	// refuses the surfaces that have one but are not a conversation.
+	onChatPage := func() bool {
+		ready := false
+		return chatGPTEval(dev, chatGPTOnChatPageJS, false, &ready) == nil && ready
+	}
+
+	waitForChatPage := func(timeout time.Duration) bool {
+		deadline := time.Now().Add(timeout)
+		for {
+			if onChatPage() {
+				return true
+			}
+			if !time.Now().Before(deadline) {
+				return false
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+
 	waitForComposer := func(timeout time.Duration) bool {
 		deadline := time.Now().Add(timeout)
 		for {
@@ -876,7 +925,7 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		if !waitForChatGPTPageSignedIn(dev, 20*time.Second) {
 			return false
 		}
-		return waitForComposer(12 * time.Second)
+		return waitForChatPage(12 * time.Second)
 	}
 
 	openFreshChat := func() chatGPTTurnResult {
@@ -956,10 +1005,14 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 		// and the WebView rejects the call outright; the message was then lost
 		// with ChatGPT never seeing it. Land on a page that can take a prompt
 		// first.
-		if !waitForComposer(5 * time.Second) {
+		// Not "is there somewhere to type" but "is this a conversation". The
+		// browser had drifted onto ChatGPT's Scheduled page, where FlipAi typed
+		// the message into "Schedule a task" and texted back the page's list of
+		// recommended tasks as the answer.
+		if !waitForChatPage(5 * time.Second) {
 			if !recoverPage() {
 				rw.WriteHeader(http.StatusBadGateway)
-				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT is signed in but its page never showed a prompt box. The message was not sent."})
+				_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "detail": "ChatGPT was not showing a conversation and FlipAi could not get it back to one. The message was not sent."})
 				return
 			}
 			if modeResult := ensureMode(mode); !modeResult.OK {
