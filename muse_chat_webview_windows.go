@@ -75,7 +75,7 @@ const museChatTurnJS = `(async(input)=>{
   // candidate scan, but it also has to go from the reply FlipAi actually sends:
   // when the page exposes the conversation as one container, the log sits
   // inside it and travelled to the phone along with the message.
-  const activitySel='aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
+  const activitySel='aside,nav,header,footer,[role="log"],[role="status"],[role="navigation"],[role="complementary"],[role="banner"],[role="contentinfo"],[role="dialog"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[class*="sidebar" i],[class*="suggestion" i],[data-testid*="suggestion" i],[id*="step" i],[id*="activity" i],[id*="sidebar" i]';
   // Narrower than activitySel, on purpose. A streaming answer is commonly
   // announced through [aria-live] or [role=status], and cutting those out of
   // the chosen reply would delete the message itself.
@@ -111,6 +111,20 @@ const museChatTurnJS = `(async(input)=>{
   // A short status line is not an answer. "Searching sources" reached the phone
   // in place of what the model said, because it sat unchanged long enough to
   // look settled.
+  // The page's own busy line is not an answer, and it was texted in place of one.
+  // The page writes its own name into that line, and reading two elements as one
+  // runs the name into the next word -- "Museis working" -- so the line is judged
+  // by its verb, never by what stands in front of it.
+  const statusLine=t=>{
+    const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
+    if(!v||v.length>60)return false;
+    const m=v.match(/(is\s+)?(working|thinking|typing|writing|responding|generating)\b(.*)$/);
+    if(!m)return false;
+    const head=v.slice(0,v.length-m[0].length).trim();
+    const tail=String(m[3]||'').trim();
+    // A name or nothing in front of the verb, and nothing of substance after it.
+    return head.length<=24&&(tail===''||/^(on it|on that|on your request)[.!\u2026]*$/.test(tail));
+  };
   const interim=t=>{
     const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
     if(!v)return true;
@@ -133,6 +147,15 @@ const museChatTurnJS = `(async(input)=>{
     rootsCache=out;rootsAt=now;return out;
   };
   const all=q=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(q));return Array.from(new Set(out))};
+  // The conversation, not the whole page. A saved task in the sidebar and a
+  // suggestion chip under the composer are both on the page and neither is
+  // anything the model just said. Scan <main> when the page has one.
+  const scanRoots=()=>{
+    const rs=roots();
+    const mains=[];
+    for(const r of rs){for(const m of r.querySelectorAll('main'))mains.push(m)}
+    return mains.length?mains:rs;
+  };
   const first=q=>{for(const r of roots()){const n=r.querySelector(q);if(n)return n}return null};
   const composer=()=>first('textarea[data-testid*="composer" i],textarea[data-testid*="input" i],textarea[aria-label*="message" i],textarea[aria-label*="ask" i],textarea[aria-label*="prompt" i],textarea[placeholder*="message" i],textarea[placeholder*="ask" i],textarea[placeholder*="prompt" i],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="input" i],[contenteditable="true"][aria-label*="message" i],[contenteditable="true"][aria-label*="prompt" i],div[contenteditable="true"]');
   // A named match can be a wrapper around every message just as easily as one
@@ -170,7 +193,7 @@ const museChatTurnJS = `(async(input)=>{
   // answer.
   const genericBlocks=()=>{
     const found=[];
-    for(const r of roots()){
+    for(const r of scanRoots()){
       for(const n of r.querySelectorAll('div,p,section,article,li,pre')){
         if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
         if(n.querySelector&&n.querySelector('textarea,input,[contenteditable="true"]'))continue;
@@ -264,7 +287,7 @@ const museChatTurnJS = `(async(input)=>{
         const n=current[i],t=canon(rawText(n));
         if(!t||t===promptText||beforeTexts.has(t))continue;
         if(restrict&&box&&!box.contains(n))continue;
-        if(!allowInterim&&interim(t))continue;
+        if(!allowInterim&&(interim(t)||statusLine(t)))continue;
         const whole=wholeMessage(n,box);
         const chosen=canon(rawText(whole))===promptText?n:whole;
         if(!canon(text(chosen)))continue;
@@ -282,8 +305,13 @@ const museChatTurnJS = `(async(input)=>{
   await sleep(350);
   let b=null;for(let i=0;i<80&&!b;i++){b=send();if(!b)await sleep(100)}
   if(b)b.click();else if(c.form&&c.form.requestSubmit)c.form.requestSubmit();else{c.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,composed:true}));c.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true,composed:true}))}
+  // A one-second pause is not proof that a short line is the answer. A status
+  // the page shows while it works sits unchanged exactly that long, and it was
+  // texted in place of the reply. A real answer of any length still goes out;
+  // a short one just has to hold still for three seconds instead of one.
+  const settleNeeded=v=>String(v||'').length>=40?5:12;
   let last='',stable=0,started=false;const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
-  while(Date.now()<deadline){await sleep(250);const node=responseForTurn();if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=5)return {ok:true,reply:newestPart(node,now)||'Muse completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href}}}
+  while(Date.now()<deadline){await sleep(250);const node=responseForTurn();if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now))return {ok:true,reply:newestPart(node,now),href:location.href};if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href}}}
   return {ok:false,detail:started?'Muse started answering but did not finish in time.':'Muse did not produce a new response in time.',href:location.href};
 })(%s)`
 

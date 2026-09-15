@@ -168,8 +168,10 @@ const claudeChatTurnJS = `(async(input)=>{
       // alone made Claude's opening line look final while it was still working.
       const seen=rawText(node);
       if(seen===last)stable++;else{last=seen;stable=0}
-      const need=busy(node)?20:5;
       const now=text(node);
+      // A short line needs longer than a second of quiet to count as an answer,
+      // and a turn still running tools needs longer still.
+      const need=busy(node)?20:(now.length>=40?5:12);
       if(!stop()&&stable>=need&&now&&canon(now)!==promptText)return {ok:true,reply:now,href:location.href};
       if(now&&stable>=40)return {ok:true,reply:now,href:location.href};
     }

@@ -235,12 +235,36 @@ const chatGPTTurnJS = `(async(input)=>{
     for(let i=0;i<out.length;i++){for(const n of out[i].querySelectorAll('*')){if(n.shadowRoot&&!seen.has(n.shadowRoot)){seen.add(n.shadowRoot);out.push(n.shadowRoot)}}}
     rootsCache=out;rootsAt=now;return out;
   };
+  // The conversation, not the whole page. A saved task in the sidebar and a
+  // suggestion chip under the composer are both on the page and neither is
+  // anything the model just said -- one of them was texted as the answer to
+  // "hi my friend". Scan <main> when the page has one.
+  const scanRoots=()=>{
+    const rs=roots();
+    const mains=[];
+    for(const r of rs){for(const m of r.querySelectorAll('main'))mains.push(m)}
+    return mains.length?mains:rs;
+  };
   const queryAll=sel=>{const out=[];for(const r of roots())out.push(...r.querySelectorAll(sel));return Array.from(new Set(out))};
   const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],'+refBlockSel;
   // Scanning reads text the cheap way; text() above does the careful read and
   // is reserved for the reply FlipAi actually sends. Running the careful one
   // over every candidate on every poll is what made the turn miss its deadline.
   const rawText=n=>String(n&&(n.innerText||n.textContent)||'').trim();
+  // The page's own busy line is not an answer, and it was texted in place of one.
+  // The page writes its own name into that line, and reading two elements as one
+  // runs the name into the next word -- "Museis working" -- so the line is judged
+  // by its verb, never by what stands in front of it.
+  const statusLine=t=>{
+    const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
+    if(!v||v.length>60)return false;
+    const m=v.match(/(is\s+)?(working|thinking|typing|writing|responding|generating)\b(.*)$/);
+    if(!m)return false;
+    const head=v.slice(0,v.length-m[0].length).trim();
+    const tail=String(m[3]||'').trim();
+    // A name or nothing in front of the verb, and nothing of substance after it.
+    return head.length<=24&&(tail===''||/^(on it|on that|on your request)[.!\u2026]*$/.test(tail));
+  };
   // A short status line is not an answer, and neither is a running tool log.
   const interim=t=>{
     const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
@@ -253,13 +277,13 @@ const chatGPTTurnJS = `(async(input)=>{
   // Last resort when ChatGPT names nothing FlipAi recognizes: read the
   // conversation structurally. Without this the turn produced nothing at all
   // and was reported as the model having stopped without answering.
-  const activitySel='aside,[role="log"],[role="status"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
+  const activitySel='aside,nav,header,footer,[role="log"],[role="status"],[role="navigation"],[role="complementary"],[role="banner"],[role="contentinfo"],[role="dialog"],[aria-live],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[class*="sidebar" i],[class*="suggestion" i],[data-testid*="suggestion" i],[id*="step" i],[id*="activity" i],[id*="sidebar" i]';
   // Bounded and linear. Comparing every block against every other was
   // quadratic, and on a real ChatGPT conversation that cost more per poll than
   // the poll interval, so the turn could not finish inside its own deadline.
   const genericBlocks=()=>{
     const found=[];
-    for(const r of roots()){
+    for(const r of scanRoots()){
       for(const n of r.querySelectorAll('div,p,section,article,li,pre')){
         if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
         if(n.querySelector&&n.querySelector('textarea,input,[contenteditable="true"]'))continue;
@@ -380,15 +404,24 @@ const chatGPTTurnJS = `(async(input)=>{
     const box=conversationBox();
     for(let i=as.length-1;i>=0;i--){
       const t=canon(rawText(as[i]));
-      if(!t||t===promptText||beforeTexts.has(t)||interim(t))continue;
+      if(!t||t===promptText||beforeTexts.has(t)||interim(t)||statusLine(t))continue;
       const whole=wholeMessage(as[i],box);
       const chosen=canon(rawText(whole))===promptText?as[i]:whole;
       if(!canon(text(chosen)))continue;
       return chosen;
     }
+    // A new block appeared but every one of them read as a status. Take the
+    // newest that is still not the prompt and not already on screen: without
+    // those two checks this branch handed back the user's own message, and the
+    // prompt was texted to them as the answer.
     if(as.length>beforeAssistantCount){
-      const last=wholeMessage(as[as.length-1],box);
-      if(canon(text(last)))return last;
+      for(let i=as.length-1;i>=0;i--){
+        const t=canon(rawText(as[i]));
+        if(!t||t===promptText||beforeTexts.has(t)||statusLine(t))continue;
+        const whole=wholeMessage(as[i],box);
+        const chosen=canon(rawText(whole))===promptText?as[i]:whole;
+        if(canon(text(chosen)))return chosen;
+      }
     }
     return null;
   };
@@ -416,6 +449,11 @@ const chatGPTTurnJS = `(async(input)=>{
     }
   }
   let last='',stable=0,started=false;
+  // A one-second pause is not proof that a short line is the answer. A status
+  // the page shows while it works sits unchanged exactly that long, and it was
+  // texted in place of the reply. A real answer of any length still goes out;
+  // a short one just has to hold still for three seconds instead of one.
+  const settleNeeded=v=>String(v||'').length>=40?5:12;
   const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){
     await sleep(250);
@@ -425,7 +463,7 @@ const chatGPTTurnJS = `(async(input)=>{
       const now=text(node);
       if(now===last)stable++;else{last=now;stable=0;}
       if(interim(now)){stable=0;continue}
-      if(!stop()&&stable>=5&&now)return {ok:true,reply:newestPart(node,now),href:location.href};
+      if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now))return {ok:true,reply:newestPart(node,now),href:location.href};
       // A stale Stop control must not hold a fully settled answer forever.
       if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href};
     }
