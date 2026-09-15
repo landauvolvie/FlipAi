@@ -1,11 +1,8 @@
-# FlipAi v0.46.96
+# FlipAi v0.46.97
 
-v0.46.95 broke ChatGPT and Muse. This undoes the cause and puts a limit on that whole class of mistake.
+v0.46.96 shipped a ChatGPT driver that could not run. This fixes it and adds the check that would have caught it.
 
-- **The card rule removed the message, not the cards.** It deleted anything that *contained* a picture and a link — and every wrapper around an answer does. ChatGPT texted the page's own "ChatGPT is AI and can make mistakes" footer because the real message had been emptied, and on the next turn produced nothing at all. Only the innermost such element is a card now, and only when it holds no prose.
-- **Cleaning can no longer cost the message.** Every strip is a guess about which parts of a page are furniture. If a strip removes most of what the model wrote, the guess was wrong, and the untouched text is sent instead. This bounds the damage from every rule of this kind, not just the one that went wrong.
-- **The page's own disclaimer is never an answer**, and a candidate found by the structural scan must be inside the conversation when FlipAi can see where the conversation is. The line under the composer is not.
-- **Nothing already on screen before the prompt can be the answer.** What was visible is now recorded by both routes FlipAi uses to read a page. Recording only the named messages meant that when a page stopped matching those mid-turn and the structural scan took over, furniture that had been there all along looked brand new.
-- The driver harness grew to forty-nine scenarios, including an answer wrapped the way a real one is — bullets inside the containers a chat app puts around every message, with a picture and a link in the wrapper.
+- **ChatGPT failed every turn with `ReferenceError: pageFurnitureText is not defined`.** A guard was added to one branch of the turn, and the function it calls was left out of the file — the edit that would have added it never got written. Nothing caught it: the script parses fine, and the real-browser harness never reaches the branch that calls it. The function is back, and page scripts are now checked for anything they call and never declare, so this cannot ship again. Removing the function makes the new check fail with exactly the message the user's log carried.
+- **Muse took nine seconds to type the prompt, against under one before.** Recording what was on screen before a turn started scanning the page twice, and the scan is the expensive thing these scripts do — it is asked for several times in a single poll. It now runs at most once a quarter second. That nine seconds came straight out of the turn's own budget.
 
 Validation: publication is gated by the release workflow's full Linux test suite, real-browser call-flow tests, Windows tests, vet, race tests, Windows build, Google Voice integration, installer install/uninstall smoke tests, Microsoft Defender checks, provenance, checksum, and CycloneDX SBOM generation.
