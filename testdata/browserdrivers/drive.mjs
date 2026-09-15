@@ -64,16 +64,27 @@ function turnScript(file, constant, prompt) {
 // nothing else -- that line sat unchanged for a second while the work was still
 // going, and it looked finished.
 //
+// `withPageFurniture` puts a saved task in a sidebar and a suggestion chip under
+// the composer, and has the sidebar change while the turn runs. Neither is
+// anything the model said. One of them -- "Let me know when a new Dell with
+// Intel, 32 GB RAM, touchscreen, and built-in 5G appears" -- was texted as the
+// answer to "hi my friend".
+//
+// `withBusyLabel` shows the page's own busy line, split across two elements the
+// way a real one is, so reading them together runs the name into the next word:
+// "Museis working". That was texted in place of the reply.
+//
 // `withLongHistory` builds a conversation of a realistic size. A driver that
 // scans the whole page on every poll cannot finish inside its own deadline
 // there, and one that treats a scroll container as a block sends the entire
 // history -- every message joined together -- as the answer.
-function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble }) {
+function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel }) {
   const history = withLongHistory
     ? Array.from({ length: 700 }, (_, i) =>
         `<div class="x1"><p>Earlier turn ${i}</p><p>A paragraph of an older answer that is already on screen and should never be mistaken for this turn's reply.</p></div>`).join('')
     : '<div class="x1">an earlier answer that was already on screen</div>';
   return `<!doctype html><html><body>
+    ${withPageFurniture ? `<nav id="side"><div class="task">\u{1F4BB} Let me know when a new Dell with Intel, 32 GB RAM, touchscreen, and built-in 5G appears</div></nav>` : ''}
     <main><div id="log" class="${withNamedWrapper ? 'responses assistant-message markdown' : 'plain'}">${history}</div></main>
     ${withActivityPanel ? `<aside id="steps">
       <div class="s">Search tool initialization Loaded device tools and initialized 4 functions 3:14 pm</div>
@@ -83,12 +94,31 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
       <textarea id="box" placeholder="Ask anything"></textarea>
       ${withSendButton ? '<button id="go">Go</button>' : ''}
     </div>
+    ${withPageFurniture ? '<div id="chips"><div class="suggestion">Summarize a document for me</div></div>' : ''}
     <script>
       const submit = () => {
         const box = document.querySelector('#box');
         const value = box.value;
         if (!value) return;
         window.__flipaiSubmitted = value;
+        if (${JSON.stringify(!!withPageFurniture)}) {
+          // The sidebar keeps changing while the turn runs, the way a live one does.
+          let n = 0;
+          const side = setInterval(() => {
+            const task = document.querySelector('#side .task');
+            if (task) task.textContent = '\u{1F4BB} Let me know when a new Dell with Intel, 32 GB RAM, touchscreen, and built-in 5G appears (' + (++n) + ')';
+            // It updates a few times and then sits still, which is what made it look
+            // like a finished answer long before the real one arrived.
+            if (n > 3) clearInterval(side);
+          }, 300);
+        }
+        if (${JSON.stringify(!!withBusyLabel)}) {
+          const busyRow = document.createElement('div');
+          busyRow.className = 'x3';
+          busyRow.innerHTML = '<span>Muse</span><span>is working</span>';
+          document.querySelector('#log').appendChild(busyRow);
+          setTimeout(() => busyRow.remove(), 5900);
+        }
         const log = document.querySelector('#log');
         const mine = document.createElement('div');
         mine.className = 'x2';
@@ -97,7 +127,9 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
         const busy = document.createElement('button');
         busy.textContent = 'Stop';
         busy.setAttribute('aria-label', 'Stop');
-        if (!${JSON.stringify(!!withInterimStatus)}) document.body.appendChild(busy);
+        // No stop control in these: the real page showed FlipAi none, which is
+        // exactly why a busy line and a sidebar item looked like finished answers.
+        if (!${JSON.stringify(!!(withInterimStatus || withBusyLabel || withPageFurniture))}) document.body.appendChild(busy);
         if (${JSON.stringify(!!withInterimStatus)}) {
           const status = document.createElement('div');
           status.className = 'x9';
@@ -175,7 +207,7 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
               steps.appendChild(step);
             }, 500);
           }
-        }, ${JSON.stringify(withInterimStatus ? 3000 : 400)});
+        }, ${JSON.stringify(withInterimStatus ? 3000 : (withPageFurniture || withBusyLabel) ? 6000 : 400)});
       };
       const go = document.querySelector('#go');
       if (go) go.addEventListener('click', submit);
@@ -225,6 +257,8 @@ for (const [name, file, constant] of drivers) {
   scenarios.push({ name, file, constant, withSendButton: true, withLongHistory: true });
   scenarios.push({ name, file, constant, withSendButton: true, withCitationCards: true });
   scenarios.push({ name, file, constant, withSendButton: true, withNamedWrapper: true, withActivityPanel: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withPageFurniture: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withBusyLabel: true });
 }
 for (const [name, file, constant] of enterOnlyDrivers) {
   scenarios.push({ name, file, constant, withSendButton: false, sendOnly: true });
@@ -234,12 +268,12 @@ for (const [name, file, constant] of drivers.concat([['Claude', 'claude_chat_web
   scenarios.push({ name, file, constant, withSendButton: true, withPreamble: true });
 }
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, sendOnly }) => {
-  const label = `${name} (${withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, sendOnly }) => {
+  const label = `${name} (${withPageFurniture ? 'page furniture' : withBusyLabel ? 'busy label' : withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble }));
+  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel }));
   const startedAt = Date.now();
   if (sendOnly) {
     // The driver keeps polling for a reply it will never recognize here, so do
@@ -272,7 +306,7 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
   } else if (!String(result.reply).includes(prompt)) {
     failures.push(`${label}: reply did not carry the answer: ${JSON.stringify(result.reply)}`);
   } else if (String(result.reply).trim() === prompt) {
-    failures.push(`${label}: the prompt was echoed back as the answer`);
+    failures.push(`${label}: the prompt was echoed back as the answer: ${JSON.stringify(result.reply)}`);
   } else if (/\d:\d\d ?[ap]m/i.test(String(result.reply))) {
     failures.push(`${label}: the tool/step panel was sent instead of the answer: ${JSON.stringify(result.reply)}`);
   } else if (/searching sources/i.test(String(result.reply))) {
@@ -283,6 +317,10 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     failures.push(`${label}: the conversation history was sent as the answer (${String(result.reply).length} chars)`);
   } else if (/CBS News|thephoto-news|Show all/i.test(String(result.reply))) {
     failures.push(`${label}: source cards were included in the answer: ${JSON.stringify(result.reply)}`);
+  } else if (/new Dell with Intel|Summarize a document for me/.test(String(result.reply))) {
+    failures.push(`${label}: page furniture was sent as the answer: ${JSON.stringify(result.reply)}`);
+  } else if (/\bMuse\s?is working\b/i.test(String(result.reply))) {
+    failures.push(`${label}: the page's busy line was sent as the answer: ${JSON.stringify(result.reply)}`);
   } else if (withPreamble && /pulling calendar and email/.test(String(result.reply)) && !/FLIPAI answered/.test(String(result.reply))) {
     failures.push(`${label}: only the opening line was sent, while the answer was still being written: ${JSON.stringify(result.reply)}`);
   } else if (withPreamble && /Connectors that could help|Morning brief|Code - HTML/.test(String(result.reply))) {

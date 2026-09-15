@@ -95,9 +95,11 @@ func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
 		t.Fatal("ChatGPT completion status must never be substituted for an empty final reply")
 	}
 	// The guard is what matters: a settled turn is only a reply once there is
-	// assistant text. What that text is then trimmed to is a separate question.
-	if !strings.Contains(s, "if(!stop()&&stable>=5&&now)return {ok:true,reply:") {
-		t.Fatal("ChatGPT must wait for non-empty assistant text before declaring a successful reply")
+	// assistant text, and once that text is not the page's own busy line. How
+	// long it must have been settled, and what it is then trimmed to, are
+	// separate questions.
+	if !strings.Contains(s, "&&now&&!statusLine(now))return {ok:true,reply:") {
+		t.Fatal("ChatGPT must wait for non-empty assistant text that is not a status line before declaring a successful reply")
 	}
 }
 
