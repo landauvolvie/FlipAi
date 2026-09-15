@@ -197,37 +197,51 @@ type chatGPTSMSReply struct {
 	Reply          string `json:"reply"`
 	Detail         string `json:"detail"`
 	ConversationID string `json:"conversationId"`
+	// Trace is the page driver's own step log for this turn.
+	Trace          string `json:"trace"`
 }
 
 func chatGPTBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mode string, onProgress func(string)) (string, error) {
 	_ = onProgress
+	const who = "ChatGPT Chat"
 	if !loadChatGPTRuntime(dataDir).Connected {
+		browserTurnDisconnected(ctx, who)
 		return "", errors.New("ChatGPT Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for ChatGPT Chat, then try again")
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait)
 	s, err := ensureChatGPTReady(readyCtx, dataDir)
 	cancel()
+	browserTurnReady(ctx, who, err)
 	if err != nil {
 		return "", fmt.Errorf("ChatGPT Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect ChatGPT Chat, then try again: %w", err)
 	}
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
 	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget)
+	sentAt := time.Now()
 	body, code, err := chatGPTControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
+		browserTurnRequestFailed(ctx, who, time.Since(sentAt), err)
 		if browserChatTurnRequestTimedOut(err) {
-			return waitForBrowserLongTurn(ctx, dataDir, "G", nil)
+			browserTurnWatching(ctx, who)
+			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "G", nil)
+			browserTurnWatchDone(ctx, who, reply, waitErr)
+			return reply, waitErr
 		}
 		return "", err
 	}
 	var out chatGPTSMSReply
 	_ = json.Unmarshal(body, &out)
+	browserTurnAnswered(ctx, who, code, time.Since(sentAt), code == http.StatusOK && out.OK, out.Trace, out.Detail, out.Reply)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" {
 			out.Detail = strings.TrimSpace(string(body))
 		}
 		if browserLongTurnTimeoutDetail(out.Detail) {
-			return waitForBrowserLongTurn(ctx, dataDir, "G", nil)
+			browserTurnWatching(ctx, who)
+			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "G", nil)
+			browserTurnWatchDone(ctx, who, reply, waitErr)
+			return reply, waitErr
 		}
 		return "", errors.New(out.Detail)
 	}

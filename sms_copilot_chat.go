@@ -30,19 +30,21 @@ func parseCopilotChatSMSCommand(raw string, cfg Config) (remoteCommand, error) {
 	return remoteCommand{Agent: "P", Text: text}, nil
 }
 
-type copilotChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"` }
+type copilotChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"`; Trace string `json:"trace"` }
 
 func copilotChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadCopilotChatRuntime(dataDir).Connected { return "", errors.New("Microsoft Copilot Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Microsoft Copilot Chat, then try again") }
-	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureCopilotChatReady(readyCtx, dataDir); cancel()
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureCopilotChatReady(readyCtx, dataDir); cancel(); browserTurnReady(ctx, "Microsoft Copilot", err)
 	if err != nil { return "", fmt.Errorf("Microsoft Copilot Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Microsoft Copilot Chat, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := copilotChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }; return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); sentAt := time.Now(); body, code, err := copilotChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel()
+	if err != nil { browserTurnRequestFailed(ctx, "Microsoft Copilot", time.Since(sentAt), err); if browserChatTurnRequestTimedOut(err) { browserTurnWatching(ctx, "Microsoft Copilot"); reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); browserTurnWatchDone(ctx, "Microsoft Copilot", reply, waitErr); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }; return "", err }
 	var out copilotChatSMSReply; _ = json.Unmarshal(body, &out)
+	browserTurnAnswered(ctx, "Microsoft Copilot", code, time.Since(sentAt), code == http.StatusOK && out.OK, out.Trace, out.Detail, out.Reply)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
-		if browserLongTurnTimeoutDetail(out.Detail) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }
+		if browserLongTurnTimeoutDetail(out.Detail) { browserTurnWatching(ctx, "Microsoft Copilot"); reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "P", nil); browserTurnWatchDone(ctx, "Microsoft Copilot", reply, waitErr); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }
 		return "", errors.New(out.Detail)
 	}
 	cleaned := cleanBrowserChatReplyForPrompt(out.Reply, prompt)
@@ -54,7 +56,8 @@ func copilotChatBrowserSend(ctx context.Context, dataDir, prompt string) (string
 func copilotChatBrowserNewConversation(ctx context.Context, dataDir string) error {
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureCopilotChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second); body, code, err := copilotChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`)); cancel(); if err != nil { return err }
-	if code != http.StatusOK { var out copilotChatSMSReply; _ = json.Unmarshal(body, &out); if out.Detail != "" { return errors.New(out.Detail) }; return fmt.Errorf("Microsoft Copilot Chat new-chat request returned HTTP %d", code) }
+	if code != http.StatusOK { var out copilotChatSMSReply; _ = json.Unmarshal(body, &out)
+	if out.Detail != "" { return errors.New(out.Detail) }; return fmt.Errorf("Microsoft Copilot Chat new-chat request returned HTTP %d", code) }
 	return nil
 }
 

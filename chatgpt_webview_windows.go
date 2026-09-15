@@ -168,6 +168,12 @@ const chatGPTTurnJS = `(async(input)=>{
   // layer allows a turn, and the call was abandoned at ninety-five seconds with
   // the model's answer sitting finished in the page.
   const turnDeadline=Date.now()+82000;
+  // What the driver actually did, step by step, so a turn that goes wrong says
+  // where rather than only that it did. Steps are metadata -- names, timings,
+  // counts, lengths -- never the prompt or the reply.
+  const T=[],t0=Date.now();
+  const mark=s=>{T.push(String(s)+' @'+((Date.now()-t0)/1000).toFixed(1)+'s');return true};
+  const trace=()=>T.join(' | ');
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const clean=s=>String(s||'')
     .replace(/Unable to display this message due to an error\.?\s*Reload the page to try again\.?/gi,' ')
@@ -281,20 +287,32 @@ const chatGPTTurnJS = `(async(input)=>{
   // Bounded and linear. Comparing every block against every other was
   // quadratic, and on a real ChatGPT conversation that cost more per poll than
   // the poll interval, so the turn could not finish inside its own deadline.
-  const genericBlocks=()=>{
+  // Collecting is in three passes, and the later ones are the safety net. Every
+  // exclusion here is a guess about what the page keeps outside its conversation,
+  // and a wrong guess left the driver seeing nothing at all -- a turn that ran
+  // its whole budget and reported that the model never answered, while the answer
+  // was on screen the entire time. If a pass finds nothing, the next gives back
+  // what it excluded rather than going blind.
+  const collectBlocks=(rs,skipFurniture)=>{
     const found=[];
-    for(const r of scanRoots()){
+    for(const r of rs){
       for(const n of r.querySelectorAll('div,p,section,article,li,pre')){
         if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
         if(n.querySelector&&n.querySelector('textarea,input,[contenteditable="true"]'))continue;
         if(n.matches&&n.matches(chromeSel))continue;
         if(n.closest&&n.closest(chromeSel))continue;
-        if(n.closest&&n.closest(activitySel))continue;
+        if(skipFurniture&&n.closest&&n.closest(activitySel))continue;
         const t=rawText(n);
         if(t.length<2||t.length>20000)continue;
         found.push(n);
       }
     }
+    return found;
+  };
+  const genericBlocks=()=>{
+    let found=collectBlocks(scanRoots(),true);
+    if(!found.length)found=collectBlocks(roots(),true);
+    if(!found.length)found=collectBlocks(roots(),false);
     const set=new Set(found),container=new Set();
     for(const n of found){
       let p=n.parentElement;
@@ -323,7 +341,8 @@ const chatGPTTurnJS = `(async(input)=>{
   const stop=()=>queryAll('button[data-testid="stop-button"],button[aria-label^="Stop" i]')[0]||null;
   let c=null;
   for(let i=0;i<100&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
-  if(!c)return {ok:false,detail:'ChatGPT is loaded but FlipAi could not find the message composer. The site layout may have changed.',href:location.href};
+  mark(c?'composer-found':'composer-missing');
+  if(!c)return {ok:false,trace:trace(),detail:'ChatGPT is loaded but FlipAi could not find the message composer. The site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
   const beforeUserCount=users().length;
@@ -437,8 +456,10 @@ const chatGPTTurnJS = `(async(input)=>{
   await sleep(120);
   let b=null;
   for(let i=0;i<50&&!b;i++){b=send();if(!b||b.disabled){b=null;await sleep(100);}}
-  if(b){b.click()}
+  mark('typed');
+  if(b){mark('send-click');b.click()}
   else{
+    mark('send-enter');
     // ChatGPT's send control is not always a button FlipAi can name. Enter is
     // how a person sends it, and abandoning the turn here left the prompt
     // typed into the composer and never sent.
@@ -459,16 +480,18 @@ const chatGPTTurnJS = `(async(input)=>{
     await sleep(250);
     const node=assistantForThisTurn();
     if(node){
+      if(!started)mark('reply-node-seen');
       started=true;
       const now=text(node);
       if(now===last)stable++;else{last=now;stable=0;}
       if(interim(now)){stable=0;continue}
-      if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now))return {ok:true,reply:newestPart(node,now),href:location.href};
+      if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now)){mark('settled len='+now.length);return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}}
       // A stale Stop control must not hold a fully settled answer forever.
-      if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href};
+      if(now&&stable>=32)return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href};
     }
   }
-  return {ok:false,detail:started?'ChatGPT started answering but did not finish in time.':'ChatGPT did not produce an assistant response in time.',href:location.href};
+  mark('deadline started='+started+' named='+queryAll('[data-message-author-role="assistant"]').length+' blocks='+genericBlocks().length+' stop='+(stop()?'yes':'no')+' lastLen='+last.length);
+  return {ok:false,trace:trace(),detail:started?'ChatGPT started answering but did not finish in time.':'ChatGPT did not produce an assistant response in time.',href:location.href};
 })(%s)`
 
 type chatGPTTurnResult struct {
@@ -476,6 +499,9 @@ type chatGPTTurnResult struct {
 	Reply  string `json:"reply"`
 	Detail string `json:"detail"`
 	Href   string `json:"href"`
+	// Trace is the page driver's own step log: what it found, what it did,
+	// and what the page looked like when it gave up. Metadata only.
+	Trace  string `json:"trace"`
 }
 
 func chatGPTEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
@@ -982,7 +1008,7 @@ func startChatGPTControlEndpoint(dataDir string, w webview2.WebView, dev voiceDe
 			status = http.StatusBadGateway
 		}
 		rw.WriteHeader(status)
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid, "trace": got.Trace})
 	}
 
 	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {

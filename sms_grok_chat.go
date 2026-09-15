@@ -30,7 +30,7 @@ func parseGrokChatSMSCommand(raw string, cfg Config) (remoteCommand, error) {
 	return remoteCommand{Agent: "X", Text: text}, nil
 }
 
-type grokChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"` }
+type grokChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"`; Trace string `json:"trace"` }
 
 // browserReplyEchoesPrompt is a final transport-level safety check. Even if a
 // provider changes its DOM in a way the page driver does not recognize, FlipAi
@@ -45,7 +45,7 @@ func browserReplyEchoesPrompt(reply, prompt string) bool {
 func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadGrokChatRuntime(dataDir).Connected { return "", errors.New("Grok Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Grok Chat, then try again") }
-	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureGrokChatReady(readyCtx, dataDir); cancel()
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureGrokChatReady(readyCtx, dataDir); cancel(); browserTurnReady(ctx, "Grok Chat", err)
 	if err != nil { return "", fmt.Errorf("Grok Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Grok Chat, then try again: %w", err) }
 
 	// Bind this turn to the exact WebView worker that accepted it. Previously a
@@ -84,21 +84,28 @@ func grokChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string
 
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
 	requestCtx, requestCancel := context.WithTimeout(turnCtx, browserChatTurnRequestBudget)
+	sentAt := time.Now()
 	body, code, err := grokChatControlRequest(requestCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	requestCancel()
 	if err != nil {
+		browserTurnRequestFailed(ctx, "Grok Chat", time.Since(sentAt), err)
 		if browserChatTurnRequestTimedOut(err) {
+			browserTurnWatching(ctx, "Grok Chat")
 			reply, waitErr := waitForBrowserLongTurn(turnCtx, dataDir, "X", nil)
+			browserTurnWatchDone(ctx, "Grok Chat", reply, waitErr)
 			if waitErr != nil { return reply, changedError(waitErr) }
 			return reply, nil
 		}
 		return "", changedError(err)
 	}
 	var out grokChatSMSReply; _ = json.Unmarshal(body, &out)
+	browserTurnAnswered(ctx, "Grok Chat", code, time.Since(sentAt), code == http.StatusOK && out.OK, out.Trace, out.Detail, out.Reply)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
 		if browserLongTurnTimeoutDetail(out.Detail) {
+			browserTurnWatching(ctx, "Grok Chat")
 			reply, waitErr := waitForBrowserLongTurn(turnCtx, dataDir, "X", nil)
+			browserTurnWatchDone(ctx, "Grok Chat", reply, waitErr)
 			if waitErr != nil { return reply, changedError(waitErr) }
 			return reply, nil
 		}

@@ -98,7 +98,7 @@ func TestChatGPTNeverUsesCompletionStatusAsReply(t *testing.T) {
 	// assistant text, and once that text is not the page's own busy line. How
 	// long it must have been settled, and what it is then trimmed to, are
 	// separate questions.
-	if !strings.Contains(s, "&&now&&!statusLine(now))return {ok:true,reply:") {
+	if !strings.Contains(s, "&&now&&!statusLine(now)){mark(") {
 		t.Fatal("ChatGPT must wait for non-empty assistant text that is not a status line before declaring a successful reply")
 	}
 }

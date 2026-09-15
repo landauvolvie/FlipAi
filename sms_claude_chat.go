@@ -30,20 +30,21 @@ func parseClaudeChatSMSCommand(raw string, cfg Config) (remoteCommand, error) {
 	return remoteCommand{Agent: "H", Text: text}, nil
 }
 
-type claudeChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"` }
+type claudeChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"`; Trace string `json:"trace"` }
 
 func claudeChatBrowserSendModeWithProgress(ctx context.Context, dataDir, prompt, mode string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadClaudeChatRuntime(dataDir).Connected { return "", errors.New("Claude Chat is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Claude Chat, then try again") }
-	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureClaudeChatReady(readyCtx, dataDir); cancel()
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureClaudeChatReady(readyCtx, dataDir); cancel(); browserTurnReady(ctx, "Claude Chat", err)
 	if err != nil { return "", fmt.Errorf("Claude Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Claude Chat, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false, "mode": mode})
-	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := claudeChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel()
-	if err != nil { if browserChatTurnRequestTimedOut(err) { return waitForBrowserLongTurn(ctx, dataDir, "H", nil) }; return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); sentAt := time.Now(); body, code, err := claudeChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel()
+	if err != nil { browserTurnRequestFailed(ctx, "Claude Chat", time.Since(sentAt), err); if browserChatTurnRequestTimedOut(err) { browserTurnWatching(ctx, "Claude Chat"); reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "H", nil); browserTurnWatchDone(ctx, "Claude Chat", reply, waitErr); return reply, waitErr }; return "", err }
 	var out claudeChatSMSReply; _ = json.Unmarshal(body, &out)
+	browserTurnAnswered(ctx, "Claude Chat", code, time.Since(sentAt), code == http.StatusOK && out.OK, out.Trace, out.Detail, out.Reply)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
-		if browserLongTurnTimeoutDetail(out.Detail) { return waitForBrowserLongTurn(ctx, dataDir, "H", nil) }
+		if browserLongTurnTimeoutDetail(out.Detail) { browserTurnWatching(ctx, "Claude Chat"); reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "H", nil); browserTurnWatchDone(ctx, "Claude Chat", reply, waitErr); return reply, waitErr }
 		return "", errors.New(out.Detail)
 	}
 	if strings.TrimSpace(out.Reply) == "" { return "", errors.New("Claude returned an empty reply") }
