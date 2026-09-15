@@ -81,11 +81,22 @@ function turnScript(file, constant, prompt) {
 //
 // A driver must not type a person's message into a page like this.
 //
+// `withNewsCards` is how ChatGPT answers a question about the news: a source
+// pill after each claim ("AP News +1", "Reuters +1") and a row of picture cards
+// with headlines under the answer. All of it arrived in the text message, in the
+// middle of what the model actually wrote. The sentences are the answer; the
+// pills and the cards are not.
+//
+// `withStepRow` is Muse narrating what it is doing, as a row ending in the time
+// it happened: "Find Orlando trip dates Checked memories and Hertz emails, no
+// date found 1:13 pm". That was texted as the answer while the real one -- the
+// Hertz pickup date -- was written seconds later.
+//
 // `withLongHistory` builds a conversation of a realistic size. A driver that
 // scans the whole page on every poll cannot finish inside its own deadline
 // there, and one that treats a scroll container as a block sends the entire
 // history -- every message joined together -- as the answer.
-function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel }) {
+function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow }) {
   const history = withLongHistory
     ? Array.from({ length: 700 }, (_, i) =>
         `<div class="x1"><p>Earlier turn ${i}</p><p>A paragraph of an older answer that is already on screen and should never be mistaken for this turn's reply.</p></div>`).join('')
@@ -136,7 +147,7 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
         busy.setAttribute('aria-label', 'Stop');
         // No stop control in these: the real page showed FlipAi none, which is
         // exactly why a busy line and a sidebar item looked like finished answers.
-        if (!${JSON.stringify(!!(withInterimStatus || withBusyLabel || withPageFurniture))}) document.body.appendChild(busy);
+        if (!${JSON.stringify(!!(withInterimStatus || withBusyLabel || withPageFurniture || withStepRow))}) document.body.appendChild(busy);
         if (${JSON.stringify(!!withInterimStatus)}) {
           const status = document.createElement('div');
           status.className = 'x9';
@@ -149,6 +160,31 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
           reply.className = 'x3';
           log.appendChild(reply);
           reply.textContent = 'FLIPAI';
+          if (${JSON.stringify(!!withNewsCards)}) {
+            reply.className = 'x3 markdown';
+            reply.innerHTML = '<p>FLIPAI answered: ' + value
+              + ' <a class="pill" href="#">AP News +1</a></p>'
+              + '<p>Markets: Wall Street is down today.<a class="pill" href="#">Reuters +1</a></p>'
+              + '<div class="cards">'
+              + '<div><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><a href="#">AP News</a><span>Supreme Court rejects Trump mail ballot restrictions</span><span>Today</span></div>'
+              + '<div><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><a href="#">Reuters</a><span>Hormuz traffic dwindles after Middle East attacks</span><span>Today</span></div>'
+              + '</div>'
+              + '<p>If you want, I can also give you just the political news today.</p>';
+            busy.remove();
+            return;
+          }
+          if (${JSON.stringify(!!withStepRow)}) {
+            // The page narrates first, then answers.
+            reply.textContent = 'Find Orlando trip dates Checked memories and Hertz emails, no date found 1:13 pm';
+            setTimeout(() => {
+              const real = document.createElement('div');
+              real.className = 'x3';
+              real.textContent = 'FLIPAI answered: ' + value;
+              document.querySelector('#log').appendChild(real);
+              busy.remove();
+            }, 9000);
+            return;
+          }
           if (${JSON.stringify(!!withPreamble)}) {
             // Says something, works for a while, then answers.
             // Claude reads its own turn container by name; this scenario is about
@@ -285,6 +321,11 @@ for (const [name, file, constant] of drivers) {
   scenarios.push({ name, file, constant, withSendButton: true, withNamedWrapper: true, withActivityPanel: true });
   scenarios.push({ name, file, constant, withSendButton: true, withPageFurniture: true });
   scenarios.push({ name, file, constant, withSendButton: true, withBusyLabel: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withNewsCards: true });
+  // The step row is Muse's and Copilot's shape of narration. ChatGPT does not
+  // render one, and its selection logic is deliberately left alone: it is the
+  // agent that is working, and this rule is not evidenced there.
+  if (name !== 'ChatGPT') scenarios.push({ name, file, constant, withSendButton: true, withStepRow: true });
 }
 for (const [name, file, constant] of enterOnlyDrivers) {
   scenarios.push({ name, file, constant, withSendButton: false, sendOnly: true });
@@ -295,7 +336,7 @@ for (const [name, file, constant] of drivers.concat([['Claude', 'claude_chat_web
   scenarios.push({ name, file, constant, withSendButton: true, withPreamble: true });
 }
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, sendOnly, wrongPage }) => {
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow, sendOnly, wrongPage }) => {
   if (wrongPage) {
     const page = await browser.newPage();
     // The driver must refuse this page outright, and must not type into it. The
@@ -322,11 +363,11 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     await page.close().catch(() => {});
     return;
   }
-  const label = `${name} (${withPageFurniture ? 'page furniture' : withBusyLabel ? 'busy label' : withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
+  const label = `${name} (${withNewsCards ? 'news cards' : withStepRow ? 'step row' : withPageFurniture ? 'page furniture' : withBusyLabel ? 'busy label' : withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel }));
+  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow }));
   const startedAt = Date.now();
   if (sendOnly) {
     // The driver keeps polling for a reply it will never recognize here, so do
@@ -372,6 +413,14 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     failures.push(`${label}: source cards were included in the answer: ${JSON.stringify(result.reply)}`);
   } else if (/new Dell with Intel|Summarize a document for me/.test(String(result.reply))) {
     failures.push(`${label}: page furniture was sent as the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withNewsCards && /AP News \+1|Reuters \+1/.test(String(result.reply))) {
+    failures.push(`${label}: a source pill was sent as part of the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withNewsCards && /Supreme Court rejects|Hormuz traffic dwindles/.test(String(result.reply))) {
+    failures.push(`${label}: a news card headline was sent as part of the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withNewsCards && !/political news today/.test(String(result.reply))) {
+    failures.push(`${label}: the model's own closing sentence was lost: ${JSON.stringify(result.reply)}`);
+  } else if (withStepRow && /no date found|1:13 pm/i.test(String(result.reply))) {
+    failures.push(`${label}: the page's step row was sent instead of the answer: ${JSON.stringify(result.reply)}`);
   } else if (/\bMuse\s?is working\b/i.test(String(result.reply))) {
     failures.push(`${label}: the page's busy line was sent as the answer: ${JSON.stringify(result.reply)}`);
   } else if (withPreamble && /pulling calendar and email/.test(String(result.reply)) && !/FLIPAI answered/.test(String(result.reply))) {
