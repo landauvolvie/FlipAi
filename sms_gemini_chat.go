@@ -54,6 +54,8 @@ type geminiChatSMSReply struct {
 	Reply          string `json:"reply"`
 	Detail         string `json:"detail"`
 	ConversationID string `json:"conversationId"`
+	// Trace is the page driver's own step log for this turn.
+	Trace          string `json:"trace"`
 }
 
 // cleanGeminiChatReply removes Gemini's accessibility-only speaker label from
@@ -96,28 +98,36 @@ func geminiChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt stri
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait)
 	s, err := ensureGeminiChatReady(readyCtx, dataDir)
 	cancel()
+	browserTurnReady(ctx, "Gemini Chat", err)
 	if err != nil {
 		return "", fmt.Errorf("Gemini Chat is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Gemini Chat, then try again: %w", err)
 	}
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
 	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget)
+	sentAt := time.Now()
 	body, code, err := geminiChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload)))
 	cancel()
 	if err != nil {
+		browserTurnRequestFailed(ctx, "Gemini Chat", time.Since(sentAt), err)
 		if browserChatTurnRequestTimedOut(err) {
+			browserTurnWatching(ctx, "Gemini Chat")
 			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "M", nil)
+			browserTurnWatchDone(ctx, "Gemini Chat", reply, waitErr)
 			return cleanGeminiChatReply(reply), waitErr
 		}
 		return "", err
 	}
 	var out geminiChatSMSReply
 	_ = json.Unmarshal(body, &out)
+	browserTurnAnswered(ctx, "Gemini Chat", code, time.Since(sentAt), code == http.StatusOK && out.OK, out.Trace, out.Detail, out.Reply)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" {
 			out.Detail = strings.TrimSpace(string(body))
 		}
 		if browserLongTurnTimeoutDetail(out.Detail) {
+			browserTurnWatching(ctx, "Gemini Chat")
 			reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "M", nil)
+			browserTurnWatchDone(ctx, "Gemini Chat", reply, waitErr)
 			cleaned := cleanGeminiChatReply(reply)
 			if waitErr == nil && browserReplyEchoesPrompt(cleaned, prompt) {
 				return "", errors.New("Gemini Chat did not produce a fresh assistant reply; FlipAi received the submitted prompt back instead. Reconnect Gemini Chat and try again")

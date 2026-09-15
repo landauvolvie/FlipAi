@@ -30,19 +30,21 @@ func parseMuseChatSMSCommand(raw string, cfg Config) (remoteCommand, error) {
 	return remoteCommand{Agent: "U", Text: text}, nil
 }
 
-type museChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"` }
+type museChatSMSReply struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; ConversationID string `json:"conversationId"`; Trace string `json:"trace"` }
 
 func museChatBrowserSendWithProgress(ctx context.Context, dataDir, prompt string, onProgress func(string)) (string, error) {
 	_ = onProgress
 	if !loadMuseChatRuntime(dataDir).Connected { return "", errors.New("Muse is disconnected in FlipAi. Open FlipAi > Agents, press Connect for Muse, then try again") }
-	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel()
+	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel(); browserTurnReady(ctx, "Muse", err)
 	if err != nil { return "", fmt.Errorf("Muse is not connected and ready in FlipAi. Open FlipAi > Agents and reconnect Muse, then try again: %w", err) }
 	payload, _ := json.Marshal(map[string]any{"prompt": prompt, "new": false})
-	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); body, code, err := museChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel(); if err != nil { if browserChatTurnRequestTimedOut(err) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "U", nil); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }; return "", err }
+	turnCtx, cancel := context.WithTimeout(ctx, browserChatTurnRequestBudget); sentAt := time.Now(); body, code, err := museChatControlRequest(turnCtx, s, http.MethodPost, "/chat", strings.NewReader(string(payload))); cancel()
+	if err != nil { browserTurnRequestFailed(ctx, "Muse", time.Since(sentAt), err); if browserChatTurnRequestTimedOut(err) { browserTurnWatching(ctx, "Muse"); reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "U", nil); browserTurnWatchDone(ctx, "Muse", reply, waitErr); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }; return "", err }
 	var out museChatSMSReply; _ = json.Unmarshal(body, &out)
+	browserTurnAnswered(ctx, "Muse", code, time.Since(sentAt), code == http.StatusOK && out.OK, out.Trace, out.Detail, out.Reply)
 	if code != http.StatusOK || !out.OK {
 		if strings.TrimSpace(out.Detail) == "" { out.Detail = strings.TrimSpace(string(body)) }
-		if browserLongTurnTimeoutDetail(out.Detail) { reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "U", nil); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }
+		if browserLongTurnTimeoutDetail(out.Detail) { browserTurnWatching(ctx, "Muse"); reply, waitErr := waitForBrowserLongTurn(ctx, dataDir, "U", nil); browserTurnWatchDone(ctx, "Muse", reply, waitErr); return cleanBrowserChatReplyForPrompt(reply, prompt), waitErr }
 		return "", errors.New(out.Detail)
 	}
 	cleaned := cleanBrowserChatReplyForPrompt(out.Reply, prompt)
@@ -54,7 +56,8 @@ func museChatBrowserSend(ctx context.Context, dataDir, prompt string) (string, e
 func museChatBrowserNewConversation(ctx context.Context, dataDir string) error {
 	readyCtx, cancel := context.WithTimeout(ctx, browserChatTurnReadyWait); s, err := ensureMuseChatReady(readyCtx, dataDir); cancel(); if err != nil { return err }
 	reqCtx, cancel := context.WithTimeout(ctx, 55*time.Second); body, code, err := museChatControlRequest(reqCtx, s, http.MethodPost, "/new", strings.NewReader(`{}`)); cancel(); if err != nil { return err }
-	if code != http.StatusOK { var out museChatSMSReply; _ = json.Unmarshal(body, &out); if out.Detail != "" { return errors.New(out.Detail) }; return fmt.Errorf("Muse new-chat request returned HTTP %d", code) }
+	if code != http.StatusOK { var out museChatSMSReply; _ = json.Unmarshal(body, &out)
+	if out.Detail != "" { return errors.New(out.Detail) }; return fmt.Errorf("Muse new-chat request returned HTTP %d", code) }
 	return nil
 }
 

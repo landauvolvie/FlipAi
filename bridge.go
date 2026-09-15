@@ -933,6 +933,16 @@ func (b *Bridge) execute(parent context.Context, m GmailMessage, rc remoteComman
 		}
 	}
 
+	// Every stage of a browser turn reports what it did, against this same
+	// message and sender, so a failed turn says where it stopped rather than
+	// only that it stopped. These are metadata: stage names, timings, counts and
+	// lengths, never the prompt or the reply.
+	if isBrowserChatAgent(rc.Agent) {
+		ctx = withBrowserTurnSteps(ctx, func(level, step string) {
+			b.event(level, "agent-step", step, rc.Sender, rc.Agent, m.ID)
+		})
+	}
+
 	var final string
 	var err error
 	if prepErr != nil {

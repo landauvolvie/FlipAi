@@ -55,6 +55,12 @@ const copilotChatTurnJS = `(async(input)=>{
   // layer allows a turn, and the call was abandoned at ninety-five seconds with
   // the model's answer sitting finished in the page.
   const turnDeadline=Date.now()+82000;
+  // What the driver actually did, step by step, so a turn that goes wrong says
+  // where rather than only that it did. Steps are metadata -- names, timings,
+  // counts, lengths -- never the prompt or the reply.
+  const T=[],t0=Date.now();
+  const mark=s=>{T.push(String(s)+' @'+((Date.now()-t0)/1000).toFixed(1)+'s');return true};
+  const trace=()=>T.join(' | ');
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   // The reply's own action row -- "Edit in a page", "Copy", "Good response" --
   // is page furniture, not part of what the model said, and it was going out
@@ -184,20 +190,32 @@ const copilotChatTurnJS = `(async(input)=>{
   // A container is never a candidate on its own, which is what stopped the
   // whole thread -- every message joined together -- from being sent as one
   // answer.
-  const genericBlocks=()=>{
+  // Collecting is in three passes, and the later ones are the safety net. Every
+  // exclusion here is a guess about what the page keeps outside its conversation,
+  // and a wrong guess left the driver seeing nothing at all -- a turn that ran
+  // its whole budget and reported that the model never answered, while the answer
+  // was on screen the entire time. If a pass finds nothing, the next gives back
+  // what it excluded rather than going blind.
+  const collectBlocks=(rs,skipFurniture)=>{
     const found=[];
-    for(const r of scanRoots()){
+    for(const r of rs){
       for(const n of r.querySelectorAll('div,p,section,article,li,pre')){
         if(n.closest&&(n.closest('form')||n.closest('[contenteditable="true"]')))continue;
         if(n.querySelector&&n.querySelector('textarea,input,[contenteditable="true"]'))continue;
         if(n.matches&&n.matches(chromeSel))continue;
         if(n.closest&&n.closest(chromeSel))continue;
-        if(n.closest&&n.closest(activitySel))continue;
+        if(skipFurniture&&n.closest&&n.closest(activitySel))continue;
         const t=rawText(n);
         if(t.length<2||t.length>20000)continue;
         found.push(n);
       }
     }
+    return found;
+  };
+  const genericBlocks=()=>{
+    let found=collectBlocks(scanRoots(),true);
+    if(!found.length)found=collectBlocks(roots(),true);
+    if(!found.length)found=collectBlocks(roots(),false);
     const set=new Set(found),container=new Set();
     for(const n of found){
       let p=n.parentElement;
@@ -233,7 +251,8 @@ const copilotChatTurnJS = `(async(input)=>{
   const stop=()=>{const xs=all('button[data-testid*="stop" i],button[data-testid*="cancel" i],button[aria-label*="stop" i],button[aria-label*="cancel" i],button[title*="stop" i]');return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
   let c=null;
   for(let i=0;i<120&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200)}
-  if(!c)return {ok:false,detail:'Microsoft Copilot is loaded but FlipAi could not find the prompt box. The Copilot site layout may have changed.',href:location.href};
+  mark(c?'composer-found':'composer-missing');
+  if(!c)return {ok:false,trace:trace(),detail:'Microsoft Copilot is loaded but FlipAi could not find the prompt box. The Copilot site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
   const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
@@ -272,9 +291,9 @@ const copilotChatTurnJS = `(async(input)=>{
     return tail||v;
   };
   const responseForTurn=()=>{
-    const current=assistants();
+    const named=assistants();
     const box=conversationBox();
-    const pick=(restrict,allowInterim)=>{
+    const pick=(current,restrict,allowInterim)=>{
       for(let i=current.length-1;i>=0;i--){
         const n=current[i],t=canon(rawText(n));
         if(!t||t===promptText||beforeTexts.has(t))continue;
@@ -287,7 +306,11 @@ const copilotChatTurnJS = `(async(input)=>{
       }
       return null;
     };
-    return pick(true,false)||pick(false,false);
+    // A selector that matches something is not the same as a selector that
+    // matches the answer. When the named elements yield nothing this turn, read
+    // the conversation structurally rather than concluding the model never
+    // answered -- that conclusion cost a whole turn while the reply was on screen.
+    return pick(named,true,false)||pick(named,false,false)||pick(genericBlocks(),false,false);
   };
   c.focus();
   try{
@@ -304,8 +327,10 @@ const copilotChatTurnJS = `(async(input)=>{
   await sleep(300);
   let b=null;
   for(let i=0;i<80&&!b;i++){b=send();if(!b)await sleep(100)}
-  if(b){b.click()}
+  mark('typed');
+  if(b){mark('send-click');b.click()}
   else{
+    mark('send-enter');
     // Copilot's send control is not always a <button> FlipAi can name, and the
     // turn used to be abandoned here with the prompt typed and never sent.
     // Enter is how a person sends it.
@@ -323,9 +348,10 @@ const copilotChatTurnJS = `(async(input)=>{
   let last='',stable=0,started=false;const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();
-    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now))return {ok:true,reply:newestPart(node,now),href:location.href};if(now&&stable>=32)return {ok:true,reply:newestPart(node,now),href:location.href}}
+    if(node){if(!started)mark('reply-node-seen');started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0}if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now)){mark('settled len='+now.length);return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}};if(now&&stable>=32)return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}}
   }
-  return {ok:false,detail:started?'Microsoft Copilot started answering but did not finish in time.':'Microsoft Copilot did not produce a new response in time.',href:location.href};
+  mark('deadline started='+started+' candidates='+assistants().length+' blocks='+genericBlocks().length+' stop='+(stop()?'yes':'no')+' lastLen='+last.length);
+  return {ok:false,trace:trace(),detail:started?'Microsoft Copilot started answering but did not finish in time.':'Microsoft Copilot did not produce a new response in time.',href:location.href};
 })(%s)`
 
 type copilotChatTurnResult struct {
@@ -333,6 +359,9 @@ type copilotChatTurnResult struct {
 	Reply  string `json:"reply"`
 	Detail string `json:"detail"`
 	Href   string `json:"href"`
+	// Trace is the page driver's own step log: what it found, what it did,
+	// and what the page looked like when it gave up. Metadata only.
+	Trace  string `json:"trace"`
 }
 
 func copilotChatEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
@@ -635,7 +664,7 @@ func startCopilotChatControlEndpoint(dataDir string, w webview2.WebView, dev voi
 			status = http.StatusBadGateway
 		}
 		rw.WriteHeader(status)
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid, "trace": got.Trace})
 	}
 	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

@@ -40,6 +40,12 @@ const grokChatTurnJS = `(async(input)=>{
   // layer allows a turn, and the call was abandoned at ninety-five seconds with
   // the model's answer sitting finished in the page.
   const turnDeadline=Date.now()+82000;
+  // What the driver actually did, step by step, so a turn that goes wrong says
+  // where rather than only that it did. Steps are metadata -- names, timings,
+  // counts, lengths -- never the prompt or the reply.
+  const T=[],t0=Date.now();
+  const mark=s=>{T.push(String(s)+' @'+((Date.now()-t0)/1000).toFixed(1)+'s');return true};
+  const trace=()=>T.join(' | ');
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const text=n=>String(n&&n.innerText||n&&n.textContent||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
   const sameText=(a,b)=>String(a||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim()===String(b||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
@@ -70,7 +76,8 @@ const grokChatTurnJS = `(async(input)=>{
   const stop=()=>{const xs=unique([...all('button[data-testid*="stop" i]'),...all('button[aria-label*="stop" i]')]);return xs.find(b=>!b.disabled&&b.offsetParent!==null)||null};
   let c=null;
   for(let i=0;i<120&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
-  if(!c)return {ok:false,detail:'Grok is loaded but FlipAi could not find the prompt box. The Grok site layout may have changed.',href:location.href};
+  mark(c?'composer-found':'composer-missing');
+  if(!c)return {ok:false,trace:trace(),detail:'Grok is loaded but FlipAi could not find the prompt box. The Grok site layout may have changed.',href:location.href};
   const before=assistants();
   const beforeCount=before.length;
   const beforeLast=beforeCount?text(before[beforeCount-1]):'';
@@ -101,8 +108,10 @@ const grokChatTurnJS = `(async(input)=>{
   await sleep(250);
   let b=null;
   for(let i=0;i<60&&!b;i++){b=send();if(!b)await sleep(100);}
-  if(b){b.click()}
+  mark('typed');
+  if(b){mark('send-click');b.click()}
   else{
+    mark('send-enter');
     // The Send control is not always a button FlipAi can name. The turn used to
     // be abandoned here with the prompt typed and never sent; Enter is how a
     // person sends it.
@@ -120,9 +129,9 @@ const grokChatTurnJS = `(async(input)=>{
   for(let i=0;i<28;i++){
     await sleep(150);
     const live=composer(),candidate=responseForTurn();
-    if(!live||composerText(live)===''||stop()||candidate){accepted=true;break}
+    if(!live||composerText(live)===''||stop()||candidate){accepted=true;mark('accepted');break}
   }
-  if(!accepted)return {ok:false,detail:'FlipAi filled the Grok prompt box, but Grok did not accept the Send action. Reconnect Grok Chat in FlipAi and try again.',href:location.href};
+  if(!accepted){mark('not-accepted');return {ok:false,trace:trace(),detail:'FlipAi filled the Grok prompt box, but Grok did not accept the Send action. Reconnect Grok Chat in FlipAi and try again.',href:location.href}}
   // Wait for the authored response to settle instead of a few 250 ms samples.
   // If Grok accepted a message but exposes neither a working control nor any
   // assistant output for 30 seconds, fail that turn explicitly instead of
@@ -140,14 +149,15 @@ const grokChatTurnJS = `(async(input)=>{
       if(!started){started=true;startedAt=at;lastChangedAt=at}
       if(now!==last){last=now;lastChangedAt=at}
       const quietFor=at-lastChangedAt;
-      if(!working&&at-startedAt>=1250&&quietFor>=2500)return {ok:true,reply:now,href:location.href};
-      if(quietFor>=7000)return {ok:true,reply:now,href:location.href};
+      if(!working&&at-startedAt>=1250&&quietFor>=2500)return {ok:true,trace:trace(),reply:now,href:location.href};
+      if(quietFor>=7000)return {ok:true,trace:trace(),reply:now,href:location.href};
     }else if(!started){
       if(working)noOutputIdleSince=Date.now();
-      else if(Date.now()-noOutputIdleSince>=30000)return {ok:false,detail:'Grok accepted the prompt but no assistant response appeared. Open Grok Chat in FlipAi, reconnect if needed, and try again.',href:location.href};
+      else if(Date.now()-noOutputIdleSince>=30000)return {ok:false,trace:trace(),detail:'Grok accepted the prompt but no assistant response appeared. Open Grok Chat in FlipAi, reconnect if needed, and try again.',href:location.href};
     }
   }
-  return {ok:false,detail:started?'Grok started answering but did not finish in time.':'Grok did not produce a new response in time.',href:location.href};
+  mark('deadline started='+started+' candidates='+assistants().length+' stop='+(stop()?'yes':'no'));
+  return {ok:false,trace:trace(),detail:started?'Grok started answering but did not finish in time.':'Grok did not produce a new response in time.',href:location.href};
 })(%s)`
 
 type grokChatTurnResult struct {
@@ -155,6 +165,9 @@ type grokChatTurnResult struct {
 	Reply  string `json:"reply"`
 	Detail string `json:"detail"`
 	Href   string `json:"href"`
+	// Trace is the page driver's own step log: what it found, what it did,
+	// and what the page looked like when it gave up. Metadata only.
+	Trace  string `json:"trace"`
 }
 
 func grokChatEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
@@ -455,7 +468,7 @@ func startGrokChatControlEndpoint(dataDir string, w webview2.WebView, dev voiceD
 			status = http.StatusBadGateway
 		}
 		rw.WriteHeader(status)
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid, "trace": got.Trace})
 	}
 	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

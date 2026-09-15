@@ -74,6 +74,12 @@ const claudeChatTurnJS = `(async(input)=>{
   // layer allows a turn, and the call was abandoned at ninety-five seconds with
   // the model's answer sitting finished in the page.
   const turnDeadline=Date.now()+82000;
+  // What the driver actually did, step by step, so a turn that goes wrong says
+  // where rather than only that it did. Steps are metadata -- names, timings,
+  // counts, lengths -- never the prompt or the reply.
+  const T=[],t0=Date.now();
+  const mark=s=>{T.push(String(s)+' @'+((Date.now()-t0)/1000).toFixed(1)+'s');return true};
+  const trace=()=>T.join(' | ');
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const rawText=n=>String(n&&(n.innerText||n.textContent)||'').trim();
@@ -129,7 +135,8 @@ const claudeChatTurnJS = `(async(input)=>{
     ||all('button,[role="button"]').find(b=>/^stop( response| generating)?$/i.test(canon(b.innerText||b.textContent)))||null;
   let c=null;
   for(let i=0;i<100&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
-  if(!c)return {ok:false,detail:'Claude is loaded but FlipAi could not find the message composer. The Claude site layout may have changed.',href:location.href};
+  mark(c?'composer-found':'composer-missing');
+  if(!c)return {ok:false,trace:trace(),detail:'Claude is loaded but FlipAi could not find the message composer. The Claude site layout may have changed.',href:location.href};
   const before=assistants();const beforeSet=new Set(before);
   const responseForTurn=()=>{const current=assistants();for(let i=current.length-1;i>=0;i--){if(!beforeSet.has(current[i]))return current[i];}return null;};
   const promptText=canon(input);
@@ -148,8 +155,10 @@ const claudeChatTurnJS = `(async(input)=>{
   let b=null;
   for(let i=0;i<50&&!b;i++){let x=send();if(x&&!x.disabled)b=x;else await sleep(100);}
   if(!b){const form=c.closest('form');const x=form&&form.querySelector('button[type="submit"]');if(x&&!x.disabled)b=x;}
-  if(b){b.click()}
+  mark('typed');
+  if(b){mark('send-click');b.click()}
   else{
+    mark('send-enter');
     // The Send control is not always a button FlipAi can name. The turn used to
     // be abandoned here with the prompt typed and never sent; Enter is how a
     // person sends it.
@@ -163,6 +172,7 @@ const claudeChatTurnJS = `(async(input)=>{
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();
     if(node){
+      if(!started)mark('reply-node-seen');
       started=true;
       // Settle on the whole turn, send only the prose. Watching the reply text
       // alone made Claude's opening line look final while it was still working.
@@ -172,11 +182,12 @@ const claudeChatTurnJS = `(async(input)=>{
       // A short line needs longer than a second of quiet to count as an answer,
       // and a turn still running tools needs longer still.
       const need=busy(node)?20:(now.length>=40?5:12);
-      if(!stop()&&stable>=need&&now&&canon(now)!==promptText)return {ok:true,reply:now,href:location.href};
-      if(now&&stable>=40)return {ok:true,reply:now,href:location.href};
+      if(!stop()&&stable>=need&&now&&canon(now)!==promptText){mark('settled len='+now.length+(busy(node)?' tools':''));return {ok:true,trace:trace(),reply:now,href:location.href}}
+      if(now&&stable>=40)return {ok:true,trace:trace(),reply:now,href:location.href};
     }
   }
-  return {ok:false,detail:started?'Claude started answering but did not finish in time.':'Claude did not produce a new assistant response in time.',href:location.href};
+  mark('deadline started='+started+' turns='+assistants().length+' stop='+(stop()?'yes':'no')+' lastLen='+last.length);
+  return {ok:false,trace:trace(),detail:started?'Claude started answering but did not finish in time.':'Claude did not produce a new assistant response in time.',href:location.href};
 })(%s)`
 
 // Claude Code web is asynchronous. Starting the task is the successful browser
@@ -224,6 +235,9 @@ type claudeChatTurnResult struct {
 	Reply  string `json:"reply"`
 	Detail string `json:"detail"`
 	Href   string `json:"href"`
+	// Trace is the page driver's own step log: what it found, what it did,
+	// and what the page looked like when it gave up. Metadata only.
+	Trace  string `json:"trace"`
 }
 
 func claudeChatEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
@@ -581,7 +595,7 @@ func startClaudeChatControlEndpoint(dataDir string, w webview2.WebView, dev voic
 			status = http.StatusBadGateway
 		}
 		rw.WriteHeader(status)
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid})
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": got.OK, "reply": got.Reply, "detail": got.Detail, "conversationId": cid, "trace": got.Trace})
 	}
 
 	mux.HandleFunc("/new", func(rw http.ResponseWriter, r *http.Request) {

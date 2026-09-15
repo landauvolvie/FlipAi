@@ -38,6 +38,12 @@ const geminiChatTurnJS = `(async(input)=>{
   // layer allows a turn, and the call was abandoned at ninety-five seconds with
   // the model's answer sitting finished in the page.
   const turnDeadline=Date.now()+82000;
+  // What the driver actually did, step by step, so a turn that goes wrong says
+  // where rather than only that it did. Steps are metadata -- names, timings,
+  // counts, lengths -- never the prompt or the reply.
+  const T=[],t0=Date.now();
+  const mark=s=>{T.push(String(s)+' @'+((Date.now()-t0)/1000).toFixed(1)+'s');return true};
+  const trace=()=>T.join(' | ');
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const text=n=>String(n&&n.innerText||n&&n.textContent||'').replace(/\s+/g,' ').trim();
   const sameText=(a,b)=>String(a||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim()===String(b||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
@@ -94,7 +100,8 @@ const geminiChatTurnJS = `(async(input)=>{
   };
   let c=null;
   for(let i=0;i<120&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
-  if(!c)return {ok:false,detail:'Gemini is loaded but FlipAi could not find the prompt box. The Gemini site layout may have changed.',href:location.href};
+  mark(c?'composer-found':'composer-missing');
+  if(!c)return {ok:false,trace:trace(),detail:'Gemini is loaded but FlipAi could not find the prompt box. The Gemini site layout may have changed.',href:location.href};
   // Compare the last response by stable content rather than DOM object identity.
   // Gemini can re-render old response nodes without accepting a new prompt; the
   // old Set-of-elements check treated that re-render as a brand-new answer.
@@ -116,8 +123,10 @@ const geminiChatTurnJS = `(async(input)=>{
   await sleep(250);
   let b=null;
   for(let i=0;i<60&&!b;i++){b=send();if(!b)await sleep(100);}
-  if(b){b.click()}
+  mark('typed');
+  if(b){mark('send-click');b.click()}
   else{
+    mark('send-enter');
     // Gemini does not always expose a Send control FlipAi can name: the button
     // can stay disabled, lose its label, or live inside a shadow root. The turn
     // used to be abandoned here with the prompt typed and never sent. Enter is
@@ -135,9 +144,9 @@ const geminiChatTurnJS = `(async(input)=>{
   for(let i=0;i<28;i++){
     await sleep(150);
     const live=composer(),candidate=responseForTurn();
-    if(!live||composerText(live)===''||stop()||candidate){accepted=true;break}
+    if(!live||composerText(live)===''||stop()||candidate){accepted=true;mark('accepted');break}
   }
-  if(!accepted)return {ok:false,detail:'FlipAi filled the Gemini prompt box, but Gemini did not accept the Send action. Reconnect Gemini Chat in FlipAi and try again.',href:location.href};
+  if(!accepted){mark('not-accepted');return {ok:false,trace:trace(),detail:'FlipAi filled the Gemini prompt box, but Gemini did not accept the Send action. Reconnect Gemini Chat in FlipAi and try again.',href:location.href}}
   // Gemini streams text in bursts. In v0.46.76, five unchanged 250 ms samples
   // were treated as final, which could text only the first few words while the
   // page continued writing the answer. Require a real quiet period after the
@@ -156,16 +165,17 @@ const geminiChatTurnJS = `(async(input)=>{
       if(now!==last){last=now;lastChangedAt=at}
       const quietFor=at-lastChangedAt;
       const runningFor=at-startedAt;
-      if(!stop()&&runningFor>=1500&&quietFor>=3000)return {ok:true,reply:now,href:location.href};
-      if(responseFinishedChrome(node)&&quietFor>=4000)return {ok:true,reply:now,href:location.href};
+      if(!stop()&&runningFor>=1500&&quietFor>=3000)return {ok:true,trace:trace(),reply:now,href:location.href};
+      if(responseFinishedChrome(node)&&quietFor>=4000)return {ok:true,trace:trace(),reply:now,href:location.href};
       // A stale Stop control must not hold a fully settled answer forever.
-      if(quietFor>=8000)return {ok:true,reply:now,href:location.href};
+      if(quietFor>=8000)return {ok:true,trace:trace(),reply:now,href:location.href};
     }
   }
-  return {ok:false,detail:started?'Gemini started answering but did not finish in time.':'Gemini did not produce a new response in time.',href:location.href};
+  mark('deadline started='+started+' candidates='+assistants().length+' stop='+(stop()?'yes':'no'));
+  return {ok:false,trace:trace(),detail:started?'Gemini started answering but did not finish in time.':'Gemini did not produce a new response in time.',href:location.href};
 })(%s)`
 
-type geminiChatTurnResult struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; Href string `json:"href"` }
+type geminiChatTurnResult struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; Href string `json:"href"`; Trace string `json:"trace"` }
 
 func geminiChatEval(d voiceDevTools, expression string, awaitPromise bool, out any) error {
 	if d == nil { return errors.New("the Gemini Chat WebView has no in-process control channel") }
@@ -228,7 +238,7 @@ func startGeminiChatControlEndpoint(dataDir string,w webview2.WebView,dev voiceD
 		if newChat{_ = geminiChatEval(dev,browserPageNavigateJS("https://gemini.google.com"),false,nil)}
 		if !waitForGeminiChatPageSignedIn(dev,25*time.Second){rw.WriteHeader(http.StatusUnauthorized);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":false,"detail":"Gemini Chat is not signed in inside FlipAi. Press Connect and complete sign-in first."});return}
 		expr:=fmt.Sprintf(geminiChatTurnJS,geminiChatJSString(prompt));var got geminiChatTurnResult;if err:=geminiChatEval(dev,expr,true,&got);err!=nil{rw.WriteHeader(http.StatusInternalServerError);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":false,"detail":"FlipAi could not run the Gemini page driver: "+err.Error()});return}
-		cid:=geminiChatConversationID(got.Href);mutateGeminiChatRuntime(dataDir,func(s *GeminiChatWebRuntime){s.Connected=true;s.SignedIn=true;s.LastURL=got.Href;s.ConversationID=cid;if got.OK{s.LastEvent="turn-complete";s.LastError=""}else{s.LastEvent="turn-failed";s.LastError=got.Detail}});status:=http.StatusOK;if !got.OK{status=http.StatusBadGateway};rw.WriteHeader(status);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":got.OK,"reply":got.Reply,"detail":got.Detail,"conversationId":cid})
+		cid:=geminiChatConversationID(got.Href);mutateGeminiChatRuntime(dataDir,func(s *GeminiChatWebRuntime){s.Connected=true;s.SignedIn=true;s.LastURL=got.Href;s.ConversationID=cid;if got.OK{s.LastEvent="turn-complete";s.LastError=""}else{s.LastEvent="turn-failed";s.LastError=got.Detail}});status:=http.StatusOK;if !got.OK{status=http.StatusBadGateway};rw.WriteHeader(status);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":got.OK,"reply":got.Reply,"detail":got.Detail,"conversationId":cid,"trace":got.Trace})
 	}
 	mux.HandleFunc("/new",func(rw http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.Error(rw,"POST required",http.StatusMethodNotAllowed);return};if !authorized(r){http.Error(rw,"FlipAi token required",http.StatusForbidden);return};_ = geminiChatEval(dev,browserPageNavigateJS("https://gemini.google.com"),false,nil);if !waitForGeminiChatPageSignedIn(dev,45*time.Second){rw.WriteHeader(http.StatusUnauthorized);_ = json.NewEncoder(rw).Encode(map[string]any{"ok":false,"detail":"Gemini did not restore the saved sign-in after opening a new chat"});return};mutateGeminiChatRuntime(dataDir,func(s *GeminiChatWebRuntime){s.Connected=true;s.SignedIn=true;s.ConversationID="";s.LastEvent="new-chat-ready";s.LastError=""});_ = json.NewEncoder(rw).Encode(map[string]any{"ok":true})})
 	// Connection tests must never create a real chat message. The previous test
