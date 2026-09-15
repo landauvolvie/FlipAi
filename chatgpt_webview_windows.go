@@ -312,6 +312,14 @@ const chatGPTTurnJS = `(async(input)=>{
   // The page writes its own name into that line, and reading two elements as one
   // runs the name into the next word -- "Museis working" -- so the line is judged
   // by its verb, never by what stands in front of it.
+  // The line under the composer is the page talking about itself, and FlipAi
+  // texted it as an answer -- fifty-eight characters of "ChatGPT can make
+  // mistakes" while the model was still writing the real reply.
+  const pageFurnitureText=t=>{
+    const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
+    if(!v||v.length>160)return false;
+    return /can make mistakes/.test(v)||/check important info/.test(v)||/^chatgpt (can|may) /.test(v);
+  };
   const statusLine=t=>{
     const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
     if(!v||v.length>60)return false;
@@ -360,7 +368,15 @@ const chatGPTTurnJS = `(async(input)=>{
     }
     return found;
   };
+  // Scanning is the expensive thing this script does, and it is asked for
+  // several times in a single poll -- by the candidate list, by the
+  // conversation anchor, and again by the fallback. Doing it once per
+  // quarter second is the difference between typing the prompt in under a
+  // second and taking nine.
+  let blocksCache=null,blocksAt=0;
   const genericBlocks=()=>{
+    const now=Date.now();
+    if(blocksCache&&now-blocksAt<250)return blocksCache;
     let found=collectBlocks(scanRoots(),true);
     if(!found.length)found=collectBlocks(roots(),true);
     if(!found.length)found=collectBlocks(roots(),false);
@@ -370,7 +386,8 @@ const chatGPTTurnJS = `(async(input)=>{
       for(let hops=0;p&&hops<40;hops++,p=p.parentElement){if(set.has(p))container.add(p)}
     }
     // The newest message is the last one, so keep the tail.
-    return found.filter(n=>!container.has(n)).slice(-400);
+    blocksCache=found.filter(n=>!container.has(n)).slice(-400);blocksAt=now;
+    return blocksCache;
   };
   // A named match can be a wrapper around every message just as easily as one
   // reply, and nothing dropped it. A candidate that contains another candidate
@@ -493,13 +510,20 @@ const chatGPTTurnJS = `(async(input)=>{
     // block on a page is easily a control strip, whose text disappears once its
     // buttons are stripped, leaving an empty reply that never settles.
     const box=conversationBox();
-    for(let i=as.length-1;i>=0;i--){
-      const t=canon(rawText(as[i]));
-      if(!t||t===promptText||beforeTexts.has(t)||interim(t)||statusLine(t))continue;
-      const whole=wholeMessage(as[i],box);
-      const chosen=canon(rawText(whole))===promptText?as[i]:whole;
-      if(!canon(text(chosen)))continue;
-      return chosen;
+    // Two passes: inside the conversation first. Without that the scan could
+    // reach page furniture -- the disclaimer under the composer is not in the
+    // conversation, and it was sent as the answer.
+    for(const inside of [true,false]){
+      for(let i=as.length-1;i>=0;i--){
+        const t=canon(rawText(as[i]));
+        if(!t||t===promptText||beforeTexts.has(t)||interim(t)||statusLine(t)||pageFurnitureText(t))continue;
+        if(inside&&box&&!box.contains(as[i]))continue;
+        const whole=wholeMessage(as[i],box);
+        const chosen=canon(rawText(whole))===promptText?as[i]:whole;
+        if(!canon(text(chosen)))continue;
+        return chosen;
+      }
+      if(!box)break;
     }
     // A new block appeared but every one of them read as a status. Take the
     // newest that is still not the prompt and not already on screen: without
@@ -508,7 +532,7 @@ const chatGPTTurnJS = `(async(input)=>{
     if(as.length>beforeAssistantCount){
       for(let i=as.length-1;i>=0;i--){
         const t=canon(rawText(as[i]));
-        if(!t||t===promptText||beforeTexts.has(t)||statusLine(t))continue;
+        if(!t||t===promptText||beforeTexts.has(t)||statusLine(t)||pageFurnitureText(t))continue;
         const whole=wholeMessage(as[i],box);
         const chosen=canon(rawText(whole))===promptText?as[i]:whole;
         if(canon(text(chosen)))return chosen;
@@ -557,7 +581,7 @@ const chatGPTTurnJS = `(async(input)=>{
       const now=text(node);
       if(now===last)stable++;else{last=now;stable=0;}
       if(interim(now)){stable=0;continue}
-      if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now)){mark('settled len='+now.length);return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}}
+      if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now)&&!pageFurnitureText(now)){mark('settled len='+now.length);return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}}
       // A stale Stop control must not hold a fully settled answer forever.
       if(now&&stable>=32&&!pageFurnitureText(now)){mark('settled-late len='+now.length);return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}}
     }

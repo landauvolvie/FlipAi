@@ -271,7 +271,15 @@ const museChatTurnJS = `(async(input)=>{
     }
     return found;
   };
+  // Scanning is the expensive thing this script does, and it is asked for
+  // several times in a single poll -- by the candidate list, by the
+  // conversation anchor, and again by the fallback. Doing it once per
+  // quarter second is the difference between typing the prompt in under a
+  // second and taking nine.
+  let blocksCache=null,blocksAt=0;
   const genericBlocks=()=>{
+    const now=Date.now();
+    if(blocksCache&&now-blocksAt<250)return blocksCache;
     let found=collectBlocks(scanRoots(),true);
     if(!found.length)found=collectBlocks(roots(),true);
     if(!found.length)found=collectBlocks(roots(),false);
@@ -282,7 +290,8 @@ const museChatTurnJS = `(async(input)=>{
     }
     // The newest message is the last one, so keep the tail. Capping the head
     // stopped the scan before it ever reached this turn's reply.
-    return found.filter(n=>!container.has(n)).slice(-400);
+    blocksCache=found.filter(n=>!container.has(n)).slice(-400);blocksAt=now;
+    return blocksCache;
   };
   // A message is usually several blocks. Lift a matched block to the element
   // the conversation holds directly, so the whole answer travels rather than
