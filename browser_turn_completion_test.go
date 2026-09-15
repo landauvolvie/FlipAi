@@ -53,7 +53,9 @@ func TestEveryBrowserDriverCanFinishWithAStuckStopControl(t *testing.T) {
 	// elapsed `quietFor` in milliseconds.
 	escapes := map[string]string{
 		"ChatGPT Chat":           "stable>=32",
-		"Claude Chat":            "stable>=32",
+		// Claude waits longer before overriding a stuck stop control: its turns run
+		// tools, and a pause between them is not a finished answer.
+		"Claude Chat":            "stable>=40",
 		"Microsoft Copilot Chat": "stable>=32",
 		"Muse":                   "stable>=32",
 		"Gemini Chat":            "quietFor>=8000",

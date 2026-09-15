@@ -32,6 +32,12 @@ const geminiChatPageMonitorJS = `(function(){
 const geminiChatSignedInJS = `(()=>{const c=document.querySelector('rich-textarea .ql-editor[contenteditable="true"],rich-textarea [contenteditable="true"],div.ql-editor[contenteditable="true"],[contenteditable="true"][role="textbox"],[contenteditable="true"][aria-label*="prompt" i],textarea[aria-label*="prompt" i],textarea');const signIn=Array.from(document.querySelectorAll('a,button')).find(n=>/sign in/i.test(((n.getAttribute('aria-label')||'')+' '+(n.innerText||'')).trim()));return location.hostname==='gemini.google.com'&&!!c&&!signIn})()`
 
 const geminiChatTurnJS = `(async(input)=>{
+  // One budget for the whole script, fixed when it starts.
+  // Waiting for the composer and then starting a fresh ninety seconds is two
+  // budgets end to end: on a slow page that ran past the deadline the DevTools
+  // layer allows a turn, and the call was abandoned at ninety-five seconds with
+  // the model's answer sitting finished in the page.
+  const turnDeadline=Date.now()+82000;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const text=n=>String(n&&n.innerText||n&&n.textContent||'').replace(/\s+/g,' ').trim();
   const sameText=(a,b)=>String(a||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim()===String(b||'').replace(/[\u200b\u200c\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
@@ -87,7 +93,7 @@ const geminiChatTurnJS = `(async(input)=>{
     return buttons.some(b=>/good response|bad response|regenerate|copy response|more options|share/i.test(((b.getAttribute('aria-label')||'')+' '+(b.getAttribute('mattooltip')||'')+' '+(b.innerText||'')).trim()));
   };
   let c=null;
-  for(let i=0;i<120&&!c;i++){c=composer();if(!c)await sleep(200);}
+  for(let i=0;i<120&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Gemini is loaded but FlipAi could not find the prompt box. The Gemini site layout may have changed.',href:location.href};
   // Compare the last response by stable content rather than DOM object identity.
   // Gemini can re-render old response nodes without accepting a new prompt; the
@@ -138,7 +144,7 @@ const geminiChatTurnJS = `(async(input)=>{
   // last authored-text change. Finished-response controls are only supporting
   // evidence; they do not bypass the quiet-period requirement.
   let last='',started=false,startedAt=0,lastChangedAt=0;
-  const deadline=Date.now()+90000;
+  const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){
     await sleep(250);
     const node=responseForTurn();
@@ -156,7 +162,7 @@ const geminiChatTurnJS = `(async(input)=>{
       if(quietFor>=8000)return {ok:true,reply:now,href:location.href};
     }
   }
-  return {ok:false,detail:started?'Gemini started answering but did not finish within 90 seconds.':'Gemini did not produce a new response within 90 seconds.',href:location.href};
+  return {ok:false,detail:started?'Gemini started answering but did not finish in time.':'Gemini did not produce a new response in time.',href:location.href};
 })(%s)`
 
 type geminiChatTurnResult struct { OK bool `json:"ok"`; Reply string `json:"reply"`; Detail string `json:"detail"`; Href string `json:"href"` }

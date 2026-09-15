@@ -68,23 +68,71 @@ const claudeSelectHomeModeJS = `(async(wanted)=>{
 })(%s)`
 
 const claudeChatTurnJS = `(async(input)=>{
+  // One budget for the whole script, fixed when it starts.
+  // Waiting for the composer and then starting a fresh ninety seconds is two
+  // budgets end to end: on a slow page that ran past the deadline the DevTools
+  // layer allows a turn, and the call was abandoned at ninety-five seconds with
+  // the model's answer sitting finished in the page.
+  const turnDeadline=Date.now()+82000;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  const text=n=>(n&&n.innerText||n&&n.textContent||'').trim();
+  const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
+  const rawText=n=>String(n&&(n.innerText||n.textContent)||'').trim();
+  const chromeSel='button,[role="button"],[role="toolbar"],[role="menu"],[class*="action" i],[class*="toolbar" i],[class*="footer" i]';
+  const toolSel='[data-testid*="tool" i],[class*="tool-use" i],[class*="tool_use" i],[data-testid*="thinking" i]';
+  // Claude puts things in a turn that are not the message: the running tool log,
+  // an offer of connectors to switch on, and a tile for a file it produced.
+  // Those are controls with words on them, and they were arriving in the text
+  // message while the answer itself did not.
+  const dropCards=clone=>{
+    const labelled=(el,word)=>Array.from(el.querySelectorAll('button,a,[role="button"]')).some(b=>new RegExp('^'+word+'$','i').test(canon(b.innerText||b.textContent)));
+    for(const el of Array.from(clone.querySelectorAll('div,section,aside,article,figure'))){
+      if(!clone.contains(el))continue;
+      const t=canon(el.innerText||el.textContent);
+      if(!t)continue;
+      if(/^connectors? that could help\b/i.test(t)){el.remove();continue}
+      if(t.length<=300&&(labelled(el,'download')||labelled(el,'connect')))el.remove();
+    }
+  };
+  const text=n=>{
+    if(!n)return '';
+    const clone=n.cloneNode&&n.cloneNode(true);
+    if(!clone||!clone.querySelectorAll)return rawText(n);
+    // Cards first: their own buttons are the evidence that they are cards.
+    dropCards(clone);
+    clone.querySelectorAll(chromeSel+','+toolSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
+    // Never let stripping empty a real message.
+    return canon(clone.innerText||clone.textContent)||rawText(n);
+  };
   const all=q=>Array.from(document.querySelectorAll(q));
   const unique=xs=>Array.from(new Set(xs));
+  // One node per turn, never a turn and its inner blocks both. The whole turn is
+  // what has to go quiet before the answer is final: FlipAi texted Claude's
+  // opening line -- "This will take a few minutes" -- because that one block sat
+  // unchanged for a second while Claude was still running tools, and the answer
+  // it was promising had not been written yet.
   const assistants=()=>{
-    const explicit=unique([...all('[data-testid="assistant-message"]'),...all('[data-testid="assistant-message"] [data-testid="chat-message-content"]')]).filter(n=>text(n));
+    const explicit=unique(all('[data-testid="assistant-message"]')).filter(n=>rawText(n));
     if(explicit.length)return explicit;
-    return unique([...all('.font-claude-response-body'),...all('.font-claude-message'),...all('.standard-markdown')]).filter(n=>text(n));
+    const loose=unique([...all('.font-claude-response-body'),...all('.font-claude-message'),...all('.standard-markdown')]).filter(n=>rawText(n));
+    return loose.filter(n=>!loose.some(p=>p!==n&&p.contains(n)));
+  };
+  // A turn that is using tools is not finished merely because it paused between
+  // them. It gets a real quiet period; an ordinary reply still settles fast.
+  const busy=node=>{
+    if(!node)return false;
+    if(node.querySelector&&node.querySelector(toolSel))return true;
+    return /\b(ran|used|using|running)\s+\d+\s+(command|tool|integration)/i.test(rawText(node));
   };
   const composer=()=>document.querySelector('[data-testid="chat-input"],div.ProseMirror[contenteditable="true"],div[data-placeholder][contenteditable="true"],div[contenteditable="true"][role="textbox"],div[contenteditable="true"],textarea');
   const send=()=>document.querySelector('button[data-testid="send-button"],button[aria-label="Send Message"],button[aria-label="Send message"],button[aria-label="Send"],button[aria-label*="Send" i]');
-  const stop=()=>document.querySelector('button[data-testid="stop-button"],button[aria-label*="Stop" i],[data-is-streaming="true"]');
+  const stop=()=>document.querySelector('button[data-testid="stop-button"],button[aria-label*="Stop" i],button[title*="Stop" i],[data-is-streaming="true"],[aria-busy="true"]')
+    ||all('button,[role="button"]').find(b=>/^stop( response| generating)?$/i.test(canon(b.innerText||b.textContent)))||null;
   let c=null;
-  for(let i=0;i<100&&!c;i++){c=composer();if(!c)await sleep(200);}
+  for(let i=0;i<100&&!c&&Date.now()<turnDeadline-62000;i++){c=composer();if(!c)await sleep(200);}
   if(!c)return {ok:false,detail:'Claude is loaded but FlipAi could not find the message composer. The Claude site layout may have changed.',href:location.href};
   const before=assistants();const beforeSet=new Set(before);
   const responseForTurn=()=>{const current=assistants();for(let i=current.length-1;i>=0;i--){if(!beforeSet.has(current[i]))return current[i];}return null;};
+  const promptText=canon(input);
   c.focus();
   if(c.tagName==='TEXTAREA'||c.tagName==='INPUT'){
     const setter=Object.getOwnPropertyDescriptor(c.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;
@@ -111,12 +159,22 @@ const claudeChatTurnJS = `(async(input)=>{
       c.dispatchEvent(new KeyboardEvent(type,{bubbles:true,composed:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13,which:13}));
     }
   }
-  let last='',stable=0,started=false;const deadline=Date.now()+90000;
+  let last='',stable=0,started=false;const deadline=turnDeadline;/*__FLIPAI_BROWSER_TURN__*/
   while(Date.now()<deadline){
     await sleep(250);const node=responseForTurn();
-    if(node){started=true;const now=text(node);if(now===last)stable++;else{last=now;stable=0;}if(!stop()&&stable>=5)return {ok:true,reply:now||'Claude completed the turn.',href:location.href};if(now&&stable>=32)return {ok:true,reply:now,href:location.href};}
+    if(node){
+      started=true;
+      // Settle on the whole turn, send only the prose. Watching the reply text
+      // alone made Claude's opening line look final while it was still working.
+      const seen=rawText(node);
+      if(seen===last)stable++;else{last=seen;stable=0}
+      const need=busy(node)?20:5;
+      const now=text(node);
+      if(!stop()&&stable>=need&&now&&canon(now)!==promptText)return {ok:true,reply:now,href:location.href};
+      if(now&&stable>=40)return {ok:true,reply:now,href:location.href};
+    }
   }
-  return {ok:false,detail:started?'Claude started answering but did not finish within 90 seconds.':'Claude did not produce a new assistant response within 90 seconds.',href:location.href};
+  return {ok:false,detail:started?'Claude started answering but did not finish in time.':'Claude did not produce a new assistant response in time.',href:location.href};
 })(%s)`
 
 // Claude Code web is asynchronous. Starting the task is the successful browser

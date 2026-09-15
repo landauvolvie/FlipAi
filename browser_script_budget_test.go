@@ -51,7 +51,8 @@ func TestLongPageScriptsAreGivenADeadlineThatOutlastsThem(t *testing.T) {
 	// drivers are edited. TestRecognizedLongCallMarkersMatchTheirConstants
 	// keeps the two in step.
 	markers := []string{
-		"const deadline=Date.now()+90000;", // a browser turn
+		"__FLIPAI_BROWSER_TURN__", "browserChatTurnMarker",
+		"const deadline=Date.now()+90000;", // a browser turn, before it was marked
 		"__FLIPAI_LONG_PAGE_CALL__", "browserLongPageCallMarker",
 		"__FLIPAI_BROWSER_RETURN_MEDIA__", "browserChatReturnedMediaMarker",
 		"__FLIPAI_GV_UI_SEND__",
@@ -90,6 +91,7 @@ func TestLongPageScriptsAreGivenADeadlineThatOutlastsThem(t *testing.T) {
 // The marker literals above are the ones the DevTools layer actually keys on.
 func TestRecognizedLongCallMarkersMatchTheirConstants(t *testing.T) {
 	want := map[string]string{
+		"browserChatTurnMarker":           "__FLIPAI_BROWSER_TURN__",
 		"browserLongPageCallMarker":       "__FLIPAI_LONG_PAGE_CALL__",
 		"browserLongTurnSnapshotMarker":   "__FLIPAI_BROWSER_LONG_TURN_SNAPSHOT__",
 		"browserChatReturnedMediaMarker":  "__FLIPAI_BROWSER_RETURN_MEDIA__",
@@ -113,6 +115,52 @@ func TestRecognizedLongCallMarkersMatchTheirConstants(t *testing.T) {
 	for name, literal := range want {
 		if !strings.Contains(all, name+" = \""+literal+"\"") {
 			t.Errorf("%s is no longer defined as %q; the long-call guard keys on that literal", name, literal)
+		}
+	}
+}
+
+// The DevTools deadline a marked browser turn is given. A script that can keep
+// working past it is abandoned mid-turn, and the answer is lost with the model
+// having already written it.
+const browserTurnDevToolsBudgetSeconds = 95
+
+// Budgets inside a turn script run one after another, not instead of one
+// another: the script waits for the composer, and only then starts its answer
+// deadline. Taking the largest of the two hid that. ChatGPT failed at exactly
+// 95.4 seconds this way -- a twenty-second composer wait followed by a fresh
+// ninety-second deadline is a hundred and ten, and the call was cut off at
+// ninety-five.
+//
+// A turn script must therefore fix one budget when it starts and hold every
+// later wait inside it.
+func TestATurnScriptCannotOutlastTheDeadlineItIsGiven(t *testing.T) {
+	for _, file := range []string{
+		"chatgpt_webview_windows.go", "claude_chat_webview_windows.go",
+		"copilot_chat_webview_windows.go", "gemini_chat_webview_windows.go",
+		"grok_chat_webview_windows.go", "muse_chat_webview_windows.go",
+	} {
+		src := readGoSource(t, file)
+		for _, m := range jsConstRE.FindAllStringSubmatch(src, -1) {
+			name, js := m[1], m[2]
+			if !strings.Contains(js, "__FLIPAI_BROWSER_TURN__") {
+				continue
+			}
+			if !strings.Contains(js, "const turnDeadline=Date.now()+") {
+				t.Errorf("%s: %s does not fix one budget when it starts, so its waits add up past the deadline it is given", file, name)
+				continue
+			}
+			if !strings.Contains(js, "const deadline=turnDeadline;") {
+				t.Errorf("%s: %s starts a second deadline for its answer instead of using the one it fixed", file, name)
+			}
+			// Every earlier wait has to be held inside that budget too.
+			if !strings.Contains(js, "Date.now()<turnDeadline-") {
+				t.Errorf("%s: %s waits for the composer without regard to its own budget", file, name)
+			}
+			budget := scriptBudgetMillis(js)
+			if budget >= browserTurnDevToolsBudgetSeconds*1000 {
+				t.Errorf("%s: %s can run for %.1fs, and a turn is abandoned after %ds",
+					file, name, float64(budget)/1000, browserTurnDevToolsBudgetSeconds)
+			}
 		}
 	}
 }
