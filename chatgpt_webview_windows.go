@@ -209,18 +209,51 @@ const chatGPTTurnJS = `(async(input)=>{
       if(t.length<=300&&(labelled(el,'download')||labelled(el,'connect')))el.remove();
     }
   };
+  // A news card is a picture with a headline and a link on it. Prose is not.
+  // When ChatGPT answers with the news it puts a row of those under the answer
+  // and a source pill after each claim -- "AP News +1", "Reuters +1" -- and all
+  // of it arrived in the text message: three headlines, five sources and a
+  // "Today" after each one, in the middle of what the model actually wrote.
+  //
+  // The pills are matched by their shape, not by a class name: a whole element
+  // whose text is a source followed by "+2" is a citation pill, and no sentence
+  // looks like that. A linked phrase inside a sentence still survives.
+  const dropSourceCards=clone=>{
+    for(const el of Array.from(clone.querySelectorAll('div,section,article,li,figure,aside,nav,ul,ol'))){
+      if(!clone.contains(el))continue;
+      if(el.querySelector('img,picture')&&el.querySelector('a'))el.remove();
+    }
+    for(const el of Array.from(clone.querySelectorAll('a,span,button,cite,small,sup'))){
+      if(!clone.contains(el))continue;
+      const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
+      if(!t)continue;
+      if(/^\+\d+$/.test(t)||/^[A-Za-z][A-Za-z0-9 .&'\u2019-]{0,28}\s\+\d+$/.test(t))el.remove();
+    }
+  };
   const text=n=>{
     if(!n)return '';
     // ChatGPT renders the normal written answer in a Markdown subtree and rich
     // cards/widgets as sibling UI. SMS must carry the written answer, not the
     // widget's accessibility/visual text (weather grids, charts, controls, etc.).
     const prose=n.querySelector&&n.querySelector('.markdown');
-    if(prose)return clean(prose.innerText||prose.textContent||'');
+    if(prose){
+      // The prose subtree is not free of furniture either: source pills sit
+      // inside the sentences, and a card row can sit inside the markdown.
+      const pc=prose.cloneNode&&prose.cloneNode(true);
+      if(pc&&pc.querySelectorAll){
+        dropSourceCards(pc);
+        pc.querySelectorAll('button,[role="button"],script,style,template,noscript,svg').forEach(el=>el.remove());
+        const out=clean(pc.innerText||pc.textContent||'');
+        if(out)return out;
+      }
+      return clean(prose.innerText||prose.textContent||'');
+    }
     // Keep a defensive fallback for alternate layouts, but strip common rich UI
     // containers and interactive controls before reading the assistant wrapper.
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
       dropCards(clone);
+      dropSourceCards(clone);
       clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],script,style,template,noscript,'+activityStripSel+','+refBlockSel).forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
       // Never let stripping empty a real message: if everything went, a

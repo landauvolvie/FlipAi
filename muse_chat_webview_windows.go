@@ -91,6 +91,23 @@ const museChatTurnJS = `(async(input)=>{
   // and a tile for a file they produced, inside the turn; both are controls with
   // words on them, and they were arriving in the text message. Their own buttons
   // are the evidence, so this runs before the buttons are stripped.
+  // A news card is a picture with a headline and a link on it, and a source pill
+  // is a whole element whose text is a source followed by "+2". Neither is a
+  // sentence, and both arrived in the middle of what the model wrote. Matching
+  // the pill by its shape rather than by a class name leaves a linked phrase
+  // inside a sentence untouched.
+  const dropSourceCards=clone=>{
+    for(const el of Array.from(clone.querySelectorAll('div,section,article,li,figure,aside,nav,ul,ol'))){
+      if(!clone.contains(el))continue;
+      if(el.querySelector('img,picture')&&el.querySelector('a'))el.remove();
+    }
+    for(const el of Array.from(clone.querySelectorAll('a,span,button,cite,small,sup'))){
+      if(!clone.contains(el))continue;
+      const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
+      if(!t)continue;
+      if(/^\+\d+$/.test(t)||/^[A-Za-z][A-Za-z0-9 .&'\u2019-]{0,28}\s\+\d+$/.test(t))el.remove();
+    }
+  };
   const dropCards=clone=>{
     const labelled=(el,word)=>Array.from(el.querySelectorAll('button,a,[role="button"]')).some(b=>new RegExp('^'+word+'$','i').test(String(b.innerText||b.textContent||'').replace(/\s+/g,' ').trim()));
     for(const el of Array.from(clone.querySelectorAll('div,section,aside,article,figure'))){
@@ -106,6 +123,7 @@ const museChatTurnJS = `(async(input)=>{
     const clone=n.cloneNode&&n.cloneNode(true);
     if(clone&&clone.querySelectorAll){
       dropCards(clone);
+      dropSourceCards(clone);
       clone.querySelectorAll(chromeControlSel+','+refBlockSel+','+activityStripSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
       // Never let stripping empty a real message: if everything went, a
@@ -121,6 +139,20 @@ const museChatTurnJS = `(async(input)=>{
   // The page writes its own name into that line, and reading two elements as one
   // runs the name into the next word -- "Museis working" -- so the line is judged
   // by its verb, never by what stands in front of it.
+  // Muse shows its work as rows that end with the time they happened at:
+  // "Find Orlando trip dates Checked memories and Hertz emails, no date found
+  // 1:13 pm". That is the page narrating, not the answer, and it was texted as
+  // one while the real answer was written moments later.
+  //
+  // A sentence that merely mentions a time ends like a sentence. A step row ends
+  // with the clock and nothing else.
+  const activityRow=t=>{
+    const v=String(t||'').replace(/\s+/g,' ').trim();
+    if(!v||v.length>240)return false;
+    if(!/\d{1,2}:\d{2}\s*[ap]\.?m\.?$/i.test(v))return false;
+    if(/[.!?\u2026]$/.test(v))return false;
+    return v.split(' ').length>=5;
+  };
   const statusLine=t=>{
     const v=String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
     if(!v||v.length>60)return false;
@@ -306,7 +338,7 @@ const museChatTurnJS = `(async(input)=>{
         const n=current[i],t=canon(rawText(n));
         if(!t||t===promptText||beforeTexts.has(t))continue;
         if(restrict&&box&&!box.contains(n))continue;
-        if(!allowInterim&&(interim(t)||statusLine(t)))continue;
+        if(!allowInterim&&(interim(t)||statusLine(t)||activityRow(t)))continue;
         const whole=wholeMessage(n,box);
         const chosen=canon(rawText(whole))===promptText?n:whole;
         if(!canon(text(chosen)))continue;
@@ -318,7 +350,13 @@ const museChatTurnJS = `(async(input)=>{
     // matches the answer. When the named elements yield nothing this turn, read
     // the conversation structurally rather than concluding the model never
     // answered -- that conclusion cost a whole turn while the reply was on screen.
-    return pick(named,true,false)||pick(named,false,false)||pick(genericBlocks(),false,false);
+    // The answer gets every chance first. Only near the end of the budget will
+    // FlipAi fall back to something that reads like the page narrating -- better
+    // that than nothing, and in practice the real answer has always arrived by
+    // then and won on its own.
+    const late=Date.now()>turnDeadline-15000;
+    return pick(named,true,false)||pick(named,false,false)||pick(genericBlocks(),false,false)
+      ||(late?(pick(named,false,true)||pick(genericBlocks(),false,true)):null);
   };
   c.focus();
   try{
