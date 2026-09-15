@@ -92,11 +92,23 @@ function turnScript(file, constant, prompt) {
 // date found 1:13 pm". That was texted as the answer while the real one -- the
 // Hertz pickup date -- was written seconds later.
 //
+// `withWrappedList` is what a real answer looks like: several bullets wrapped in
+// the containers a chat app puts around every message, with an avatar picture
+// and a link somewhere inside that wrapper. A rule that removed anything merely
+// CONTAINING a picture and a link removed the message itself -- ChatGPT texted
+// the page's own "ChatGPT can make mistakes" footer because the real message had
+// been emptied, and Muse sent only the last bullet of a five-bullet answer.
+//
+// `withPageDisclaimer` puts the line every chat app keeps under its composer --
+// "ChatGPT is AI and can make mistakes. Check important info." -- outside the
+// conversation, and has the model take its time. FlipAi texted those fifty-eight
+// characters as the answer while the model was still writing the real one.
+//
 // `withLongHistory` builds a conversation of a realistic size. A driver that
 // scans the whole page on every poll cannot finish inside its own deadline
 // there, and one that treats a scroll container as a block sends the entire
 // history -- every message joined together -- as the answer.
-function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow }) {
+function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow, withWrappedList, withPageDisclaimer }) {
   const history = withLongHistory
     ? Array.from({ length: 700 }, (_, i) =>
         `<div class="x1"><p>Earlier turn ${i}</p><p>A paragraph of an older answer that is already on screen and should never be mistaken for this turn's reply.</p></div>`).join('')
@@ -113,6 +125,7 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
       ${withSendButton ? '<button id="go">Go</button>' : ''}
     </div>
     ${withPageFurniture ? '<div id="chips"><div class="suggestion">Summarize a document for me</div></div>' : ''}
+    ${withPageDisclaimer ? '<div id="disclaimer">ChatGPT is AI and can make mistakes. Check important info.</div>' : ''}
     <script>
       const submit = () => {
         const box = document.querySelector('#box');
@@ -147,7 +160,7 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
         busy.setAttribute('aria-label', 'Stop');
         // No stop control in these: the real page showed FlipAi none, which is
         // exactly why a busy line and a sidebar item looked like finished answers.
-        if (!${JSON.stringify(!!(withInterimStatus || withBusyLabel || withPageFurniture || withStepRow))}) document.body.appendChild(busy);
+        if (!${JSON.stringify(!!(withInterimStatus || withBusyLabel || withPageFurniture || withStepRow || withPageDisclaimer))}) document.body.appendChild(busy);
         if (${JSON.stringify(!!withInterimStatus)}) {
           const status = document.createElement('div');
           status.className = 'x9';
@@ -160,6 +173,19 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
           reply.className = 'x3';
           log.appendChild(reply);
           reply.textContent = 'FLIPAI';
+          if (${JSON.stringify(!!withWrappedList)}) {
+            // The message, wrapped the way a chat app wraps one.
+            reply.className = 'x3 markdown';
+            reply.innerHTML = '<div class="bubble"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="avatar">'
+              + '<div><p>FLIPAI answered: ' + value + '</p>'
+              + '<ul><li>Supreme Court rejected the mail-in ballot policy.</li>'
+              + '<li>FBI Director hearing ran five hours.</li>'
+              + '<li>States are suing over a green card rule.</li>'
+              + '<li>Over 2,000 pounds of meth was found in a cabbage shipment in Texas.</li></ul>'
+              + '<p>Want the three biggest instead? <a href="#">See all</a></p></div></div>';
+            busy.remove();
+            return;
+          }
           if (${JSON.stringify(!!withNewsCards)}) {
             reply.className = 'x3 markdown';
             reply.innerHTML = '<p>FLIPAI answered: ' + value
@@ -250,7 +276,7 @@ function pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withAc
               steps.appendChild(step);
             }, 500);
           }
-        }, ${JSON.stringify(withInterimStatus ? 3000 : (withPageFurniture || withBusyLabel) ? 6000 : 400)});
+        }, ${JSON.stringify(withInterimStatus ? 3000 : (withPageFurniture || withBusyLabel) ? 6000 : withPageDisclaimer ? 9000 : 400)});
       };
       const go = document.querySelector('#go');
       if (go) go.addEventListener('click', submit);
@@ -322,6 +348,8 @@ for (const [name, file, constant] of drivers) {
   scenarios.push({ name, file, constant, withSendButton: true, withPageFurniture: true });
   scenarios.push({ name, file, constant, withSendButton: true, withBusyLabel: true });
   scenarios.push({ name, file, constant, withSendButton: true, withNewsCards: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withWrappedList: true });
+  scenarios.push({ name, file, constant, withSendButton: true, withPageDisclaimer: true });
   // The step row is Muse's and Copilot's shape of narration. ChatGPT does not
   // render one, and its selection logic is deliberately left alone: it is the
   // agent that is working, and this rule is not evidenced there.
@@ -336,7 +364,7 @@ for (const [name, file, constant] of drivers.concat([['Claude', 'claude_chat_web
   scenarios.push({ name, file, constant, withSendButton: true, withPreamble: true });
 }
 
-await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow, sendOnly, wrongPage }) => {
+await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow, withWrappedList, withPageDisclaimer, sendOnly, wrongPage }) => {
   if (wrongPage) {
     const page = await browser.newPage();
     // The driver must refuse this page outright, and must not type into it. The
@@ -363,11 +391,11 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     await page.close().catch(() => {});
     return;
   }
-  const label = `${name} (${withNewsCards ? 'news cards' : withStepRow ? 'step row' : withPageFurniture ? 'page furniture' : withBusyLabel ? 'busy label' : withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
+  const label = `${name} (${withPageDisclaimer ? 'page disclaimer' : withWrappedList ? 'wrapped list' : withNewsCards ? 'news cards' : withStepRow ? 'step row' : withPageFurniture ? 'page furniture' : withBusyLabel ? 'busy label' : withPreamble ? 'tool-using turn' : withNamedWrapper ? 'named wrapper' : withActivityPanel ? 'activity panel' : withInterimStatus ? 'interim status' : withActionBar ? 'action bar' : withLongHistory ? 'long history' : withCitationCards ? 'citation cards' : withSendButton ? 'send button' : 'Enter only'})`;
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow }));
+  await page.setContent(pageHTML({ withSendButton, withActivityPanel, withInterimStatus, withActionBar, withLongHistory, withCitationCards, withNamedWrapper, withPreamble, withPageFurniture, withBusyLabel, withNewsCards, withStepRow, withWrappedList, withPageDisclaimer }));
   const startedAt = Date.now();
   if (sendOnly) {
     // The driver keeps polling for a reply it will never recognize here, so do
@@ -419,6 +447,14 @@ await Promise.all(scenarios.map(async ({ name, file, constant, withSendButton, w
     failures.push(`${label}: a news card headline was sent as part of the answer: ${JSON.stringify(result.reply)}`);
   } else if (withNewsCards && !/political news today/.test(String(result.reply))) {
     failures.push(`${label}: the model's own closing sentence was lost: ${JSON.stringify(result.reply)}`);
+  } else if (/can make mistakes|Check important info/i.test(String(result.reply))) {
+    failures.push(`${label}: the page's own disclaimer was sent as the answer: ${JSON.stringify(result.reply)}`);
+  } else if (withWrappedList && !/Supreme Court rejected the mail-in ballot policy/.test(String(result.reply))) {
+    failures.push(`${label}: the answer lost its first bullet: ${JSON.stringify(result.reply)}`);
+  } else if (withWrappedList && !/cabbage shipment in Texas/.test(String(result.reply))) {
+    failures.push(`${label}: the answer lost its last bullet: ${JSON.stringify(result.reply)}`);
+  } else if (withWrappedList && !/Want the three biggest instead/.test(String(result.reply))) {
+    failures.push(`${label}: the answer lost its closing line: ${JSON.stringify(result.reply)}`);
   } else if (withStepRow && /no date found|1:13 pm/i.test(String(result.reply))) {
     failures.push(`${label}: the page's step row was sent instead of the answer: ${JSON.stringify(result.reply)}`);
   } else if (/\bMuse\s?is working\b/i.test(String(result.reply))) {

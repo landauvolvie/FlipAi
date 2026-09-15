@@ -56,8 +56,8 @@ func TestBrowserDriversWorkOnAnUnfamiliarPage(t *testing.T) {
 	if !report.OK || len(report.Failures) > 0 {
 		t.Fatalf("drivers failed on an unfamiliar page:\n%s", strings.Join(report.Failures, "\n"))
 	}
-	if len(report.Report) != 43 {
-		t.Fatalf("expected 43 driver scenarios, got %d: %v", len(report.Report), report.Report)
+	if len(report.Report) != 49 {
+		t.Fatalf("expected 49 driver scenarios, got %d: %v", len(report.Report), report.Report)
 	}
 	t.Log(strings.Join(report.Report, "\n"))
 }

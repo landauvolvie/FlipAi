@@ -209,26 +209,40 @@ const chatGPTTurnJS = `(async(input)=>{
       if(t.length<=300&&(labelled(el,'download')||labelled(el,'connect')))el.remove();
     }
   };
-  // A news card is a picture with a headline and a link on it. Prose is not.
-  // When ChatGPT answers with the news it puts a row of those under the answer
-  // and a source pill after each claim -- "AP News +1", "Reuters +1" -- and all
-  // of it arrived in the text message: three headlines, five sources and a
-  // "Today" after each one, in the middle of what the model actually wrote.
-  //
-  // The pills are matched by their shape, not by a class name: a whole element
-  // whose text is a source followed by "+2" is a citation pill, and no sentence
-  // looks like that. A linked phrase inside a sentence still survives.
+  // A news card is a picture with a headline and a link on it. Removing anything
+  // that merely CONTAINS a picture and a link removes the message instead: every
+  // wrapper around the answer qualifies, and ChatGPT ended up texting the page's
+  // own "ChatGPT can make mistakes" footer because the real message had been
+  // emptied, then produced nothing at all on the next turn. Only the innermost
+  // such element is a card, and only when it holds no prose.
   const dropSourceCards=clone=>{
-    for(const el of Array.from(clone.querySelectorAll('div,section,article,li,figure,aside,nav,ul,ol'))){
+    const cardish=el=>!!(el.querySelector('img,picture')&&el.querySelector('a'));
+    const all=Array.from(clone.querySelectorAll('div,section,article,li,figure')).filter(cardish);
+    const inner=all.filter(el=>!all.some(o=>o!==el&&el.contains(o)));
+    for(const el of inner){
       if(!clone.contains(el))continue;
-      if(el.querySelector('img,picture')&&el.querySelector('a'))el.remove();
+      const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
+      if(t.length>400)continue;
+      el.remove();
     }
+    // A source pill is a whole element whose text is a source followed by "+2".
+    // No sentence looks like that, and a linked phrase inside one is untouched.
     for(const el of Array.from(clone.querySelectorAll('a,span,button,cite,small,sup'))){
       if(!clone.contains(el))continue;
       const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
       if(!t)continue;
       if(/^\+\d+$/.test(t)||/^[A-Za-z][A-Za-z0-9 .&'\u2019-]{0,28}\s\+\d+$/.test(t))el.remove();
     }
+  };
+  // Cleaning must never cost the message. Every strip is a guess about which
+  // parts of a page are furniture, and a wrong guess took the answer with it.
+  // If most of what the model wrote is gone, the guess was wrong and the
+  // untouched text is what gets sent.
+  const keptEnough=(before,after)=>{
+    const b=String(before||'').replace(/\s+/g,' ').trim().length;
+    const a=String(after||'').replace(/\s+/g,' ').trim().length;
+    if(b<40)return a>0;
+    return a*5>=b*2;
   };
   const text=n=>{
     if(!n)return '';
@@ -239,14 +253,15 @@ const chatGPTTurnJS = `(async(input)=>{
     if(prose){
       // The prose subtree is not free of furniture either: source pills sit
       // inside the sentences, and a card row can sit inside the markdown.
+      const whole=clean(prose.innerText||prose.textContent||'');
       const pc=prose.cloneNode&&prose.cloneNode(true);
       if(pc&&pc.querySelectorAll){
         dropSourceCards(pc);
         pc.querySelectorAll('button,[role="button"],script,style,template,noscript,svg').forEach(el=>el.remove());
         const out=clean(pc.innerText||pc.textContent||'');
-        if(out)return out;
+        if(out&&keptEnough(whole,out))return out;
       }
-      return clean(prose.innerText||prose.textContent||'');
+      return whole;
     }
     // Keep a defensive fallback for alternate layouts, but strip common rich UI
     // containers and interactive controls before reading the assistant wrapper.
@@ -256,9 +271,11 @@ const chatGPTTurnJS = `(async(input)=>{
       dropSourceCards(clone);
       clone.querySelectorAll('button,canvas,svg,iframe,[role="button"],[role="toolbar"],[role="menu"],[role="tab"],[role="tabpanel"],[role="slider"],[role="progressbar"],[class*="action" i],[class*="toolbar" i],[class*="footer" i],[data-testid*="widget" i],[data-testid*="weather" i],[data-testid*="chart" i],[data-testid*="carousel" i],[data-testid*="feedback" i],script,style,template,noscript,'+activityStripSel+','+refBlockSel).forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
-      // Never let stripping empty a real message: if everything went, a
-      // selector matched the answer, and the raw text beats nothing at all.
-      return clean(clone.innerText||clone.textContent||'')||clean(n.innerText||n.textContent||'');
+      // Never let stripping cost a real message: if most of it went, a selector
+      // matched the answer, and the untouched text beats a gutted one.
+      const raw=clean(n.innerText||n.textContent||'');
+      const out=clean(clone.innerText||clone.textContent||'');
+      return out&&keptEnough(raw,out)?out:raw;
     }
     return clean(n.innerText||n.textContent||'');
   };
@@ -397,7 +414,12 @@ const chatGPTTurnJS = `(async(input)=>{
   const promptText=canon(input);
   const beforeUserCount=users().length;
   const beforeAssistantCount=assistants().length;
-  const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
+  // Everything visible before the prompt, by both routes. Snapshotting only
+  // the named messages meant that when the page stopped matching those
+  // mid-turn and the structural scan took over, page furniture that had been
+  // there all along looked brand new -- and the line under the composer was
+  // sent as the answer.
+  const beforeTexts=new Set(assistants().concat(genericBlocks()).map(n=>canon(rawText(n))));
   // Last line of defence. If the node FlipAi matched spans this turn's own
   // prompt, it is a conversation container and not one message, however it was
   // matched -- so everything up to and including the prompt is history, and the
@@ -537,7 +559,7 @@ const chatGPTTurnJS = `(async(input)=>{
       if(interim(now)){stable=0;continue}
       if(!stop()&&stable>=settleNeeded(now)&&now&&!statusLine(now)){mark('settled len='+now.length);return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}}
       // A stale Stop control must not hold a fully settled answer forever.
-      if(now&&stable>=32)return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href};
+      if(now&&stable>=32&&!pageFurnitureText(now)){mark('settled-late len='+now.length);return {ok:true,trace:trace(),reply:newestPart(node,now),href:location.href}}
     }
   }
   mark('deadline started='+started+' named='+queryAll('[data-message-author-role="assistant"]').length+' blocks='+genericBlocks().length+' stop='+(stop()?'yes':'no')+' lastLen='+last.length);

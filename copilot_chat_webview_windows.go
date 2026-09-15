@@ -91,22 +91,40 @@ const copilotChatTurnJS = `(async(input)=>{
   // chosen reply would delete the message itself. The running tool log is not
   // the answer, though, and it was arriving as part of one.
   const activityStripSel='aside,[role="log"],[class*="activity" i],[class*="timeline" i],[class*="step" i],[class*="tool" i],[class*="trace" i],[id*="step" i],[id*="activity" i]';
-  // A news card is a picture with a headline and a link on it, and a source pill
-  // is a whole element whose text is a source followed by "+2". Neither is a
-  // sentence, and both arrived in the middle of what the model wrote. Matching
-  // the pill by its shape rather than by a class name leaves a linked phrase
-  // inside a sentence untouched.
+  // A news card is a picture with a headline and a link on it. Removing anything
+  // that merely CONTAINS a picture and a link removes the message instead: every
+  // wrapper around the answer qualifies, and ChatGPT ended up texting the page's
+  // own "ChatGPT can make mistakes" footer because the real message had been
+  // emptied, then produced nothing at all on the next turn. Only the innermost
+  // such element is a card, and only when it holds no prose.
   const dropSourceCards=clone=>{
-    for(const el of Array.from(clone.querySelectorAll('div,section,article,li,figure,aside,nav,ul,ol'))){
+    const cardish=el=>!!(el.querySelector('img,picture')&&el.querySelector('a'));
+    const all=Array.from(clone.querySelectorAll('div,section,article,li,figure')).filter(cardish);
+    const inner=all.filter(el=>!all.some(o=>o!==el&&el.contains(o)));
+    for(const el of inner){
       if(!clone.contains(el))continue;
-      if(el.querySelector('img,picture')&&el.querySelector('a'))el.remove();
+      const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
+      if(t.length>400)continue;
+      el.remove();
     }
+    // A source pill is a whole element whose text is a source followed by "+2".
+    // No sentence looks like that, and a linked phrase inside one is untouched.
     for(const el of Array.from(clone.querySelectorAll('a,span,button,cite,small,sup'))){
       if(!clone.contains(el))continue;
       const t=String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();
       if(!t)continue;
       if(/^\+\d+$/.test(t)||/^[A-Za-z][A-Za-z0-9 .&'\u2019-]{0,28}\s\+\d+$/.test(t))el.remove();
     }
+  };
+  // Cleaning must never cost the message. Every strip is a guess about which
+  // parts of a page are furniture, and a wrong guess took the answer with it.
+  // If most of what the model wrote is gone, the guess was wrong and the
+  // untouched text is what gets sent.
+  const keptEnough=(before,after)=>{
+    const b=String(before||'').replace(/\s+/g,' ').trim().length;
+    const a=String(after||'').replace(/\s+/g,' ').trim().length;
+    if(b<40)return a>0;
+    return a*5>=b*2;
   };
   const dropCards=clone=>{
     const labelled=(el,word)=>Array.from(el.querySelectorAll('button,a,[role="button"]')).some(b=>new RegExp('^'+word+'$','i').test(String(b.innerText||b.textContent||'').replace(/\s+/g,' ').trim()));
@@ -126,9 +144,11 @@ const copilotChatTurnJS = `(async(input)=>{
       dropSourceCards(clone);
       clone.querySelectorAll(chromeSel+','+activityStripSel+',script,style,template,noscript,svg').forEach(el=>el.remove());
       clone.querySelectorAll(refInlineSel).forEach(el=>{if(!/[a-z]/i.test(el.textContent||''))el.remove()});
-      // Never let stripping empty a real message: if everything went, a
-      // selector matched the answer, and the raw text beats nothing at all.
-      return String(clone.innerText||clone.textContent||'').trim()||rawText(n);
+      // Never let stripping cost a real message: if most of it went, a selector
+      // matched the answer, and the untouched text beats a gutted one.
+      const raw=rawText(n);
+      const out=String(clone.innerText||clone.textContent||'').trim();
+      return out&&keptEnough(raw,out)?out:raw;
     }
     return rawText(n);
   };
@@ -283,7 +303,10 @@ const copilotChatTurnJS = `(async(input)=>{
   if(!c)return {ok:false,trace:trace(),detail:'Microsoft Copilot is loaded but FlipAi could not find the prompt box. The Copilot site layout may have changed.',href:location.href};
   const canon=t=>String(t||'').replace(/\s+/g,' ').trim();
   const promptText=canon(input);
-  const beforeTexts=new Set(assistants().map(n=>canon(rawText(n))));
+  // Everything visible before the prompt, by both routes: a named match and a
+  // structural one see different things, and whichever route a turn ends up
+  // using, nothing that was already on screen is this turn's answer.
+  const beforeTexts=new Set(assistants().concat(genericBlocks()).map(n=>canon(rawText(n))));
   // Last line of defence. If the node FlipAi matched spans this turn's own
   // prompt, it is a conversation container and not one message, however it was
   // matched -- so everything up to and including the prompt is history, and the
